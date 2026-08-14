@@ -20,7 +20,7 @@
 # 出来上がりは <arch>-<release>.img.gz。
 #
 # 環境変数で変えられるもの:
-#   BASE      作業場所 (既定 $HOME/nbimg)
+#   BASE      作業場所 (既定はこのスクリプトの置き場)
 #   X_SETS    入れる X のセット。要らなければ X_SETS= で空に
 #   ROOTDEV   fstab に書く root デバイス。QEMU の繋ぎ方で決まる
 #   SECT      イメージの総セクタ数
@@ -31,7 +31,9 @@ ARCH=$1
 REL=$2
 [ -n "$ARCH" ] && [ -n "$REL" ] || { echo "usage: $0 <arch> <release>"; exit 1; }
 
-BASE=${BASE:-$HOME/nbimg}
+# 既定はこのスクリプトの置き場。$HOME にすると su や sudo で走らせたときに
+# /root を指し、鍵もセットも別の場所を見にいく。
+BASE=${BASE:-$(cd "$(dirname "$0")" && pwd)}
 SETS=$BASE/sets/$ARCH-$REL
 MNT=${MNT:-/mnt/nbimg}
 VND=${VND:-vnd3}
@@ -84,8 +86,22 @@ sparc64)
 	echo "$0: $ARCH は未対応 (MBR とブートローダの扱いを足すこと)"; exit 1 ;;
 esac
 
+# 鍵はここで確かめる。無いまま進むと、セットを落として展開し終えてから
+# ログインできないイメージが出来上がるだけで、誰の得にもならない。
+if [ -s "$BASE/authorized_keys" ]; then
+	PUBKEY=$BASE/authorized_keys
+elif [ -s "$HOME/.ssh/id_rsa.pub" ]; then
+	PUBKEY=$HOME/.ssh/id_rsa.pub
+else
+	echo "$0: 公開鍵が無い。$BASE/authorized_keys に置くこと" >&2
+	echo "    (BASE=$BASE。su や sudo で HOME が変わっている場合は" >&2
+	echo "     BASE=... を明示するか、スクリプトと同じ場所に置く)" >&2
+	exit 1
+fi
+
 echo "=== NetBSD $REL / $ARCH ==="
 echo "    ミラー   $MIRROR"
+echo "    鍵       $PUBKEY"
 echo "    FFSv$FFS / MBR=$USE_MBR / $BOOTXX"
 echo "    disk=$DISKIF root=$ROOTDEV nic=${NICDEV:-(既定)}"
 
@@ -205,13 +221,7 @@ no_swap=YES
 RCC
 
 mkdir -p $MNT/root/.ssh
-if [ -s $BASE/authorized_keys ]; then
-	cat $BASE/authorized_keys > $MNT/root/.ssh/authorized_keys
-elif [ -s $HOME/.ssh/id_rsa.pub ]; then
-	cat $HOME/.ssh/id_rsa.pub > $MNT/root/.ssh/authorized_keys
-else
-	echo "!! 公開鍵が無い。$BASE/authorized_keys に置くこと" >&2
-fi
+cat $PUBKEY > $MNT/root/.ssh/authorized_keys
 chmod 700 $MNT/root/.ssh
 chmod 600 $MNT/root/.ssh/authorized_keys
 echo 'PermitRootLogin prohibit-password' >> $MNT/etc/ssh/sshd_config
