@@ -92,11 +92,19 @@ esac
 # virtio-scsi は -drive if=... では繋がらない。コントローラと scsi-hd を
 # 別々に並べる必要があるので、インタフェース名ではなくディスク指定の全体を
 # 持たせる。@IMG@ は動かす側がイメージのパスに置き換える。
+#
+# cache=unsafe は guest の flush を無視してホストの page cache に載せたまま
+# にする。インタフェースを選び直すより桁違いに効く。使い捨ての CI イメージ
+# 前提なので、ホストごと落ちて壊れても gz から展開し直せば済む。手を入れた
+# まま残したいイメージには使わないこと。
+# aio=native は cache.direct=on を要求するので unsafe とは併用できない。
+# 既定の threads のままにしてある。
+DOPT="format=raw,cache=unsafe,discard=unmap"
 case $DISKIF in
 virtio-scsi)
-	DISKARGS="-device virtio-scsi-pci,id=scsi0 -drive file=@IMG@,if=none,id=d0,format=raw -device scsi-hd,drive=d0,bus=scsi0.0" ;;
+	DISKARGS="-device virtio-scsi-pci,id=scsi0 -drive file=@IMG@,if=none,id=d0,$DOPT -device scsi-hd,drive=d0,bus=scsi0.0" ;;
 *)
-	DISKARGS="-drive file=@IMG@,if=$DISKIF,format=raw" ;;
+	DISKARGS="-drive file=@IMG@,if=$DISKIF,$DOPT" ;;
 esac
 
 # 鍵はここで確かめる。無いまま進むと、セットを落として展開し終えてから

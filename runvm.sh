@@ -45,7 +45,7 @@ fi
 
 echo "=== $NAME を起動 (disk=$DISKIF root=$ROOTDEV ssh=$PORT) ==="
 # 古いイメージには DISKARGS が無いので、DISKIF から組み立てて補う。
-[ -n "$DISKARGS" ] || DISKARGS="-drive file=@IMG@,if=$DISKIF,format=raw"
+[ -n "$DISKARGS" ] || DISKARGS="-drive file=@IMG@,if=$DISKIF,format=raw,cache=unsafe"
 DISK=$(echo "$DISKARGS" | sed "s|@IMG@|$IMG|g")
 
 $QEMU -m $MEM -smp $SMP \
