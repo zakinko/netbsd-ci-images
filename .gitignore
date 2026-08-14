@@ -1,0 +1,7 @@
+# イメージそのものは release に置く。git には入れない。
+imgs/
+*.img
+*.img.gz
+*.console.log
+*.mon
+*.pid
