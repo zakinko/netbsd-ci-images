@@ -270,10 +270,8 @@ mkdir -p $MNT/kern $MNT/proc $MNT/dev/pts
 ( cd $MNT/dev && sh MAKEDEV all ) > /dev/null 2>&1 || echo "    (MAKEDEV 省略)"
 
 echo "--- ブートローダ ---"
-# installboot と fdisk -c は生デバイスに書く。sparc64 の bootblk は
-# パーティションのセクタ 1 に入るため、マウントしたままだとカーネルに
-# 拒まれて "Read-only file system" になる。要るものを先に取り出して
-# umount してから書けば、どのアーキテクチャでも同じ手順で済む。
+# installboot と fdisk -c は生デバイスに書くので、先に要るものを取り出して
+# から umount する。
 cp $MNT/usr/mdec/$BOOTXX /tmp/$BOOTXX
 if [ $USE_MBR = yes ]; then
 	cp $MNT/usr/mdec/mbr /tmp/mbr
@@ -285,7 +283,22 @@ fi
 df -h $MNT | tail -1
 umount $MNT
 
-installboot -v -m $ARCH /dev/r${VND}a /tmp/$BOOTXX
+# 書き込み先。a が sector 0 から始まる構成 (sparc64) では、bootblk の入る
+# sector 1 が disklabel の保護領域に掛かり、カーネルが EROFS で拒む。
+# "installboot: Writing `/dev/rvnd?a': Read-only file system" がそれで、
+# umount しても消えない。ホストの raw partition 経由なら保護されず、a の
+# offset が 0 なので指す先は同じになる。i386/amd64 は a が MBR 内の sector
+# 63 から始まりラベルを含まないので、そのまま a に書ける。
+if [ $USE_MBR = yes ]; then
+	BOOTDEV=/dev/r${VND}a
+else
+	BOOTDEV=/dev/r${VND}$LABELOK
+fi
+if ! installboot -v -m $ARCH $BOOTDEV /tmp/$BOOTXX; then
+	echo "$0: installboot が失敗した ($BOOTDEV)" >&2
+	exit 1
+fi
+
 # 一次ブート。&& でつなぐと sparc64 のとき偽になり set -e で落ちるので if で。
 if [ $USE_MBR = yes ]; then
 	fdisk -f -c /tmp/mbr /dev/r${VND}d > /dev/null
