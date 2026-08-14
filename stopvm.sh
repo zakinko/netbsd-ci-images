@@ -39,7 +39,17 @@ fi
 echo "--- 落ちるのを待つ ---"
 n=0
 while [ $n -lt 60 ]; do
-	kill -0 $PID 2>/dev/null || { echo "OK: 正規終了した"; rm -f $PIDF; exit 0; }
+	if ! kill -0 $PID 2>/dev/null; then
+		echo "OK: 正規終了した"
+		rm -f $PIDF
+		# 鍵を配っていた HTTP も片付ける。残すと次の起動でポートを
+		# 取り合い、後から来たほうが黙って繋がらないまま進む。
+		if [ -s "$DIR/$NAME.seedpid" ]; then
+			kill "$(cat $DIR/$NAME.seedpid)" 2>/dev/null || true
+			rm -f "$DIR/$NAME.seedpid"
+		fi
+		exit 0
+	fi
 	n=$((n + 1))
 	sleep 2
 done

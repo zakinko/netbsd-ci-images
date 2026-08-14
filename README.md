@@ -2,10 +2,17 @@
 
 CI から QEMU で起動するための、素の NetBSD ディスクイメージ置き場。
 
-公式に配布されているのはインストーラ (ISO と `install.img`) だけで、インス
-トール済みのイメージはありません。sysinst に無人インストールの仕組みも無い
-ので、CI で毎回インストールを走らせるのは現実的ではありません。ここでは配布
-セットを直接展開してブート可能なイメージを組み、release に置いています。
+公式に配布されているのはインストーラ (ISO と `install.img`) が主で、インス
+トール済みの live イメージは amd64 の 10.0 以降しかありません。i386 には一つ
+も無く、9.x 以前にもありません。CI で毎回インストールを走らせるのも現実的では
+ないので、ここで一度作って release に置いています。
+
+作るのには [anita](https://www.gson.org/netbsd/anita/) を使います。NetBSD 本家
+のテストでも使われている道具で、QEMU の中で sysinst をシリアルコンソール越しに
+操ってインストールします。**出来たイメージがその仮想ハードウェアで動くことが、
+作った時点で分かる**のが利点です。外から配布セットを展開してディスクを組み立て
+る方法も試しましたが、その版のカーネルが虚仮にされた周辺機器を扱えるかは運任せ
+で、NetBSD 5 は IDE で `piixide0: lost interrupt` を繰り返して起動しませんでした。
 
 ## 中身
 
@@ -64,13 +71,21 @@ ssh -p 2222 root@127.0.0.1
 
 ## 組み方
 
-`mkimg.sh` を **NetBSD の上で** root で走らせます。`vnconfig` `disklabel`
-`newfs` `installboot` が要るので、Linux では組めません。
+`build-image.sh` を走らせます。NetBSD のコマンドは要らないので Linux でも
+macOS でも動きます。必要なのは QEMU、`genisoimage` (macOS なら `mkisofs`)、
+それに anita です。
 
 ```sh
-sh mkimg.sh i386 10.1
-sh mkimg.sh sparc64 11.0
+pip install pexpect https://www.gson.org/netbsd/anita/download/anita-2.18.tar.gz
+sh build-image.sh i386 10.1
 ```
+
+普段は GitHub Actions の `build-images` workflow から回します。runner は
+x86_64 の Linux で KVM が使えるので、i386 と amd64 のゲストはほぼ実速で動き
+ます。手元の arm64 機では emulation になり、install だけで 1〜2 時間かかります。
+
+`mkimg.sh` も残してあります。配布セットを直接展開する古い方法で、**NetBSD の
+上でしか動きません**。anita が扱わない port が出てきたときの逃げ道です。
 
 9.0 より前のリリースは本ミラーから外れているので、`archive.netbsd.org` を
 見に行きます。FFSv2 は NetBSD 2.0 からなので、それ以前は FFSv1 で作ります。
@@ -83,8 +98,16 @@ sh mkimg.sh sparc64 11.0
 
 ## 鍵
 
-`authorized_keys` は各自のものを使ってください。`$BASE/authorized_keys` に
-置いておくと、それがイメージに入ります。
+**イメージに鍵は焼かれていません。** ゲストは起動のたびに
+`http://10.0.2.2:8123/authorized_keys` を取りに行きます (`/etc/rc.d/seed_key`)。
+`runvm.sh` が使い捨ての鍵対をその場で作り、この URL で配ります。
+
+焼かない理由は二つあります。焼くと、公開されたイメージを見た人にどの鍵が root
+を通せるか分かります。そして使う側は対応する秘密鍵を用意することになり、CI では
+secret に置く羽目になります。取りに行く形なら **secret も固定の鍵も要りません**。
+
+ポート 8123 はゲストの `rc.d` に焼き込んであるので変えられません。同じ機械で
+二つ動かすと取り合いになります。
 
 ## 中身の出どころ
 

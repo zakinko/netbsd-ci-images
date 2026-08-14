@@ -1,0 +1,106 @@
+name: boot
+
+# release に置いてあるイメージが本当に起動するかを確かめる。
+#
+# 手元の arm64 機で i386 を回すと TCG になって遅すぎ、切り分けの道具として
+# 使いものにならない。ここの runner は x86_64 の Linux で KVM が使えるので、
+# i386 と amd64 の guest はほぼ実速で動く。sparc64 だけは emulation。
+#
+# 古い版ほど QEMU 側の周辺機器の作り込みに引っかかりやすい。実際 NetBSD 5 は
+# IDE で "piixide0: lost interrupt" を繰り返して進まない。どの組み合わせが
+# 通るのかは机上では決められないので、ここで総当たりする。
+
+on:
+  push:
+    paths:
+      - '.github/workflows/boot.yml'
+      - 'runvm.sh'
+      - 'stopvm.sh'
+  workflow_dispatch:
+    inputs:
+      only:
+        description: '確かめるイメージ (空なら release にある全部)'
+        required: false
+
+jobs:
+  # release にあるものを数え上げて matrix にする。イメージを足すたびに
+  # workflow を書き換えなくて済む。
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.q.outputs.images }}
+    steps:
+      - id: q
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -e
+          if [ -n "$ONLY" ]; then
+            printf 'images=%s\n' "$(printf '%s\n' $ONLY | jq -Rrn '[inputs] | tostring')" >> $GITHUB_OUTPUT
+          else
+            gh release view images --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '[.assets[].name | select(endswith(".img.gz")) | rtrimstr(".img.gz")]' \
+              > list.json
+            echo "images=$(cat list.json)" >> $GITHUB_OUTPUT
+          fi
+          cat $GITHUB_OUTPUT
+
+  boot:
+    needs: list
+    if: needs.list.outputs.images != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.list.outputs.images) }}
+    name: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: qemu と道具を入れる
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-system-sparc netcat-openbsd
+          # KVM は runner の既定では root しか触れないことがある
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          ls -l /dev/kvm || echo "KVM 無し (TCG になる)"
+
+      - name: イメージを取る
+        run: |
+          set -e
+          B=https://github.com/${{ github.repository }}/releases/download/images
+          curl -fsSL -O $B/${{ matrix.image }}.img.gz
+          curl -fsSL -O $B/${{ matrix.image }}.qemu
+          cat ${{ matrix.image }}.qemu
+
+      - name: 起動して ssh まで通るか
+        id: boot
+        run: |
+          # 鍵はイメージに焼いた公開鍵の対。secret に入れておく。
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.IMAGE_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          DIR=. sh runvm.sh ${{ matrix.image }} 2222
+
+      - name: 中身を確かめる
+        run: |
+          S="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+             -o BatchMode=yes -o LogLevel=ERROR -p 2222 root@127.0.0.1"
+          $S sh -s <<'GUEST'
+          PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/pkg/bin:/usr/pkg/sbin
+          export PATH
+          echo "uname   : $(uname -srm)"
+          echo "root    : $(mount | head -1)"
+          echo "cc      : $(gcc --version 2>/dev/null | head -1)"
+          echo "Xvfb    : $(ls /usr/X11R7/bin/Xvfb 2>/dev/null || echo なし)"
+          df -h /
+          GUEST
+
+      - name: 止める
+        if: always()
+        run: DIR=. sh stopvm.sh ${{ matrix.image }} || true
+
+      - name: 転けたらコンソールを出す
+        if: failure()
+        run: tail -60 ${{ matrix.image }}.console.log || true

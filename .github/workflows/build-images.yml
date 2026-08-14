@@ -1,0 +1,127 @@
+name: build-images
+
+# anita で NetBSD を入れ、qcow2 に固めて release に置く。
+#
+# runner は x86_64 の Linux で KVM が使えるので、i386 と amd64 のゲストは
+# ほぼ実速で動く。手元の arm64 機では emulation になり install だけで
+# 1〜2 時間かかるので、ここで回すほうが速い。
+#
+# 版ごとの癖 (MBR の有無、FFS の版、ブートブロックの置き方、virtio の
+# 世代) は anita が持っている。外からディスクを組み立てる方法だと、その
+# 版のカーネルが虚仮にされた周辺機器を扱えるかは運任せで、実際 NetBSD 5 は
+# IDE で "piixide0: lost interrupt" を繰り返して起動しなかった。
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: '作るもの (例: "i386-10.1 amd64-11.0")。空なら既定の一覧'
+        required: false
+      publish:
+        description: 'release に上げる'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.q.outputs.targets }}
+    steps:
+      - id: q
+        env:
+          T: ${{ inputs.targets }}
+        run: |
+          set -e
+          # 既定の一覧。まず通ることが分かっている新しい版から並べ、
+          # 古い版は後ろに置く。fail-fast は切ってあるので後ろが転けても
+          # 前は残る。
+          [ -n "$T" ] || T="i386-11.0 i386-10.1 i386-9.4 amd64-11.0 amd64-10.1 amd64-9.4"
+          printf 'targets=%s\n' "$(printf '%s\n' $T | jq -Rrn '[inputs] | tostring')" >> $GITHUB_OUTPUT
+          cat $GITHUB_OUTPUT
+
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      # anita はゲストの rc.d に焼き込んだ 8123 を使う。同じ runner で
+      # 並行させるぶんには別マシンなので競合しないが、ジョブあたり 1 VM。
+      max-parallel: 4
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    name: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ディスクを空ける
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: qemu と anita を入れる
+        run: |
+          sudo apt-get update -qq
+          # genisoimage は anita が install 用 ISO を焼くのに要る。
+          # 無いと "could not run mkisofs" で止まる。
+          sudo apt-get install -y -qq qemu-system-x86 qemu-system-sparc \
+                                      qemu-utils genisoimage
+          # PyPI の "anita" は同名の別物なので本家の配布物を直接指す。
+          # pexpect は setup.py が宣言していない。
+          python3 -m pip install --break-system-packages --quiet \
+            pexpect https://www.gson.org/netbsd/anita/download/anita-2.18.tar.gz
+          command -v anita
+
+      - name: KVM を使えるようにする
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          if [ -w /dev/kvm ]; then
+            echo "KVM あり"
+          else
+            echo "::warning::/dev/kvm が無い。emulation になるので相当遅い"
+          fi
+
+      - name: イメージを作る
+        run: |
+          set -e
+          arch=${{ matrix.target }}; arch=${arch%-*}
+          rel=${{ matrix.target }};  rel=${rel#*-}
+          sh build-image.sh "$arch" "$rel"
+
+      - name: 起動して ssh まで通るか
+        run: |
+          set -e
+          sh runvm.sh ${{ matrix.target }} 2222
+          K=./${{ matrix.target }}.id
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o LogLevel=ERROR -i $K -p 2222 root@127.0.0.1 \
+              'PATH=/sbin:/usr/sbin:/bin:/usr/bin; uname -srm; df -h /; gcc --version 2>/dev/null | head -1'
+
+      - name: 止める
+        if: always()
+        run: sh stopvm.sh ${{ matrix.target }} || true
+
+      - name: 転けたらコンソールを出す
+        if: failure()
+        run: |
+          tail -80 ${{ matrix.target }}.console.log 2>/dev/null || true
+          tail -20 ${{ matrix.target }}.seed.log 2>/dev/null || true
+
+      - name: release に上げる
+        if: success() && inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view images > /dev/null 2>&1 || \
+            gh release create images --title "NetBSD images for CI" --notes "anita で組んだイメージ"
+          gh release upload images \
+            ${{ matrix.target }}.qcow2 ${{ matrix.target }}.qemu --clobber
