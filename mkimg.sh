@@ -65,8 +65,9 @@ fi
 #
 # root デバイス名は QEMU の繋ぎ方で決まり、fstab と食い違うと起動しない。
 #
-#   if=virtio -> ld0     virtio は NetBSD 6.0 から。5.x 以下には無い
-#   if=ide    -> wd0     どの版でも通る
+#   virtio-scsi -> sd0   vioscsi は NetBSD 10 から
+#   virtio      -> ld0   virtio-blk。6.0 から。5.x 以下には無い
+#   ide         -> wd0   どの版でも通る
 #
 # 同じ理由で NIC も選ぶ。vioif は 6.0 から、wm (e1000) も古い版には無いので、
 # 5.x 以下は ne2k_pci にしておく。組み合わせは .qemu に書き出すので、動かす
@@ -74,16 +75,28 @@ fi
 case $ARCH in
 i386|amd64)
 	USE_MBR=yes; LABELDEV=d; BOOTXX=bootxx_ffsv$FFS
-	if [ "$MAJOR" -ge 6 ] 2>/dev/null; then
-		DISKIF=virtio; NICDEV=virtio-net-pci; ROOTDEV=${ROOTDEV:-ld0a}
+	if [ "$MAJOR" -ge 10 ] 2>/dev/null; then
+		DISKIF=virtio-scsi; NICDEV=virtio-net-pci; ROOTDEV=${ROOTDEV:-sd0a}
+	elif [ "$MAJOR" -ge 6 ] 2>/dev/null; then
+		DISKIF=virtio;      NICDEV=virtio-net-pci; ROOTDEV=${ROOTDEV:-ld0a}
 	else
-		DISKIF=ide;    NICDEV=ne2k_pci;       ROOTDEV=${ROOTDEV:-wd0a}
+		DISKIF=ide;         NICDEV=ne2k_pci;       ROOTDEV=${ROOTDEV:-wd0a}
 	fi ;;
 sparc64)
 	USE_MBR=no;  LABELDEV=c; BOOTXX=bootblk
 	DISKIF=ide;  NICDEV=;    ROOTDEV=${ROOTDEV:-wd0a} ;;
 *)
 	echo "$0: $ARCH は未対応 (MBR とブートローダの扱いを足すこと)"; exit 1 ;;
+esac
+
+# virtio-scsi は -drive if=... では繋がらない。コントローラと scsi-hd を
+# 別々に並べる必要があるので、インタフェース名ではなくディスク指定の全体を
+# 持たせる。@IMG@ は動かす側がイメージのパスに置き換える。
+case $DISKIF in
+virtio-scsi)
+	DISKARGS="-device virtio-scsi-pci,id=scsi0 -drive file=@IMG@,if=none,id=d0,format=raw -device scsi-hd,drive=d0,bus=scsi0.0" ;;
+*)
+	DISKARGS="-drive file=@IMG@,if=$DISKIF,format=raw" ;;
 esac
 
 # 鍵はここで確かめる。無いまま進むと、セットを落として展開し終えてから
@@ -279,6 +292,7 @@ ARCH=$ARCH
 RELEASE=$REL
 QEMU=qemu-system-$(case $ARCH in amd64) echo x86_64 ;; *) echo $ARCH ;; esac)
 DISKIF=$DISKIF
+DISKARGS="$DISKARGS"
 NICDEV=$NICDEV
 ROOTDEV=$ROOTDEV
 META

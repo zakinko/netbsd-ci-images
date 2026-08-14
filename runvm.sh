@@ -44,8 +44,12 @@ if [ -n "$NICDEV" ]; then
 fi
 
 echo "=== $NAME を起動 (disk=$DISKIF root=$ROOTDEV ssh=$PORT) ==="
+# 古いイメージには DISKARGS が無いので、DISKIF から組み立てて補う。
+[ -n "$DISKARGS" ] || DISKARGS="-drive file=@IMG@,if=$DISKIF,format=raw"
+DISK=$(echo "$DISKARGS" | sed "s|@IMG@|$IMG|g")
+
 $QEMU -m $MEM -smp $SMP \
-	-drive file="$IMG",if=$DISKIF,format=raw \
+	$DISK \
 	$NET \
 	-display none \
 	-serial file:$DIR/$NAME.console.log \

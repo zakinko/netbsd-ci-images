@@ -27,24 +27,40 @@ CI から QEMU で起動するための、素の NetBSD ディスクイメージ
 ARCH=i386
 RELEASE=10.1
 QEMU=qemu-system-i386
-DISKIF=virtio
+DISKIF=virtio-scsi
+DISKARGS="-device virtio-scsi-pci,id=scsi0 -drive file=@IMG@,if=none,id=d0,format=raw -device scsi-hd,drive=d0,bus=scsi0.0"
 NICDEV=virtio-net-pci
-ROOTDEV=ld0a
+ROOTDEV=sd0a
 ```
 
-`virtio` が使えるのは **NetBSD 6.0 から**です。5.x 以下には driver が無いの
-で、ディスクは `ide` (`wd0`)、NIC は `ne2k_pci` になります。この切り替えは
-イメージを組む時点で行われ、`/etc/fstab` もそれに合わせて書かれています。
+ディスクは版によって三通りに分かれます。
+
+| 版 | 繋ぎ方 | root |
+| --- | --- | --- |
+| 10 以降 | virtio-scsi (`vioscsi`) | `sd0a` |
+| 6.0 〜 9.x | virtio-blk | `ld0a` |
+| 5.x 以下 | IDE | `wd0a` |
+
+`virtio` そのものが NetBSD 6.0 から、`vioscsi` は 10 からです。NIC も同じ理由
+で 5.x 以下は `ne2k_pci` になります。切り替えはイメージを組む時点で行われ、
+`/etc/fstab` もそれに合わせて書かれています。
+
+virtio-scsi は `-drive if=...` では繋がらず、コントローラと `scsi-hd` を別々
+に並べる必要があります。そのため `.qemu` にはインタフェース名ではなくディスク
+指定の全体を `DISKARGS` として持たせてあります。`@IMG@` をイメージのパスに
+置き換えて使ってください。
 
 ```sh
 . ./i386-10.1.qemu
-$QEMU -m 2048 -smp 2 \
-      -drive file=i386-10.1.img,if=$DISKIF,format=raw \
+DISK=`echo "$DISKARGS" | sed "s|@IMG@|i386-10.1.img|g"`
+$QEMU -m 2048 -smp 2 $DISK \
       -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 \
       -device $NICDEV,netdev=n0 \
       -display none -daemonize
 ssh -p 2222 root@127.0.0.1
 ```
+
+`runvm.sh` がこの置き換えをやります。
 
 ## 組み方
 
