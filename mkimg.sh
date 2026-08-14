@@ -180,7 +180,26 @@ drivedata: 0
  c:  $PSIZE  $START     unused      0     0
  d:  $SECT         0     unused      0     0
 LBL
-disklabel -R -r /dev/r${VND}$LABELDEV /tmp/nbimg.label
+# ラベルの中身は作るイメージのアーキテクチャで決まるが、書き込み先の
+# デバイスノードは走らせているホストの規約で決まる。i386 のホストでは
+# ディスク全体が d で、c は MBR 内の NetBSD 領域を指すため、MBR を掘らない
+# 構成では c が存在せず "Device not configured" になる。どちらが通るかは
+# ホスト次第なので試す。
+LABELOK=
+for _d in $LABELDEV d c; do
+	[ -c /dev/r${VND}$_d ] || continue
+	if disklabel -R -r /dev/r${VND}$_d /tmp/nbimg.label 2> /tmp/nbimg.dlerr; then
+		LABELOK=$_d
+		echo "    (/dev/r${VND}$_d に書いた)"
+		break
+	fi
+done
+if [ -z "$LABELOK" ]; then
+	echo "$0: disklabel を書けない:" >&2
+	cat /tmp/nbimg.dlerr >&2
+	ls -l /dev/r${VND}? >&2
+	exit 1
+fi
 
 echo "--- newfs (FFSv$FFS) ---"
 newfs -O $FFS /dev/r${VND}a > /dev/null
