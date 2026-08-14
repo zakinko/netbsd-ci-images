@@ -65,9 +65,13 @@ run_rc_command "$1"
 EOF
 chmod 755 /etc/rc.d/seed_key
 
+# hostname を空のままにすると postfix が "unable to use my own hostname" で
+# 起動に失敗し、rc が毎回それを報告する。害は無いが、本当の失敗を探すときに
+# 邪魔なので埋めておく。
 cat >> /etc/rc.conf <<'EOF'
 
 # イメージの仕込み
+hostname=nbimg
 dhcpcd=YES
 dhclient=YES
 sshd=YES

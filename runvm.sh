@@ -87,8 +87,16 @@ esac
 	DISKARGS="-drive file=@IMG@,if=${DISKIF:-ide},format=raw,cache=unsafe"
 DISK=$(echo "$DISKARGS" | sed "s|@IMG@|$IMG|g")
 
-NET="-netdev user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:22"
-[ -n "${NICDEV:-}" ] && NET="$NET -device $NICDEV,netdev=n0"
+# NIC の付け方。-netdev だけ渡して -device を付けないと netdev がどこにも
+# 繋がらず、しかも -netdev を書いた時点で QEMU は既定の NIC を作らなくなる
+# ので、guest はネットワーク無しで起動する (dhcpcd がアドレスを取れず、
+# 鍵も取りに来られない)。model を指定しない -nic なら、その machine の
+# 既定の NIC が付く。anita がインストール時に使ったのと同じものになる。
+if [ -n "${NICDEV:-}" ]; then
+	NET="-netdev user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:22 -device $NICDEV,netdev=n0"
+else
+	NET="-nic user,hostfwd=tcp:127.0.0.1:$PORT-:22"
+fi
 
 SNAP=-snapshot
 [ "${KEEP:-0}" = 1 ] && SNAP=
