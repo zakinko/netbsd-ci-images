@@ -52,9 +52,11 @@ command -v "$QEMU" > /dev/null 2>&1 || { echo "$0: $QEMU が無い"; exit 1; }
 # ------------------------------------------------------------------
 # 使い捨ての鍵を作って配る
 mkdir -p "$SEED"
+# 鍵は RSA にする。ed25519 は OpenSSH 6.5 (2014) からで、NetBSD 6 以前の
+# sshd は authorized_keys に書いてあっても解さない。RSA はどの版でも通る。
 if [ ! -s "$KEY" ]; then
 	rm -f "$KEY" "$KEY.pub"
-	ssh-keygen -q -t ed25519 -f "$KEY" -N '' -C "$NAME"
+	ssh-keygen -q -t rsa -b 3072 -f "$KEY" -N '' -C "$NAME"
 fi
 cp "$KEY.pub" "$SEED/authorized_keys"
 
@@ -111,13 +113,22 @@ $QEMU $ACCEL $SNAP -m $MEM -smp $SMP \
 	-pidfile "$DIR/$NAME.pid" \
 	-daemonize
 
+# 入るための呼び出しを一箇所で決め、外にも書き出す。使う側が同じ指定を
+# 書き写すと、片方だけ古くなって古い版で通らなくなる。
+#
+# 古い sshd は署名が ssh-rsa (SHA-1) しかなく、今の ssh は既定でそれを断る。
+# 鍵の種類と host key の種類の両方を明示的に許す。新しい sshd には無害。
+SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+ -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
+ -o PubkeyAcceptedAlgorithms=+ssh-rsa -o HostkeyAlgorithms=+ssh-rsa \
+ -i $KEY -p $PORT root@127.0.0.1"
+printf '%s\n' "$SSH" > "$DIR/$NAME.ssh"
+
 echo "--- ssh が上がるのを待つ ---"
 n=0
 while [ $n -lt 120 ]; do
-	if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-	       -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR \
-	       -i "$KEY" -p "$PORT" root@127.0.0.1 true 2>/dev/null; then
-		echo "OK: ssh -i $KEY -p $PORT root@127.0.0.1"
+	if $SSH true 2>/dev/null; then
+		echo "OK: $SSH"
 		exit 0
 	fi
 	n=$((n + 1))
