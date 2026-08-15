@@ -41,10 +41,18 @@ else
 	URL=https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-$REL/$ARCH/
 fi
 
-# 入れるセット。既定では絞らない。版によって名前も顔ぶれも違い、知らない
-# 名前を渡すと anita が止まるので、全部入れてしまうほうが版をまたいで確実。
-# 絞りたいときだけ SETS を渡す。
-SETS=${SETS:-}
+# 入れるセット。指定しないと anita の既定になり、X が落ちる。X が無いと
+# pkgsrc の X11 を使うものが "uses X11, but /usr/X11R7 not found" で建たない。
+# Xvfb は xserver に入っているので、画面のいらない検査にもこれが要る。
+#
+# modules は NetBSD 5.0 から。それ以前に渡すと anita が知らない名前だと
+# 言って止まるので外す。
+if [ "$MAJOR" -ge 5 ] 2>/dev/null; then
+	_mod=modules,
+else
+	_mod=
+fi
+SETS=${SETS:-kern-GENERIC,${_mod}base,etc,comp,man,misc,text,xbase,xcomp,xetc,xfont,xserver}
 
 case $ARCH in
 i386)		QEMU=qemu-system-i386 ;;
