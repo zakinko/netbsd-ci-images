@@ -80,10 +80,14 @@ no_swap=YES
 EOF
 
 # 鍵でだけ root を通す。この VM は動かす側の 127.0.0.1 にしか出ていない。
+#
+# 綴りは without-password のほう。prohibit-password は OpenSSH 6.7 からで、
+# NetBSD 7 以前の sshd は解さず、設定を読んだ時点で起動に失敗する。古い綴り
+# は今の OpenSSH でも別名として通るので、どの版でもこれで済む。
 cat >> /etc/ssh/sshd_config <<'EOF'
 
 # イメージの仕込み
-PermitRootLogin prohibit-password
+PermitRootLogin without-password
 PasswordAuthentication no
 UseDNS no
 EOF
