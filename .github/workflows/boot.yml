@@ -4,7 +4,7 @@ name: boot
 #
 # 手元の arm64 機で i386 を回すと TCG になって遅すぎ、切り分けの道具として
 # 使いものにならない。ここの runner は x86_64 の Linux で KVM が使えるので、
-# i386 と amd64 の guest はほぼ実速で動く。sparc64 だけは emulation。
+# i386 と amd64 の guest はほぼ実速で動く。他の port は emulation。
 #
 # 古い版ほど QEMU 側の周辺機器の作り込みに引っかかりやすい。実際 NetBSD 5 は
 # IDE で "piixide0: lost interrupt" を繰り返して進まない。どの組み合わせが
@@ -16,6 +16,8 @@ on:
       - '.github/workflows/boot.yml'
       - 'runvm.sh'
       - 'stopvm.sh'
+      - 'console.py'
+      - 'mirror-alias.py'
   workflow_dispatch:
     inputs:
       only:
@@ -26,7 +28,7 @@ jobs:
   # release にあるものを数え上げて matrix にする。イメージを足すたびに
   # workflow を書き換えなくて済む。
   list:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       images: ${{ steps.q.outputs.images }}
     steps:
@@ -39,8 +41,10 @@ jobs:
           if [ -n "$ONLY" ]; then
             printf 'images=%s\n' "$(printf '%s\n' $ONLY | jq -Rrn '[inputs] | tostring')" >> $GITHUB_OUTPUT
           else
+            # qcow2 が QEMU の port、img.gz が gxemul/simh の port。
+            # ここで起動を確かめられるのは前者だけ。
             gh release view images --repo "$GITHUB_REPOSITORY" \
-              --json assets --jq '[.assets[].name | select(endswith(".img.gz")) | rtrimstr(".img.gz")]' \
+              --json assets --jq '[.assets[].name | select(endswith(".qcow2")) | rtrimstr(".qcow2")]' \
               > list.json
             echo "images=$(cat list.json)" >> $GITHUB_OUTPUT
           fi
@@ -49,9 +53,10 @@ jobs:
   boot:
     needs: list
     if: needs.list.outputs.images != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
+      max-parallel: 6
       matrix:
         image: ${{ fromJSON(needs.list.outputs.images) }}
     name: ${{ matrix.image }}
@@ -61,7 +66,8 @@ jobs:
       - name: qemu と道具を入れる
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-system-x86 qemu-system-sparc netcat-openbsd
+          sudo apt-get install -y -qq qemu-system-x86 qemu-system-sparc \
+            qemu-system-ppc qemu-system-arm qemu-system-misc netcat-openbsd
           # KVM は runner の既定では root しか触れないことがある
           sudo chmod 666 /dev/kvm 2>/dev/null || true
           ls -l /dev/kvm || echo "KVM 無し (TCG になる)"
@@ -70,30 +76,30 @@ jobs:
         run: |
           set -e
           B=https://github.com/${{ github.repository }}/releases/download/images
-          curl -fsSL -O $B/${{ matrix.image }}.img.gz
+          curl -fsSL -O $B/${{ matrix.image }}.qcow2
           curl -fsSL -O $B/${{ matrix.image }}.qemu
+          # 起動のたびに要るもの。無い port のほうが多いので取れなくてよい。
+          for e in kernel bootiso dtb; do
+            curl -fsSL -O $B/${{ matrix.image }}.$e || true
+          done
           cat ${{ matrix.image }}.qemu
 
       - name: 起動して ssh まで通るか
-        id: boot
         run: |
-          # 鍵はイメージに焼いた公開鍵の対。secret に入れておく。
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.IMAGE_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          # 鍵はイメージに焼かれていない。runvm.sh がその場で作って
+          # 8123 で配り、ゲストの seed_key が取りに来る。secret は要らない。
           DIR=. sh runvm.sh ${{ matrix.image }} 2222
 
       - name: 中身を確かめる
         run: |
-          S="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-             -o BatchMode=yes -o LogLevel=ERROR -p 2222 root@127.0.0.1"
-          $S sh -s <<'GUEST'
+          SSH=$(cat ./${{ matrix.image }}.ssh)
+          $SSH sh -s <<'GUEST' | tee -a $GITHUB_STEP_SUMMARY
           PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/pkg/bin:/usr/pkg/sbin
           export PATH
           echo "uname   : $(uname -srm)"
           echo "root    : $(mount | head -1)"
           echo "cc      : $(gcc --version 2>/dev/null | head -1)"
-          echo "Xvfb    : $(ls /usr/X11R7/bin/Xvfb 2>/dev/null || echo なし)"
+          echo "Xvfb    : $(ls /usr/X11R7/bin/Xvfb /usr/X11R6/bin/Xvfb 2>/dev/null | head -1 || echo なし)"
           df -h /
           GUEST
 

@@ -1,22 +1,42 @@
 name: build-images
 
-# anita で NetBSD を入れ、qcow2 に固めて release に置く。
+# NetBSD のイメージを組んで release に置く。
 #
-# runner は x86_64 の Linux で KVM が使えるので、i386 と amd64 のゲストは
-# ほぼ実速で動く。手元の arm64 機では emulation になり install だけで
-# 1〜2 時間かかるので、ここで回すほうが速い。
+# 対象は netbsd.org/ports のうち Ubuntu の上で動かせる port (ports.conf) と、
+# 1.0 から 11.0 までの全ての版の掛け算。gen-targets.sh がミラーを読んで
+# 実在する組み合わせだけを出し、まだ release に無いものから順に組む。
 #
-# 版ごとの癖 (MBR の有無、FFS の版、ブートブロックの置き方、virtio の
-# 世代) は anita が持っている。外からディスクを組み立てる方法だと、その
-# 版のカーネルが虚仮にされた周辺機器を扱えるかは運任せで、実際 NetBSD 5 は
-# IDE で "piixide0: lost interrupt" を繰り返して起動しなかった。
+# 一度で全部は終わらない。組める組み合わせは千に近く、加速の効かない port
+# では install だけで何時間もかかる。ここでは一回あたり limit 個までを組み、
+# 出来たものから release に積む。掛け直せば続きから進む。
+#
+# どれが通るのかは机上では決められない。sysinst そのものが 1.3 からで、
+# それ以前は anita では入らない。入っても、その版のカーネルが虚仮にされた
+# 周辺機器を扱えるとは限らない (NetBSD 5 を IDE で組んだら
+# "piixide0: lost interrupt" を繰り返して起動しなかった)。だから総当たりする。
+# 転けたものは次の実行でまた候補に戻るので、直せば拾い直せる。
+#
+# runner を ubuntu-24.04 で固定してあるのは ssh のため。ここの OpenSSH は
+# 9.6 で、まだ DSA を作れる。NetBSD 1.5.x の base の sshd は SSH2 では DSA
+# しか喋らないので、ホストが新しいと鍵の種類が一つも噛み合わなくなる。
 
 on:
   workflow_dispatch:
     inputs:
-      targets:
-        description: '作るもの (例: "i386-10.1 amd64-11.0")。空なら既定の一覧'
+      ports:
+        description: '対象の port (例 "i386 macppc")。空なら ports.conf の全部'
         required: false
+      releases:
+        description: '対象の版 (例 "10.1 9.4")。空ならミラーにある全部'
+        required: false
+      limit:
+        description: '一度に組む数'
+        required: false
+        default: '40'
+      force:
+        description: '既に release にあるものも組み直す'
+        type: boolean
+        default: false
       publish:
         description: 'release に上げる'
         type: boolean
@@ -27,31 +47,53 @@ permissions:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       targets: ${{ steps.q.outputs.targets }}
+      count: ${{ steps.q.outputs.count }}
     steps:
+      - uses: actions/checkout@v4
+
       - id: q
         env:
-          T: ${{ inputs.targets }}
+          GH_TOKEN: ${{ github.token }}
+          PORTS: ${{ inputs.ports }}
+          RELEASES: ${{ inputs.releases }}
+          LIMIT: ${{ inputs.limit }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -e
-          # 既定の一覧。まず通ることが分かっている新しい版から並べ、
-          # 古い版は後ろに置く。fail-fast は切ってあるので後ろが転けても
-          # 前は残る。
-          [ -n "$T" ] || T="i386-11.0 i386-10.1 i386-9.4 amd64-11.0 amd64-10.1 amd64-9.4"
-          printf 'targets=%s\n' "$(printf '%s\n' $T | jq -Rrn '[inputs] | tostring')" >> $GITHUB_OUTPUT
-          cat $GITHUB_OUTPUT
+          RELEASES="$RELEASES" sh gen-targets.sh $PORTS | sort -u > all.txt
+          echo "候補 $(wc -l < all.txt) 個"
+
+          # 既に置いてあるものは飛ばす。掛け直すたびに続きから進む。
+          if [ "$FORCE" = true ]; then
+            : > have.txt
+          else
+            gh release view images --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '.assets[].name' 2>/dev/null |
+              sed -n 's/\.\(qcow2\|img\.gz\)$//p' | sort -u > have.txt || : > have.txt
+          fi
+          echo "済み $(wc -l < have.txt) 個"
+
+          comm -23 all.txt have.txt | head -n "${LIMIT:-40}" > todo.txt
+          echo "今回 $(wc -l < todo.txt) 個:"
+          cat todo.txt
+          printf 'targets=%s\n' "$(jq -Rrn '[inputs] | tostring' < todo.txt)" >> $GITHUB_OUTPUT
+          printf 'count=%s\n' "$(wc -l < todo.txt)" >> $GITHUB_OUTPUT
 
   build:
     needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    # 加速の効かない port は install だけで何時間もかかる。GitHub の上限が
+    # 6 時間なので、その手前で切って転けたことを記録に残す。
+    timeout-minutes: 340
     strategy:
       fail-fast: false
-      # anita はゲストの rc.d に焼き込んだ 8123 を使う。同じ runner で
-      # 並行させるぶんには別マシンなので競合しないが、ジョブあたり 1 VM。
-      max-parallel: 4
+      # ゲストの rc.d には 8123 が焼き込んである。job ごとに別の runner
+      # なので取り合いにはならないが、一つの runner では VM 一つ。
+      max-parallel: 6
       matrix:
         target: ${{ fromJSON(needs.plan.outputs.targets) }}
     name: ${{ matrix.target }}
@@ -65,13 +107,17 @@ jobs:
                       /usr/local/share/boost || true
           df -h /
 
-      - name: qemu と anita を入れる
+      - name: emulator と anita を入れる
         run: |
           sudo apt-get update -qq
           # genisoimage は anita が install 用 ISO を焼くのに要る。
           # 無いと "could not run mkisofs" で止まる。
-          sudo apt-get install -y -qq qemu-system-x86 qemu-system-sparc \
-                                      qemu-utils genisoimage
+          # gxemul と simh は QEMU が真似られない port のため
+          # (pmax hpcmips landisk / vax)。
+          sudo apt-get install -y -qq \
+            qemu-system-x86 qemu-system-sparc qemu-system-ppc \
+            qemu-system-arm qemu-system-misc qemu-utils genisoimage \
+            gxemul simh
           # PyPI の "anita" は同名の別物なので本家の配布物を直接指す。
           # pexpect は setup.py が宣言していない。
           python3 -m pip install --break-system-packages --quiet \
@@ -93,18 +139,26 @@ jobs:
       - name: イメージを作る
         run: |
           set -e
-          arch=${{ matrix.target }}; arch=${arch%-*}
+          # port に - は入らないので、最初の - までが port。
+          port=${{ matrix.target }}; port=${port%%-*}
           rel=${{ matrix.target }};  rel=${rel#*-}
-          sh build-image.sh "$arch" "$rel"
+          sh build-image.sh "$port" "$rel"
 
       - name: 起動して ssh まで通るか
         run: |
           set -e
+          . ./${{ matrix.target }}.qemu
+          if [ "${SSH:-yes}" != yes ]; then
+            echo "$VMM の port なのでホストから入る口が無い。"
+            echo "組むときに anita が login まで出したことは確かめてある。"
+            exit 0
+          fi
           sh runvm.sh ${{ matrix.target }} 2222
           # 入り方は runvm.sh が決めて書き出す。古い sshd 向けの指定が
           # 要るので、ここで書き写さずに読む。
           SSH=$(cat ./${{ matrix.target }}.ssh)
-          $SSH 'PATH=/sbin:/usr/sbin:/bin:/usr/bin; uname -srm; df -h /; gcc --version 2>/dev/null | head -1'
+          $SSH 'PATH=/sbin:/usr/sbin:/bin:/usr/bin; uname -srm; df -h /' |
+            tee -a $GITHUB_STEP_SUMMARY
 
       - name: 止める
         if: always()
@@ -115,6 +169,7 @@ jobs:
         run: |
           tail -80 ${{ matrix.target }}.console.log 2>/dev/null || true
           tail -20 ${{ matrix.target }}.seed.log 2>/dev/null || true
+          tail -40 ${TMPDIR:-/tmp}/nbimg-${{ matrix.target }}/seed.log 2>/dev/null || true
 
       - name: release に上げる
         if: success() && inputs.publish
@@ -122,6 +177,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view images > /dev/null 2>&1 || \
-            gh release create images --title "NetBSD images for CI" --notes "anita で組んだイメージ"
-          gh release upload images \
-            ${{ matrix.target }}.qcow2 ${{ matrix.target }}.qemu --clobber
+            gh release create images --title "NetBSD images for CI" \
+              --notes "anita で組んだイメージ。繋ぎ方は各 .qemu を見ること。"
+          # 起動のたびに要るもの (カーネル、起動用 CD、device tree) も
+          # 一緒に上げる。イメージだけでは起きない port がある。
+          set -- ${{ matrix.target }}.qemu
+          for e in qcow2 img.gz kernel bootiso dtb; do
+            if [ -s "${{ matrix.target }}.$e" ]; then
+              set -- "$@" "${{ matrix.target }}.$e"
+            fi
+          done
+          gh release upload images "$@" --clobber
