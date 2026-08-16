@@ -129,6 +129,33 @@ Release trees do not always agree with the name anita expects (`hp700`, or
 `evbarm-earmv7hf` which exists only in the daily builds), so a local relay
 that answers with 302 (`mirror-alias.py`) lines the names up.
 
+## Adding a new OS
+
+Almost none of this is documented anywhere, so it is done to a fixed pattern.
+
+1. **Boot it by hand first**, with `qemu-system-… -nographic`, and watch. If
+   nothing appears, that is a problem with how the console is exposed (see the
+   table above), not with the image
+2. **Decide how to reach the console.** Machines whose firmware talks to the
+   serial line (sparc, hppa) are fine with `-serial unix:…`; x86 needs
+   `-nographic`, i.e. `CONSOLE=stdio`
+3. **Log in by hand and get the network up.** This is where each OS shows its
+   quirks (the shell is csh, the IP is baked in, there is no DHCP, …)
+4. **Install a key and get ssh working**: the vendor's sshd, else pkgsrc, else
+   move it to the "cannot" list
+5. **Copy the steps that worked into `STEPS` in `targets/<name>.conf`**
+   verbatim — the same order and the same strings
+6. Run `sh build.sh <name>` and check that **the result reproduces**
+7. Add what you learned to [SUPPORT.md](SUPPORT.md)
+
+`talk.py` is usable directly while exploring by hand.
+
+```sh
+mkfifo in; (sleep 3000 > in &)
+qemu-system-x86_64 -m 2048 -drive file=disk.qcow2,format=qcow2 -nographic < in > con.log 2>&1 &
+python3 talk.py --outfile con.log --infile in --log con.log --kick --step 'login:=>root'
+```
+
 ## Keys
 
 **No key is baked into an image.** The guest fetches a public key from the

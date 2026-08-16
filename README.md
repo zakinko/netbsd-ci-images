@@ -127,6 +127,32 @@ release ツリーでの名前が anita の期待と食い違う場合 (`hp700`�
 無い `evbarm-earmv7hf`) があるので、302 を返すだけの中継 (`mirror-alias.py`)
 を手元に立てて名前を揃えています。
 
+## 新しい OS を足す
+
+手順が書かれていないものばかりなので、決まった型で当たります。
+
+1. **まず手で起こす。** `qemu-system-… -nographic` で観察する。ここで何も
+   出ないなら、出し方の問題 (下の表) であってイメージの問題ではない
+2. **コンソールの引き出し方を決める。** firmware がシリアルに出す機械
+   (sparc、hppa) は `-serial unix:…` で足りる。x86 は `-nographic` でないと
+   出ないので `CONSOLE=stdio`
+3. **手でログインし、ネットワークを通す。** ここで OS ごとの癖が出る
+   (shell が csh、IP が固定で焼かれている、DHCP が無い、など)
+4. **鍵を置いて ssh を通す。** ベンダの sshd → 無ければ pkgsrc → それも
+   駄目なら「作れない」側へ回す
+5. **通った手順をそのまま `targets/<名前>.conf` の `STEPS` に書き写す。**
+   手で打った順番と文字列がそのまま動く
+6. `sh build.sh <名前>` で**同じ結果が再現するか**確かめる
+7. 分かった癖を [SUPPORT.md](SUPPORT.md) に足す
+
+手で観察するときは `talk.py` をそのまま使えます。
+
+```sh
+mkfifo in; (sleep 3000 > in &)
+qemu-system-x86_64 -m 2048 -drive file=disk.qcow2,format=qcow2 -nographic < in > con.log 2>&1 &
+python3 talk.py --outfile con.log --infile in --log con.log --kick --step 'login:=>root'
+```
+
 ## 鍵
 
 **イメージに鍵は焼かれていません。** ゲストは起動のたび、あるいは仕込みの
