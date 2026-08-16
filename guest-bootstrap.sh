@@ -16,14 +16,17 @@
 #   REL       版 (1.6.2 など)。何が在るかの見当をつけるのに使う
 #   SSH_MODE  base   = base の sshd をそのまま使う
 #             build  = OpenSSH を組んで差し替える (1.5.x 以前)
+#   ROOTDEV   出来たイメージを起動するときの root (ld0a など)。anita は IDE で
+#             入れるので、違うなら fstab を書き換える
 
 set -u
 
 REL=${REL:-}
 SSH_MODE=${SSH_MODE:-base}
+ROOTDEV=${ROOTDEV:-wd0a}
 SEED=http://10.0.2.2:8123
 
-echo "=== bootstrap 開始 (REL=$REL SSH_MODE=$SSH_MODE)"
+echo "=== bootstrap 開始 (REL=$REL SSH_MODE=$SSH_MODE ROOTDEV=$ROOTDEV)"
 
 # command -v は古い /bin/sh に無いことがある。type はある。
 have() {
@@ -263,6 +266,31 @@ fi
 if [ -f /etc/ttys ]; then
 	sed -e 's|^\(tty00\)[[:space:]].*|\1	"/usr/libexec/getty std.9600"	vt100	on secure|' \
 		/etc/ttys > /etc/ttys.new && mv /etc/ttys.new /etc/ttys
+fi
+
+# ------------------------------------------------------------------
+# ディスクの繋ぎ方を変えるなら、fstab をそれに合わせる。
+#
+# anita は IDE で入れるので、この時点の /etc/fstab は wd0 を指している。
+# イメージを virtio-blk で起動すると、同じディスクがカーネルからは ld0 に
+# 見える。fstab が食い違うと root が上がらず単一ユーザに落ちるので、ここで
+# 書き換えておく。
+#
+# ブートローダは触らなくてよい。MBR の一次ブートも FFS の二次ブートも
+# BIOS 越しに読むので、どのインタフェースにぶら下がっているかを見ていない。
+# 効くのは fstab と、カーネルが root をどこに見つけるかだけ。
+#
+# anita はこの --run のあと再起動しない。だからここで書き換えても、この回の
+# インストールが足を取られることはない。次に起動するのは virtio で開いた
+# ときで、そのときには辻褄が合っている。
+#
+_rootdisk=$(echo "$ROOTDEV" | sed 's/[a-p]$//')
+
+if [ -f /etc/fstab ] && [ "$_rootdisk" != wd0 ]; then
+	echo "=== fstab を wd0 から $_rootdisk へ"
+	sed "s/wd0/$_rootdisk/g" /etc/fstab > /etc/fstab.new &&
+		mv /etc/fstab.new /etc/fstab
+	cat /etc/fstab
 fi
 
 mkdir -p /usr/pkgsrc

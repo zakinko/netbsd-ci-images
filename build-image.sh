@@ -57,6 +57,30 @@ HEAD|netbsd-*)	RELN=99000000; MAJOR=99 ;;
 *)		RELN=$(relnum "$REL"); MAJOR=${REL%%.*} ;;
 esac
 
+# ------------------------------------------------------------------
+# ディスクをどう繋ぐか。ここで先に決めるのは、ゲストの中で走らせる仕込みに
+# 渡す必要があるため -- 繋ぎ方が変われば /etc/fstab の書き方も変わり、
+# 食い違うと root が見つからず起動しない。
+#
+# IDE はコマンドを一つずつしか処理できずキューが無い。pkgsrc のビルドは
+# 小さい書き込みが大量に出るので、一件ごとに往復を待つぶんが積み上がる。
+# virtio-blk なら並べて投げられるうえ、実在のチップのレジスタ操作を qemu が
+# 模倣する手間も消える。
+#
+# virtio-blk は NetBSD 6.0 から (それ以前には無い)。10 以降なら vioscsi も
+# 使えるが、blk で足りるので版で分けない。
+#
+#	virtio -> ld0	ide -> wd0
+#
+WANT_DISKIF=ide
+WANT_ROOTDEV=wd0a
+case $PORT in
+i386|amd64)
+	if [ "$MAJOR" -ge 6 ] 2>/dev/null; then
+		WANT_DISKIF=virtio
+		WANT_ROOTDEV=ld0a
+	fi ;;
+esac
 
 # ディスクとメモリ。古い版に今の大きさを渡すと、sysinst が扱えなかったり
 # 起動の途中で止まったりする。1.x は BIOS のジオメトリの都合もあるので
@@ -222,7 +246,7 @@ fi
 # 口が無いので、鍵を配る仕掛けは意味を持たない。せめて起動して使える形に
 # なるところまでを一行で済ませる。
 if [ "$VMM" = qemu ]; then
-	RUN="(dhcpcd -w || dhclient -w || dhclient) >/dev/null 2>&1; ftp -o /tmp/bs.sh http://10.0.2.2:$SEED_PORT/guest-bootstrap.sh && SSH_MODE=$SSH_MODE REL=$REL sh /tmp/bs.sh"
+	RUN="(dhcpcd -w || dhclient -w || dhclient) >/dev/null 2>&1; ftp -o /tmp/bs.sh http://10.0.2.2:$SEED_PORT/guest-bootstrap.sh && SSH_MODE=$SSH_MODE REL=$REL ROOTDEV=$WANT_ROOTDEV sh /tmp/bs.sh"
 else
 	RUN="echo hostname=nbimg >> /etc/rc.conf; echo sshd=YES >> /etc/rc.conf; echo no_swap=YES >> /etc/rc.conf; sync"
 fi
@@ -290,10 +314,14 @@ fi
 # 使った構成に合わせること。食い違うと root が見つからず起動しない。
 #
 # @IMG@ @KERNEL@ @BOOTISO@ @MEM@ は runvm.sh が置き換える。
-DISKARGS="-drive file=@IMG@,format=$IMGFMT,media=disk"
+if [ "$WANT_DISKIF" = ide ]; then
+	DISKARGS="-drive file=@IMG@,format=$IMGFMT,media=disk"
+else
+	DISKARGS="-drive file=@IMG@,format=$IMGFMT,media=disk,if=$WANT_DISKIF"
+fi
 EXTRAARGS=
 ANSWERS=
-ROOTDEV=wd0a
+ROOTDEV=$WANT_ROOTDEV
 SSH=yes
 
 case $PORT in
