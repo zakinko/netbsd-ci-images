@@ -48,6 +48,12 @@ while [ $n -lt 60 ]; do
 			kill "$(cat $DIR/$NAME.seedpid)" 2>/dev/null || true
 			rm -f "$DIR/$NAME.seedpid"
 		fi
+		# コンソールに返事をしていた側も同じ。socket が消えた後も
+		# 待ち続けるので、放っておくと次の起動まで残る。
+		if [ -s "$DIR/$NAME.consolepid" ]; then
+			kill "$(cat $DIR/$NAME.consolepid)" 2>/dev/null || true
+			rm -f "$DIR/$NAME.consolepid"
+		fi
 		exit 0
 	fi
 	n=$((n + 1))

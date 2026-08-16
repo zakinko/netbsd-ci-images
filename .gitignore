@@ -5,3 +5,23 @@ imgs/
 *.console.log
 *.mon
 *.pid
+*.qcow2
+*.qemu
+*.kernel
+*.bootiso
+*.dtb
+*.ssh
+*.id
+*.id.pub
+*.id.dsa
+*.id.dsa.pub
+*.seed/
+*.seed.log
+*.seedpid
+*.consolepid
+*.tty
+
+# 手元の媒体。18 GB あるうえ、大半は再配布の許されない商用 OS の
+# 配布物なので、public なこのリポジトリには絶対に入れない。
+disk_images/
+.DS_Store
