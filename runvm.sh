@@ -135,9 +135,18 @@ if command -v lsof > /dev/null 2>&1 &&
 fi
 NOHUP=nohup
 if command -v setsid > /dev/null 2>&1; then NOHUP="setsid nohup"; fi
+# 配るのは authorized_keys だけなので、名前の付け替え (--alias) は要らない。
+# それを使わないなら mirror-alias.py は http.server に --directory を渡した
+# のと同じものなので、隣に無ければ標準のもので済ませる。この runvm.sh は
+# 単体で持って行かれることがあり (pkgsrc-zakinko の CI は runvm.sh と
+# stopvm.sh だけを raw で落とす)、そのとき隣には何も無い。
+if [ -f "$BASE/mirror-alias.py" ]; then
+	SERVE="python3 $BASE/mirror-alias.py --port $SEED_PORT --dir $SEED"
+else
+	SERVE="python3 -m http.server $SEED_PORT --bind 0.0.0.0 --directory $SEED"
+fi
 # shellcheck disable=SC2086
-$NOHUP python3 "$BASE/mirror-alias.py" --port "$SEED_PORT" --dir "$SEED" \
-	> "$DIR/$NAME.seed.log" 2>&1 &
+$NOHUP $SERVE > "$DIR/$NAME.seed.log" 2>&1 &
 echo $! > "$DIR/$NAME.seedpid"
 
 # ------------------------------------------------------------------
