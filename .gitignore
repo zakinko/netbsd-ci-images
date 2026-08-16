@@ -28,3 +28,4 @@ disk_images/
 
 # 組んだものの置き場
 out/
+media-paths.conf

@@ -55,7 +55,6 @@ PAYLOAD_SETUP=
 KEY_PATHS="/root/.ssh"   # 置き場は .ssh まで含めて書く
 HOSTKEY=
 MEDIA_URL=
-MEDIA_FETCH=
 ARCHIVE_MEMBER=
 NOTE=
 QEMUARGS=
@@ -108,9 +107,11 @@ if [ ! -s "$IMG" ]; then
 		mkdir -p "$(dirname "$SRC")"
 		curl -fSL --retry 3 -o "$SRC.part" "$MEDIA_URL" && mv "$SRC.part" "$SRC"
 	fi
-	if [ ! -s "$SRC" ] && [ -n "$MEDIA_FETCH" ]; then
+	if [ ! -s "$SRC" ] && [ -n "${MEDIA_BASE:-}" ]; then
+		# 取得元は対応表と MEDIA_BASE から引く。どちらもリポジトリには
+		# 書かない (fetch-media.sh を見よ)。
 		echo "--- 手元に無いので取ってくる"
-		sh "$BASE/fetch-media.sh" "$MEDIA_FETCH" "$(basename "$MEDIA")"
+		sh "$BASE/fetch-media.sh" --for "$MEDIA"
 	fi
 	[ -s "$SRC" ] || { echo "$0: 媒体が無い: $MEDIA" >&2; exit 1; }
 
@@ -199,6 +200,9 @@ if [ -n "$PAYLOAD" ]; then
 	mkdir -p "$WORK/payload" "$TFTPDIR"
 	for m in $PAYLOAD; do
 		f=$MEDIA_DIR/$m
+		if [ ! -s "$f" ] && [ -n "${MEDIA_BASE:-}" ]; then
+			sh "$BASE/fetch-media.sh" --for "$m"
+		fi
 		[ -s "$f" ] || { echo "$0: payload が無い: $m" >&2; exit 1; }
 		case $m in
 		*.tar.lz)	lzip -dc "$f" | tar xf - -C "$WORK/payload" ;;
