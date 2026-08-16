@@ -1,0 +1,34 @@
+#!/bin/sh
+# SunOS 4.1.4 に OpenSSH 5.4p1 を据える。
+#
+# ゲストの中で、TFTP で受け取った荷物を展開した後に一度だけ走る。
+#
+# 鍵は既に置かれている。host key もホスト側で作って持ち込んである。ここで
+# 作らせると返ってこない。SunOS 4 に /dev/urandom は無く、OpenSSH は外部
+# コマンドの出力から entropy を集める作りで、その上で RSA 鍵を作らせると
+# この機械の模型では終わらなかった。
+#
+# 特権分離は使わない。専用の使わないユーザを作らずに済ませるため。
+
+PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/ucb:/etc:/usr/etc
+export PATH
+
+# 持ち主を戻す。荷物を作ったのは別の機械で、tar xpf は書いてある uid を
+# そのまま使う。root 以外の持ち物になっていると sshd は鍵を読まない
+# ("bad ownership or modes for file /.ssh/authorized_keys")。
+chown -R root /.ssh /root/.ssh /usr/local 2> /dev/null
+chmod 700 /.ssh /root/.ssh 2> /dev/null
+chmod 600 /.ssh/authorized_keys /root/.ssh/authorized_keys 2> /dev/null
+chmod 600 /usr/local/etc/ssh_host_rsa_key
+
+# 既定の設定から PermitRootLogin を外して書き直す。この VM は動かす側の
+# 127.0.0.1 にしか出ていない。
+grep -v PermitRootLogin /usr/local/etc/sshd_config > /tmp/c
+mv /tmp/c /usr/local/etc/sshd_config
+echo 'PermitRootLogin without-password' >> /usr/local/etc/sshd_config
+echo 'PasswordAuthentication no' >> /usr/local/etc/sshd_config
+echo 'UsePrivilegeSeparation no' >> /usr/local/etc/sshd_config
+echo 'HostKey /usr/local/etc/ssh_host_rsa_key' >> /usr/local/etc/sshd_config
+
+/usr/local/sbin/sshd
+echo SETUP_DONE

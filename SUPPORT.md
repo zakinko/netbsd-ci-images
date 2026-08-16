@@ -52,7 +52,8 @@ runner に寄せられるよう、レシピは同じものが両方で動くよ�
 | target | emulator | ssh | 状態 |
 | --- | --- | --- | --- |
 | freebsd-14.3-amd64 | QEMU x86_64 | ○ | **通った**。公式 VM イメージから、取得・起動・鍵配り・ssh まで一続きで確認 |
-| sunos-4.1.4-sparc | QEMU SS-5 | × | **起動と telnet 到達まで確認**。ssh は未達 (下記) |
+| dragonfly-6.4.2-x86_64 | QEMU x86_64 | ○ | **通った**。公式 img から。loader のメニューに console の切替が無いので ESC で促しに落とす |
+| sunos-4.1.4-sparc | QEMU SS-5 | ○ | **通った**。当時の OpenSSH 5.4p1 のバイナリを TFTP で持ち込んで据えた (下記) |
 
 ## 実測で分かった詰まりどころ
 
@@ -66,6 +67,10 @@ runner に寄せられるよう、レシピは同じものが両方で動くよ�
 | 長い行を打つと途中で止まる | 古いブートローダは続けて流し込むと取りこぼす。FreeBSD の loader は `set console="comconsole"` の途中で落とし、閉じ引用符を待ったまま止まった。一文字ずつ送る (`SLOW`) |
 | ゲストが取ってきた鍵で入れない | 鍵を配る番号 (8123) を別のセッションが握っており、ゲストは向こうの鍵を取っていた。番号は空いているものを借りる |
 | `unbound variable` で止まる | 変数の直後に日本語を書くと、macOS の bash が多バイト文字を変数名に含める。`${VAR}` と括る |
+| 手順の一行がパイプで切れる | 段の区切りに `\|` を使っていたため。区切りを改行にした |
+| ゲストが荷物を受け取れない | SunOS 4 の `ftp` は FTP しか喋らず HTTP を引けない。ラベルの無い生の tar を追加ディスクにしても、SunOS が開かない (`corrupt label`)。**qemu 内蔵の TFTP** で渡す (8.8 MB が 6 秒) |
+| 鍵を置いたのに `Permission denied` | 二つ原因があった。SunOS 4 の root の home は `/etc/passwd` で `/` (「/root」ではない)。さらに macOS で作った tar には作成者の uid が入り、`tar xpf` がその uid のまま展開するので sshd が `bad ownership or modes` と言って読まない。`--uid 0 --gid 0` で焼き、ゲストでも `chown` する |
+| 古い機械で `ssh-keygen` が返ってこない | `/dev/urandom` が無く、OpenSSH は外部コマンドの出力から entropy を集める。**host key はホスト側で作って持ち込む** (書式は PEM)。集める一覧を削るのは駄目で、`PRNG initialisation failed` になる |
 
 ## 届かないもの
 
@@ -124,7 +129,7 @@ emulator ごとに sysinst を操る仕掛けを書かずに済みます。
 
 | ある物 | 使い道 | 状態 |
 | --- | --- | --- |
-| SunOS 4.1.4 の完成イメージ | QEMU sparc で SunOS 4.1.4 | **起動と telnet 到達まで確認**。専有 PROM は不要で QEMU 同梱の OpenBIOS で起きる。ssh は gcc が無く `/bin/cc` が K&R なので未達 |
+| SunOS 4.1.4 の完成イメージ | QEMU sparc で SunOS 4.1.4 | **ssh まで通った**。専有 PROM は不要で QEMU 同梱の OpenBIOS で起きる。gcc は無く `/bin/cc` は K&R なので組めないが、当時のバイナリ (openssh-5.4p1、OpenSSL は静的リンク済み) が第三者アーカイブにあり、TFTP で持ち込んで据えた |
 | HP-UX 10.20 の完成イメージ | QEMU hppa で HP-UX 10.20 | 同上 |
 | IRIX の導入済み CHD 二つ | MAME で IRIX。PROM も別に持っている | MAME の扱いを覚える最初の一台に向く |
 | Sun3 と Sun3x の素材 | TME か MAME の sun3 | 素材のみ。入れ方は自前 |
@@ -144,5 +149,5 @@ ssh は、ベンダの sshd が無い世代では **pkgsrc を bootstrap して�
 - TME が今の Ubuntu で建つか
 - QNX 6.3 / UnixWare / SCO の取得が配布元の規約に触れないか
 - pkgsrc の bootstrap が IRIX 6.5 / HP-UX 10.20 / SunOS 4.1.4 で通るか
-- SunOS 4.1.4 に compiler を入れる道 (当時の gcc のバイナリか、K&R cc で
-  gcc 2.7 を組むか)。ssh はそこが片付かないと通らない
+- SunOS 4.1.4 で ssh の接続ごとに entropy を集め直す作りのため、接続に
+  時間がかかる。実用上の当たりを測る

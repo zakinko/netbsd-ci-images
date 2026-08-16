@@ -44,6 +44,10 @@ CHECK=
 SSH=no
 SEED=no
 MEDIA=
+PAYLOAD=
+PAYLOAD_SETUP=
+KEY_PATHS="/root/.ssh"   # 置き場は .ssh まで含めて書く
+HOSTKEY=
 MEDIA_URL=
 MEDIA_FETCH=
 ARCHIVE_MEMBER=
@@ -106,19 +110,21 @@ if [ ! -s "$IMG" ]; then
 
 	echo "--- 展開 ($(basename "$MEDIA"))"
 	case $MEDIA in
-	*.tar.lz|*.tar.gz|*.tar.xz|*.tgz)
+	*.tar.lz|*.tar.gz|*.tar.xz|*.tar.bz2|*.tgz)
 		[ -n "$ARCHIVE_MEMBER" ] || {
 			echo "$0: 書庫なので ARCHIVE_MEMBER が要る" >&2; exit 1; }
 		rm -rf "$WORK/x"; mkdir -p "$WORK/x"
 		case $MEDIA in
 		*.lz)	lzip -dc "$SRC" | tar xf - -C "$WORK/x" ;;
 		*.xz)	xz -dc "$SRC" | tar xf - -C "$WORK/x" ;;
+		*.bz2)	bunzip2 -c "$SRC" | tar xf - -C "$WORK/x" ;;
 		*)	gzip -dc "$SRC" | tar xf - -C "$WORK/x" ;;
 		esac
 		cp "$WORK/x/$ARCHIVE_MEMBER" "$IMG"
 		;;
 	*.lz)	lzip -dc "$SRC" > "$IMG" ;;
 	*.xz)	xz -dc "$SRC" > "$IMG" ;;
+	*.bz2)	bunzip2 -c "$SRC" > "$IMG" ;;
 	*.gz)	gzip -dc "$SRC" > "$IMG" ;;
 	*)	cp "$SRC" "$IMG" ;;
 	esac
@@ -129,18 +135,83 @@ ls -lh "$IMG" | awk '{print "    " $5 "  " $NF}'
 # 鍵を配る。イメージには焼かない。ゲストは仕込みの途中で一度だけ取りに来る。
 # 取りに来る先は STEPS に @SEEDPORT@ で書く。
 KEY=$OUTDIR/$TARGET.id
-SEEDPID=
-if [ "$SEED" = yes ]; then
-	mkdir -p "$WORK/seed"
+# 鍵は、配る (SEED) にせよ荷物に入れる (PAYLOAD) にせよ、ssh で入るなら
+# 要る。作る場所を一箇所にしておかないと、片方の道だけ鍵の無いまま進んで
+# 「sshd は動いているのに入れない」になる (実際そうなった)。
+if [ "$SEED" = yes ] || [ -n "$PAYLOAD" ] || [ "$CHECK" = ssh ]; then
 	if [ ! -s "$KEY" ]; then
 		rm -f "$KEY" "$KEY.pub"
 		ssh-keygen -q -t rsa -b 3072 -f "$KEY" -N '' -C "$TARGET"
 	fi
+fi
+
+SEEDPID=
+if [ "$SEED" = yes ]; then
+	mkdir -p "$WORK/seed"
 	cp "$KEY.pub" "$WORK/seed/authorized_keys"
 	nohup python3 "$BASE/mirror-alias.py" --port "$SEEDPORT" \
 		--dir "$WORK/seed" > "$WORK/seed.log" 2>&1 &
 	SEEDPID=$!
 	sleep 1
+fi
+
+# ------------------------------------------------------------------
+# HTTP を引けない相手には TFTP で渡す。qemu の user networking が内蔵して
+# いるので、ホスト側には何も立てなくてよい。SunOS 4 の ftp は FTP しか
+# 喋らず、10.0.2.2 から HTTP で取ってくることが出来ない。
+#
+# 追加ディスクとして渡す手も試したが、ラベルの無い生の tar は SunOS が
+# 開かせてくれなかった (sd1: corrupt label - wrong magic number)。
+TFTPDIR=
+if [ -n "$PAYLOAD" ]; then
+	TFTPDIR=$WORK/tftp
+	rm -rf "$WORK/payload" "$TFTPDIR"
+	mkdir -p "$WORK/payload" "$TFTPDIR"
+	for m in $PAYLOAD; do
+		f=$MEDIA_DIR/$m
+		[ -s "$f" ] || { echo "$0: payload が無い: $m" >&2; exit 1; }
+		case $m in
+		*.tar.lz)	lzip -dc "$f" | tar xf - -C "$WORK/payload" ;;
+		*.tar.gz|*.tgz)	gzip -dc "$f" | tar xf - -C "$WORK/payload" ;;
+		*.tar.bz2)	bunzip2 -c "$f" | tar xf - -C "$WORK/payload" ;;
+		*.tar)		tar xf "$f" -C "$WORK/payload" ;;
+		*)		echo "$0: payload の形が分からない: $m" >&2; exit 1 ;;
+		esac
+	done
+	# 鍵を置く。root の home は OS によって違う。SunOS 4 の root は
+	# /etc/passwd で / になっていて /root ではない。sshd はそちらを見る。
+	if [ -s "$KEY.pub" ]; then
+		for d in $KEY_PATHS; do
+			mkdir -p "$WORK/payload$d"
+			cp "$KEY.pub" "$WORK/payload$d/authorized_keys"
+		done
+	fi
+	# host key はホスト側で作って持ち込む。古い機械には /dev/urandom が
+	# 無く、OpenSSH は外部コマンドの出力から entropy を集める。その上で
+	# 鍵まで作らせると返ってこない (SunOS 4.1.4 で実際に返らなかった)。
+	# 書式は PEM。5.x の sshd は新しい形式を読まない。
+	if [ -n "$HOSTKEY" ]; then
+		mkdir -p "$WORK/payload$(dirname "$HOSTKEY")"
+		if [ ! -s "$OUTDIR/$TARGET.hostkey" ]; then
+			rm -f "$OUTDIR/$TARGET.hostkey" "$OUTDIR/$TARGET.hostkey.pub"
+			ssh-keygen -q -t rsa -b 2048 -m PEM \
+				-f "$OUTDIR/$TARGET.hostkey" -N '' -C "$TARGET"
+		fi
+		cp "$OUTDIR/$TARGET.hostkey" "$WORK/payload$HOSTKEY"
+		cp "$OUTDIR/$TARGET.hostkey.pub" "$WORK/payload$HOSTKEY.pub"
+	fi
+	if [ -n "$PAYLOAD_SETUP" ]; then
+		cp "$BASE/$PAYLOAD_SETUP" "$WORK/payload/setup.sh"
+		chmod 755 "$WORK/payload/setup.sh"
+	fi
+	# uid と gid は 0 で焼く。作った側の uid がそのまま入ると、ゲストで
+	# root が tar xpf したときにファイルの持ち主がその uid になり、sshd が
+	# "bad ownership or modes for file ~/.ssh/authorized_keys" と言って
+	# 鍵を読まない。--uid/--gid を解さない tar のために chown も setup 側に
+	# 置いてある。
+	tar --uid 0 --gid 0 -cf "$TFTPDIR/payload.tar" -C "$WORK/payload" . 2>/dev/null ||
+		tar cf "$TFTPDIR/payload.tar" -C "$WORK/payload" .
+	echo "--- 渡す荷物 $(wc -c < "$TFTPDIR/payload.tar") バイト (tftp)"
 fi
 
 # ------------------------------------------------------------------
@@ -162,7 +233,7 @@ esac
 
 CONLOG=$OUTDIR/$TARGET.console.log
 DISK=$(echo "$QEMUARGS" | sed -e "s|@IMG@|$IMG|g" -e "s|@SEEDPORT@|$SEEDPORT|g")
-NET="-nic user,hostfwd=tcp:127.0.0.1:$SSHPORT-:$GUESTPORT"
+NET="-nic user,${TFTPDIR:+tftp=$TFTPDIR,}hostfwd=tcp:127.0.0.1:$SSHPORT-:$GUESTPORT"
 rm -f "$CONLOG"
 
 echo "--- 起動 (ssh=$SSHPORT seed=$SEEDPORT console=$CONSOLE)"
@@ -196,8 +267,11 @@ trap 'kill $EMUPID 2>/dev/null || true; [ -n "$SEEDPID" ] && kill $SEEDPID 2>/de
 # 上がってからやること。手で通した手順をそのまま流す。
 if [ -n "$STEPS" ]; then
 	set --
-	OIFS=$IFS; IFS='|'
+	# 段の区切りは改行。以前は | にしていたが、打つ内容にパイプが入ると
+	# そこで切れた (SunOS の tftp を叩く一行が途中で消えた)。
+	OIFS=$IFS; IFS=$(printf '\n\b'); IFS=${IFS%b}
 	for s in $STEPS; do
+		[ -n "$s" ] || continue
 		set -- "$@" --step "$(echo "$s" | sed "s|@SEEDPORT@|$SEEDPORT|g")"
 	done
 	IFS=$OIFS

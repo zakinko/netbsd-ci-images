@@ -89,6 +89,18 @@ class Pipes:
         self.w.write(b)
 
 
+def unescape(text):
+    """打つ文字の中の \\e \\r \\t を本物にする。
+
+    ブートローダによっては ESC や CR そのものが要る。FreeBSD のメニューは
+    LF では進まず CR を待つし、DragonFly のメニューには console を切り替える
+    項目が無いので、ESC で loader の促しに落とすことになる。
+    """
+    return (text.replace('\\e', '\x1b')
+                .replace('\\r', '\r')
+                .replace('\\t', '\t'))
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--socket')
@@ -110,7 +122,7 @@ def main():
     steps = []
     for s in args.step:
         pat, _, text = s.partition('=>')
-        steps.append((re.compile(pat), text))
+        steps.append((re.compile(pat), unescape(text)))
 
     if args.socket:
         io = Sock(args.socket)
@@ -139,7 +151,12 @@ def main():
         pat, text = steps[0]
         if pat.search(ANSI.sub('', buf.decode('latin-1'))):
             time.sleep(args.settle)
-            payload = (text + "\n").encode('latin-1')
+            # 制御文字で終わっているなら、それが打鍵そのもの。改行を足すと
+            # 余計な一打になる。
+            if text[-1:] in ('\x1b', '\r', '\n'):
+                payload = text.encode('latin-1')
+            else:
+                payload = (text + "\n").encode('latin-1')
             if args.slow:
                 for ch in payload:
                     io.send(bytes([ch]))
