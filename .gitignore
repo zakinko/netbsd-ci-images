@@ -25,3 +25,6 @@ imgs/
 # 配布物なので、public なこのリポジトリには絶対に入れない。
 disk_images/
 .DS_Store
+
+# 組んだものの置き場
+out/
