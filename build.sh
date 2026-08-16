@@ -38,8 +38,14 @@ DRIVER=prebuilt
 IMGFMT=qcow2
 CONSOLE=socket
 BOOT_WAIT=600
+# 仕込みをイメージに残すか。確かめるだけなら要らないが、配るものは残さないと
+# 使う側が毎回同じ手順を踏むことになる。
+PERSIST=no
 STEPS=
 SLOW=0
+# 促しが出てから打ち始めるまでの間。古いブートローダは促しを出した直後は
+# まだ読む用意が出来ておらず、続けて打つと頭の何文字かが落ちる。
+SETTLE=0.5
 CHECK=
 SSH=no
 SEED=no
@@ -149,6 +155,30 @@ SEEDPID=
 if [ "$SEED" = yes ]; then
 	mkdir -p "$WORK/seed"
 	cp "$KEY.pub" "$WORK/seed/authorized_keys"
+	# 起動のたびにホストから鍵を取りに行く仕掛け。イメージに焼くのは
+	# この取りに行く側だけで、鍵そのものは焼かない。配る番号は 8123 に
+	# 固定してある。NetBSD のイメージと揃えてあり、runvm.sh がそこで配る。
+	# (組むときだけは、取り合いを避けるために空いている番号を使う)
+	cat > "$WORK/seed/seed_key.sh" <<SEEDSH
+#!/bin/sh
+# イメージの仕込み。起動のたびにホストから公開鍵を取る。鍵そのものは
+# 焼かない。配る番号は 8123 に固定してある (NetBSD のイメージと同じで、
+# runvm.sh がそこで配る)。組むときだけは取り合いを避けて空き番号を使う。
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+i=0
+while [ \$i -lt 60 ]; do
+	if fetch -q -o /root/.ssh/authorized_keys \\
+	    http://10.0.2.2:8123/authorized_keys; then
+		chmod 600 /root/.ssh/authorized_keys
+		break
+	fi
+	sleep 2
+	i=\$((i + 1))
+done
+SEEDSH
+	chmod 755 "$WORK/seed/seed_key.sh"
+	chmod 755 "$WORK/seed/seed_key.sh"
 	nohup python3 "$BASE/mirror-alias.py" --port "$SEEDPORT" \
 		--dir "$WORK/seed" > "$WORK/seed.log" 2>&1 &
 	SEEDPID=$!
@@ -236,7 +266,10 @@ DISK=$(echo "$QEMUARGS" | sed -e "s|@IMG@|$IMG|g" -e "s|@SEEDPORT@|$SEEDPORT|g")
 NET="-nic user,${TFTPDIR:+tftp=$TFTPDIR,}hostfwd=tcp:127.0.0.1:$SSHPORT-:$GUESTPORT"
 rm -f "$CONLOG"
 
-echo "--- 起動 (ssh=$SSHPORT seed=$SEEDPORT console=$CONSOLE)"
+# 残すときは -snapshot を外す。書き込みがそのままイメージに入る。
+SNAP=-snapshot
+if [ "$PERSIST" = yes ]; then SNAP=; fi
+echo "--- 起動 (ssh=$SSHPORT seed=$SEEDPORT console=$CONSOLE${SNAP:+ 使い捨て})"
 if [ "$CONSOLE" = stdio ]; then
 	FIFO=$WORK/in
 	rm -f "$FIFO"; mkfifo "$FIFO"
@@ -245,7 +278,7 @@ if [ "$CONSOLE" = stdio ]; then
 	(sleep 36000 > "$FIFO" &)
 	sleep 1
 	# shellcheck disable=SC2086
-	"$EMU" $DISK -snapshot $NET -nographic < "$FIFO" > "$CONLOG" 2>&1 &
+	"$EMU" $DISK $SNAP $NET -nographic < "$FIFO" > "$CONLOG" 2>&1 &
 	EMUPID=$!
 	TALKIO="--outfile $CONLOG --infile $FIFO"
 else
@@ -254,7 +287,7 @@ else
 	TTY=/tmp/$TARGET.tty
 	rm -f "$TTY"
 	# shellcheck disable=SC2086
-	"$EMU" $DISK -snapshot $NET \
+	"$EMU" $DISK $SNAP $NET \
 		-display none -vga none \
 		-serial "unix:$TTY,server,nowait" -monitor none \
 		> "$WORK/emu.log" 2>&1 &
@@ -277,7 +310,7 @@ if [ -n "$STEPS" ]; then
 	IFS=$OIFS
 	# shellcheck disable=SC2086
 	python3 "$BASE/talk.py" $TALKIO --log "$CONLOG" \
-		--timeout "$BOOT_WAIT" --slow "$SLOW" "$@" || {
+		--timeout "$BOOT_WAIT" --slow "$SLOW" --settle "$SETTLE" "$@" || {
 		echo "!! 手順の途中で待ちきれなかった。コンソールの末尾:" >&2
 		tail -c 800 "$CONLOG" | tr -d '\r' >&2
 		exit 1

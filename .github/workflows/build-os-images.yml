@@ -1,0 +1,124 @@
+name: build-os-images
+
+# NetBSD 以外の OS を組んで release に置く。
+#
+# 手元で通ったものを、そのまま CI に移したもの。何をどう起こすかは
+# targets/<名前>.conf に書いてあり、build.sh がそれを読む。手元と CI で
+# 同じレシピが動く。
+#
+# **license=free のものしか見ない。** 再配布の許諾が無い媒体から作るものは
+# 取得も公開もしない。判定は conf の LICENSE 一語で、ここでも plan の段で
+# 弾いている。手元でしか組まないものは、そのまま手元で組む。
+#
+# runner は x86_64 の Linux で KVM が使えるので、amd64 と i386 のゲストは
+# ほぼ実速で動く。手元 (Apple Silicon) では TCG になり、FreeBSD の起動だけで
+# 数分かかっていた。ここに移した理由がそれ。
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: '組むもの (例 "freebsd-14.3-amd64")。空なら free の全部'
+        required: false
+      publish:
+        description: 'release に上げる'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      targets: ${{ steps.q.outputs.targets }}
+      count: ${{ steps.q.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: q
+        env:
+          T: ${{ inputs.targets }}
+        run: |
+          set -e
+          if [ -n "$T" ]; then
+            list=$T
+          else
+            list=$(for f in targets/*.conf; do
+              # license=free だけを拾う。ここが公開してよいかの境目。
+              grep -q '^LICENSE=free' "$f" || continue
+              basename "$f" .conf
+            done)
+          fi
+          # 念のため、free でないものが紛れ込んでいたら落とす。
+          keep=
+          for t in $list; do
+            if grep -q '^LICENSE=free' "targets/$t.conf"; then
+              keep="$keep $t"
+            else
+              echo "::warning::$t は license=free ではないので飛ばす"
+            fi
+          done
+          printf '%s\n' $keep > todo.txt
+          echo "組むもの:"; cat todo.txt
+          printf 'targets=%s\n' "$(jq -Rrn '[inputs] | tostring' < todo.txt)" >> $GITHUB_OUTPUT
+          printf 'count=%s\n' "$(wc -l < todo.txt)" >> $GITHUB_OUTPUT
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    name: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ディスクを空ける
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h /
+
+      - name: emulator を入れる
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-system-sparc \
+            qemu-system-ppc qemu-system-arm qemu-system-misc qemu-utils \
+            lzip xz-utils
+
+      - name: KVM を使えるようにする
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          [ -w /dev/kvm ] && echo "KVM あり" || echo "::warning::KVM 無し (TCG で遅い)"
+
+      - name: 組んで ssh まで通す
+        run: sh build.sh ${{ matrix.target }}
+
+      - name: 転けたらコンソールを出す
+        if: failure()
+        run: |
+          tail -c 4000 out/${{ matrix.target }}.console.log 2>/dev/null | tr -d '\r' || true
+
+      - name: release に上げる
+        if: success() && inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          T=${{ matrix.target }}
+          # release の資産は 1 ファイル 2 GiB まで。生のままでは載らないので
+          # 圧縮した qcow2 に固める (FreeBSD の生イメージは 6 GiB ある)。
+          src=$(ls out/$T.qcow2 out/$T.raw 2>/dev/null | head -1)
+          qemu-img convert -O qcow2 -c "$src" "out/$T.pub.qcow2"
+          mv "out/$T.pub.qcow2" "out/$T.qcow2"
+          ls -lh out/$T.qcow2
+          gh release view images > /dev/null 2>&1 || \
+            gh release create images --title "images for CI" --notes "CI 用のイメージ"
+          gh release upload images out/$T.qcow2 out/$T.qemu --clobber

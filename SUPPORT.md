@@ -52,7 +52,7 @@ runner に寄せられるよう、レシピは同じものが両方で動くよ�
 | target | emulator | ssh | 状態 |
 | --- | --- | --- | --- |
 | freebsd-14.3-amd64 | QEMU x86_64 | ○ | **通った**。公式 VM イメージから、取得・起動・鍵配り・ssh まで一続きで確認 |
-| dragonfly-6.4.2-x86_64 | QEMU x86_64 | ○ | **通った**。公式 img から。loader のメニューに console の切替が無いので ESC で促しに落とす |
+| dragonfly-6.4.2-x86_64 | QEMU x86_64 | ○ | **通った**。公式 img から。loader のメニューに console の切替が無いので ESC で促しに落とす。打鍵が速いと boot が bot になって取りこぼす |
 | sunos-4.1.4-sparc | QEMU SS-5 | ○ | **通った**。当時の OpenSSH 5.4p1 のバイナリを TFTP で持ち込んで据えた (下記) |
 
 ## 実測で分かった詰まりどころ
@@ -120,6 +120,24 @@ NetBSD 公式の[エミュレータ一覧](https://www.netbsd.org/ports/emulator
 その中で `mkimg.sh` を回して生ディスクを組む**方法を用意する予定です。
 NetBSD の `disklabel` `newfs` `installboot` が本物のまま使えるので、
 emulator ごとに sysinst を操る仕掛けを書かずに済みます。
+
+## CI に移したもの
+
+手元で通ったもののうち、**license=free のものは CI で組む** (`build-os-images`
+workflow)。runner は x86_64 の Linux で KVM が使えるので、手元 (Apple
+Silicon の TCG) では数分かかっていた x86 のゲストがほぼ実速で動く。
+
+同じ `targets/<名前>.conf` を手元でも CI でも読む。CI は plan の段で
+`LICENSE=free` 以外を弾くので、手元専用のものが紛れ込んで公開されることは
+ない。
+
+配るイメージには仕込みを焼く (`PERSIST=yes`)。起こしただけで ssh に入れない
+と、使う側が毎回 loader を叩くことになるため。鍵そのものは焼かず、起動の
+たびに 10.0.2.2:8123 から取りに行く仕掛けだけを置く (NetBSD のイメージと
+同じ形)。
+
+release の資産は 1 ファイル 2 GiB までなので、圧縮した qcow2 に固めてから
+上げる (FreeBSD の生イメージは 6 GiB ある)。
 
 ## 手元の媒体 (公開しない側)
 
