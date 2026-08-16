@@ -44,6 +44,29 @@ runner に寄せられるよう、レシピは同じものが両方で動くよ�
 | pmax hpcmips landisk | gxemul | **×** | 起動はする。ssh の口が作れない (後述) |
 | vax | simh | **×** | 同上 |
 
+### 他の OS
+
+`targets/<名前>.conf` と `build.sh` で組む。手でコンソールに通した手順を
+そのまま `STEPS` に書き写す形。
+
+| target | emulator | ssh | 状態 |
+| --- | --- | --- | --- |
+| freebsd-14.3-amd64 | QEMU x86_64 | ○ | **通った**。公式 VM イメージから、取得・起動・鍵配り・ssh まで一続きで確認 |
+| sunos-4.1.4-sparc | QEMU SS-5 | × | **起動と telnet 到達まで確認**。ssh は未達 (下記) |
+
+## 実測で分かった詰まりどころ
+
+机上では出てこなかったもの。同じ所で止まらないよう道具側に入れてある。
+
+| 症状 | 正体 |
+| --- | --- |
+| x86 のゲストがシリアルに一文字も出さない | VGA が在ると firmware も loader も画面側にしか出さない。`-vga none` でも変わらず、`-nographic` のときだけシリアルに出る。`-nographic` は標準入出力を使うので socket では繋げず、書き出しはファイル、打ち込みは FIFO にする (`CONSOLE=stdio`) |
+| FreeBSD の loader メニューで Enter が効かない | loader は CR を待っており LF では動かない。メニューの番号を押す |
+| 「Cons: Dual」に一致しない | メニューは色と桁送りを挟むので、生のままでは `C` と `ons: Dual` の間にエスケープが入る。照合の前に制御列を落とす |
+| 長い行を打つと途中で止まる | 古いブートローダは続けて流し込むと取りこぼす。FreeBSD の loader は `set console="comconsole"` の途中で落とし、閉じ引用符を待ったまま止まった。一文字ずつ送る (`SLOW`) |
+| ゲストが取ってきた鍵で入れない | 鍵を配る番号 (8123) を別のセッションが握っており、ゲストは向こうの鍵を取っていた。番号は空いているものを借りる |
+| `unbound variable` で止まる | 変数の直後に日本語を書くと、macOS の bash が多バイト文字を変数名に含める。`${VAR}` と括る |
+
 ## 届かないもの
 
 理由の分かっているものを先に書いておきます。ここは「やってみたが駄目
@@ -101,7 +124,7 @@ emulator ごとに sysinst を操る仕掛けを書かずに済みます。
 
 | ある物 | 使い道 | 状態 |
 | --- | --- | --- |
-| SunOS 4.1.4 の完成イメージ | QEMU sparc で SunOS 4.1.4 | 起動手順つき。**最も早い** |
+| SunOS 4.1.4 の完成イメージ | QEMU sparc で SunOS 4.1.4 | **起動と telnet 到達まで確認**。専有 PROM は不要で QEMU 同梱の OpenBIOS で起きる。ssh は gcc が無く `/bin/cc` が K&R なので未達 |
 | HP-UX 10.20 の完成イメージ | QEMU hppa で HP-UX 10.20 | 同上 |
 | IRIX の導入済み CHD 二つ | MAME で IRIX。PROM も別に持っている | MAME の扱いを覚える最初の一台に向く |
 | Sun3 と Sun3x の素材 | TME か MAME の sun3 | 素材のみ。入れ方は自前 |
@@ -121,3 +144,5 @@ ssh は、ベンダの sshd が無い世代では **pkgsrc を bootstrap して�
 - TME が今の Ubuntu で建つか
 - QNX 6.3 / UnixWare / SCO の取得が配布元の規約に触れないか
 - pkgsrc の bootstrap が IRIX 6.5 / HP-UX 10.20 / SunOS 4.1.4 で通るか
+- SunOS 4.1.4 に compiler を入れる道 (当時の gcc のバイナリか、K&R cc で
+  gcc 2.7 を組むか)。ssh はそこが片付かないと通らない
