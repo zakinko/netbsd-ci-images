@@ -29,6 +29,15 @@
 #	<port>-<release>.qemu    動かし方
 #	<port>-<release>.kernel  外から渡す必要のあるカーネル (要る port だけ)
 #	<port>-<release>.bootiso 起動用の CD (macppc だけ)
+#
+# 同じ版を違う繋ぎ方で二通り作りたいときは、両方を渡す。名前が分かれるので
+# 既にあるものを潰さず並べられる。
+#
+#	DISKIF=virtio-scsi NAME_SUFFIX=-scsi sh build-image.sh i386 10.1
+#	  -> i386-10.1-scsi.qcow2 / i386-10.1-scsi.qemu
+#
+# 比べるときは同じ runner の中で両方を起動すること。別のジョブに分けると
+# 個体差が乗って、数パーセントの差は埋もれる。
 
 set -eu
 
@@ -43,7 +52,7 @@ VMM=$(port_field "$PORT" 3)
 EMU=$(port_field "$PORT" 4)
 [ -n "$ARCH" ] || { echo "$0: $PORT は ports.conf に無い" >&2; exit 1; }
 
-NAME=$PORT-$REL
+NAME=$PORT-$REL${NAME_SUFFIX:-}
 WORK=${WORK:-${TMPDIR:-/tmp}/nbimg-$NAME}
 SEED_DIR=${SEED_DIR:-$WORK/seed}
 SEED_PORT=${SEED_PORT:-8123}
@@ -81,6 +90,20 @@ i386|amd64)
 		WANT_ROOTDEV=ld0a
 	fi ;;
 esac
+
+# 外から繋ぎ方を指定する口。比較用に同じ版を二通り作るときに使う。
+#
+# root デバイス名も一緒に決めるのが要点で、片方だけ変えると fstab と食い違って
+# 起動しない。ここを分けて書けるようにはしない。
+if [ -n "${DISKIF:-}" ]; then
+	WANT_DISKIF=$DISKIF
+	case $DISKIF in
+	virtio-scsi)	WANT_ROOTDEV=sd0a ;;
+	virtio)		WANT_ROOTDEV=ld0a ;;
+	ide)		WANT_ROOTDEV=wd0a ;;
+	*)		echo "$0: DISKIF=$DISKIF は未対応" >&2; exit 1 ;;
+	esac
+fi
 
 # ディスクとメモリ。古い版に今の大きさを渡すと、sysinst が扱えなかったり
 # 起動の途中で止まったりする。1.x は BIOS のジオメトリの都合もあるので
@@ -314,11 +337,17 @@ fi
 # 使った構成に合わせること。食い違うと root が見つからず起動しない。
 #
 # @IMG@ @KERNEL@ @BOOTISO@ @MEM@ は runvm.sh が置き換える。
-if [ "$WANT_DISKIF" = ide ]; then
-	DISKARGS="-drive file=@IMG@,format=$IMGFMT,media=disk"
-else
-	DISKARGS="-drive file=@IMG@,format=$IMGFMT,media=disk,if=$WANT_DISKIF"
-fi
+# virtio-scsi は -drive if=... では繋がらない。コントローラと scsi-hd を別々に
+# 並べる必要がある。版で自動的に選ぶことはしていないが、DISKIF で指定されたら
+# 組めるようにしておく。
+case $WANT_DISKIF in
+ide)
+	DISKARGS="-drive file=@IMG@,format=$IMGFMT,media=disk" ;;
+virtio-scsi)
+	DISKARGS="-device virtio-scsi-pci,id=scsi0 -drive file=@IMG@,format=$IMGFMT,if=none,id=d0 -device scsi-hd,drive=d0,bus=scsi0.0" ;;
+*)
+	DISKARGS="-drive file=@IMG@,format=$IMGFMT,media=disk,if=$WANT_DISKIF" ;;
+esac
 EXTRAARGS=
 ANSWERS=
 ROOTDEV=$WANT_ROOTDEV
