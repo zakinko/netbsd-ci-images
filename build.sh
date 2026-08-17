@@ -49,6 +49,9 @@ SETTLE=0.5
 CHECK=
 SSH=no
 SEED=no
+# cloud-init の種 (NoCloud) を焼いて CD として挿す。cloud 向けに配られて
+# いるイメージは、これが無いと鍵を受け取る術が無い。
+SEED_ISO=no
 MEDIA=
 PAYLOAD=
 PAYLOAD_SETUP=
@@ -210,6 +213,46 @@ SEEDSH
 fi
 
 # ------------------------------------------------------------------
+# cloud-init 向けのイメージには、NoCloud の種を CD で渡す。ラベルは CIDATA
+# でなければ拾われない。中身は meta-data と user-data の二つだけでよい。
+SEEDISO=
+if [ "$SEED_ISO" = yes ]; then
+	SEEDISO=$WORK/seed.iso
+	rm -rf "$WORK/cidata"; mkdir -p "$WORK/cidata"
+	cat > "$WORK/cidata/meta-data" <<META2
+instance-id: $TARGET
+local-hostname: $(echo "$OS" | tr -d '.')
+META2
+	{
+		echo '#cloud-config'
+		echo 'disable_root: false'
+		echo 'ssh_pwauth: false'
+		echo 'users:'
+		echo '  - name: root'
+		echo '    lock_passwd: false'
+		echo '    ssh_authorized_keys:'
+		echo "      - $(cat "$KEY.pub")"
+		echo 'ssh_authorized_keys:'
+		echo "  - $(cat "$KEY.pub")"
+	} > "$WORK/cidata/user-data"
+	if command -v genisoimage > /dev/null 2>&1; then
+		genisoimage -quiet -output "$SEEDISO" -volid CIDATA \
+			-joliet -rock "$WORK/cidata"
+	elif command -v mkisofs > /dev/null 2>&1; then
+		mkisofs -quiet -output "$SEEDISO" -volid CIDATA \
+			-joliet -rock "$WORK/cidata"
+	elif command -v hdiutil > /dev/null 2>&1; then
+		# macOS には mkisofs が無い。hdiutil で同じものを焼く。
+		hdiutil makehybrid -quiet -iso -joliet -default-volume-name CIDATA \
+			-o "$SEEDISO" "$WORK/cidata" > /dev/null
+	else
+		echo "$0: ISO を焼く道具が無い (genisoimage か mkisofs)" >&2
+		exit 1
+	fi
+	echo "--- cloud-init の種を焼いた"
+fi
+
+# ------------------------------------------------------------------
 # HTTP を引けない相手には TFTP で渡す。qemu の user networking が内蔵して
 # いるので、ホスト側には何も立てなくてよい。SunOS 4 の ftp は FTP しか
 # 喋らず、10.0.2.2 から HTTP で取ってくることが出来ない。
@@ -290,7 +333,7 @@ esac
 
 CONLOG=$OUTDIR/$TARGET.console.log
 DISK=$(echo "$QEMUARGS" | sed -e "s|@IMG@|$IMG|g" -e "s|@SEEDPORT@|$SEEDPORT|g" \
-	-e "s|@MEDIA@|${INST:-}|g")
+	-e "s|@MEDIA@|${INST:-}|g" -e "s|@SEEDISO@|${SEEDISO:-}|g")
 NET="-nic user,${TFTPDIR:+tftp=$TFTPDIR,}hostfwd=tcp:127.0.0.1:$SSHPORT-:$GUESTPORT"
 rm -f "$CONLOG"
 
