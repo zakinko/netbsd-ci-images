@@ -275,6 +275,34 @@ else
 fi
 set -- "$@" --run "$RUN"
 
+# セットは自分で先に取る。anita は取り損ねたものを「無い」と黙って扱う
+# (Python 3.12 では is_real_error が常に偽で、通信の失敗と不在を区別しない)。
+# 実際 CI で archive から base.tgz を取り損ね、install set base does not
+# exist と言って止まった。こちらで取っておけば anita は既にあるものとして
+# 進み、失敗すれば理由が分かる形で止まる。
+if [ -n "$SETS" ]; then
+	echo "--- セットを先に取る"
+	_sd=$WORK/anita/download/$ARCH/binary/sets
+	mkdir -p "$_sd"
+	OIFS=$IFS; IFS=,
+	for _s in $SETS; do
+		IFS=$OIFS
+		for _e in tgz tar.xz; do
+			if [ -s "$_sd/$_s.$_e" ]; then break; fi
+			if curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+			    -o "$_sd/$_s.$_e.part" \
+			    "${DISTURL%/}/binary/sets/$_s.$_e" 2>/dev/null; then
+				mv "$_sd/$_s.$_e.part" "$_sd/$_s.$_e"
+				break
+			fi
+			rm -f "$_sd/$_s.$_e.part"
+		done
+		IFS=,
+	done
+	IFS=$OIFS
+	echo "    $(ls "$_sd" | wc -l | tr -d ' ') 個"
+fi
+
 echo "--- anita $* boot $ANITA_URL ---"
 anita "$@" boot "$ANITA_URL"
 

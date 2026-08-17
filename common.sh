@@ -84,7 +84,11 @@ dist_sets() {
 	_want="kern-GENERIC kern modules base etc comp man misc text
 	       xbase xcomp xetc xfont xserver"
 
-	_ls=$(curl -fsSL -m 60 "$_url/binary/sets/" 2>/dev/null |
+	# 末尾の / を落としてから継ぎ足す。dist_url は / で終わる URL を返すので、
+	# そのまま継ぐと //binary/sets/ になり、archive はそれを 404 で返す。
+	# 一覧が取れないと --sets が空のまま anita に渡り、anita の既定の一覧で
+	# 入れようとして、その版に無いセットで転ける。
+	_ls=$(curl -fsSL -m 60 "${_url%/}/binary/sets/" 2>/dev/null |
 		sed -n 's/.*href="\([^"]*\)".*/\1/p')
 	[ -n "$_ls" ] || return 1
 
