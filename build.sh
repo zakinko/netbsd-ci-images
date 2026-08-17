@@ -74,7 +74,7 @@ if [ "$LICENSE" != free ]; then
 fi
 
 case $DRIVER in
-prebuilt)	;;
+prebuilt|install)	;;
 anita)		exec sh "$BASE/build-image.sh" "$PORT" "$VERSION" ;;
 autoinstall)	exec sh "$BASE/build-openbsd-image.sh" "$PORT" "$VERSION" ;;
 *)		echo "$0: driver $DRIVER はまだ書いていない" >&2; exit 1 ;;
@@ -96,8 +96,31 @@ SSHPORT=${SSHPORT:-$(free_port)}
 SEEDPORT=${SEEDPORT:-$(free_port)}
 
 # ------------------------------------------------------------------
+# 入れる先を用意する。install driver は空のディスクに入れるので、無ければ
+# 作る。既にあれば作り直さない (途中まで入っているものを潰さないため)。
+if [ "$DRIVER" = install ]; then
+	if [ ! -s "$IMG" ]; then
+		qemu-img create -f "$IMGFMT" "$IMG" "$DISK_SIZE" > /dev/null
+		echo "--- 入れる先を作った ($DISK_SIZE)"
+	fi
+	# インストーラの媒体。展開せずそのまま使う。
+	INST=$MEDIA_DIR/$INSTALL_MEDIA
+	if [ ! -s "$INST" ] && [ -n "$INSTALL_MEDIA_URL" ]; then
+		echo "--- 媒体を配布元から取る"
+		mkdir -p "$(dirname "$INST")"
+		curl -fSL --retry 3 -o "$INST.part" "$INSTALL_MEDIA_URL" &&
+			mv "$INST.part" "$INST"
+	fi
+	if [ ! -s "$INST" ] && [ -n "${MEDIA_BASE:-}" ]; then
+		sh "$BASE/fetch-media.sh" --for "$INSTALL_MEDIA"
+	fi
+	[ -s "$INST" ] || { echo "$0: 媒体が無い: $INSTALL_MEDIA" >&2; exit 1; }
+	# 入れている間は書き込みを残す。捨てたら入れた意味が無い。
+	PERSIST=yes
+fi
+
 # 媒体を用意する。手元に在れば取りに行かない。
-if [ ! -s "$IMG" ]; then
+if [ "$DRIVER" != install ] && [ ! -s "$IMG" ]; then
 	SRC=$MEDIA_DIR/$MEDIA
 	# 配布元が公開しているものは、その URL をここに書いてよい。伏せるのは
 	# 再配布の許諾が無いものだけで、そちらは MEDIA_FETCH から取る
@@ -266,7 +289,8 @@ tcp:*)	GUESTPORT=${CHECK#tcp:} ;;
 esac
 
 CONLOG=$OUTDIR/$TARGET.console.log
-DISK=$(echo "$QEMUARGS" | sed -e "s|@IMG@|$IMG|g" -e "s|@SEEDPORT@|$SEEDPORT|g")
+DISK=$(echo "$QEMUARGS" | sed -e "s|@IMG@|$IMG|g" -e "s|@SEEDPORT@|$SEEDPORT|g" \
+	-e "s|@MEDIA@|${INST:-}|g")
 NET="-nic user,${TFTPDIR:+tftp=$TFTPDIR,}hostfwd=tcp:127.0.0.1:$SSHPORT-:$GUESTPORT"
 rm -f "$CONLOG"
 
@@ -317,6 +341,49 @@ if [ -n "$STEPS" ]; then
 		--timeout "$BOOT_WAIT" --slow "$SLOW" --settle "$SETTLE" "$@" || {
 		echo "!! 手順の途中で待ちきれなかった。コンソールの末尾:" >&2
 		tail -c 800 "$CONLOG" | tr -d '\r' >&2
+		exit 1
+	}
+fi
+
+# ------------------------------------------------------------------
+# 入れ終わったら媒体を外して起こし直す。インストーラが動いたことと、入った
+# ものが自力で起動することは別なので、そこも見る。
+if [ "$DRIVER" = install ] && [ -n "$POST_STEPS" ]; then
+	echo "--- 媒体を外して起こし直す"
+	kill $EMUPID 2>/dev/null || true
+	sleep 5
+	POSTARGS=$(echo "${POST_QEMUARGS:-$QEMUARGS}" | sed -e "s|@IMG@|$IMG|g" \
+		-e "s|@SEEDPORT@|$SEEDPORT|g" -e "s|@MEDIA@||g")
+	rm -f "$CONLOG.post"
+	if [ "$CONSOLE" = stdio ]; then
+		rm -f "$FIFO"; mkfifo "$FIFO"
+		(sleep 36000 > "$FIFO" &)
+		sleep 1
+		# shellcheck disable=SC2086
+		"$EMU" $POSTARGS $NET -nographic < "$FIFO" > "$CONLOG.post" 2>&1 &
+		EMUPID=$!
+		TALKIO="--outfile $CONLOG.post --infile $FIFO"
+	else
+		rm -f "$TTY"
+		# shellcheck disable=SC2086
+		"$EMU" $POSTARGS $NET -display none -vga none \
+			-serial "unix:$TTY,server,nowait" -monitor none \
+			> "$WORK/emu.log" 2>&1 &
+		EMUPID=$!
+		TALKIO="--socket $TTY"
+	fi
+	set --
+	OIFS=$IFS; IFS=$(printf '\n\b'); IFS=${IFS%b}
+	for s in $POST_STEPS; do
+		[ -n "$s" ] || continue
+		set -- "$@" --step "$(echo "$s" | sed "s|@SEEDPORT@|$SEEDPORT|g")"
+	done
+	IFS=$OIFS
+	# shellcheck disable=SC2086
+	python3 "$BASE/talk.py" $TALKIO --log "$CONLOG.post" \
+		--timeout "$BOOT_WAIT" --slow "$SLOW" --settle "$SETTLE" "$@" || {
+		echo "!! 入れた後の手順で待ちきれなかった:" >&2
+		tail -c 800 "$CONLOG.post" | tr -d '\r' >&2
 		exit 1
 	}
 fi

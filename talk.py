@@ -149,7 +149,9 @@ def main():
         # 促しは改行で終わらないので、行ではなく直前の一塊を見る。
         buf = (buf + data)[-8192:]
         pat, text = steps[0]
-        if pat.search(ANSI.sub('', buf.decode('latin-1'))):
+        clean = ANSI.sub('', buf.decode('latin-1'))
+        m = pat.search(clean)
+        if m:
             time.sleep(args.settle)
             # 制御文字で終わっているなら、それが打鍵そのもの。改行を足すと
             # 余計な一打になる。
@@ -168,7 +170,9 @@ def main():
             if log:
                 log.write(("\n[talk] %s -> %s\n" % (pat.pattern, text)).encode())
             steps.pop(0)
-            buf = b''
+            # 当たった所より後ろは残す。捨てると、同じ一塊に入っていた次の
+            # 促しまで消える。MidnightBSD の boot: が実際にそれで消えた。
+            buf = clean[m.end():].encode('latin-1')
 
     # 打ち終えた後の出力も少し拾う。結果はたいてい最後の一手の後に出る。
     tail = time.time() + 15
