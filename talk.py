@@ -20,7 +20,11 @@ console.py が「起動のたびに聞かれる決まった問いに答える」
 """
 import argparse
 import os
+import pty
 import re
+import select
+import shlex
+import signal
 import socket
 import sys
 import time
@@ -60,6 +64,48 @@ class Sock:
 
     def send(self, b):
         self.s.sendall(b)
+
+
+class Spawn:
+    """emulator を pty の上で起こして、その端末と話す。
+
+    -nographic の qemu を「標準出力をファイルに、標準入力を FIFO に」で
+    回すと、出力がブロックバッファに溜まったまま出てこない。起動の最初の
+    数百バイトしか喋らない相手 (MidnightBSD の boot2 は 600 バイトほど) では
+    一文字も届かないまま待ち続けることになる。端末に繋がっていれば行ごとに
+    流れる。ついでに FIFO の開き順を気にしなくてよくなる。
+    """
+
+    def __init__(self, command, logpath):
+        argv = shlex.split(command)
+        self.log = open(logpath, 'ab', buffering=0)
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            try:
+                os.execvp(argv[0], argv)
+            finally:
+                os._exit(127)
+
+    def recv(self):
+        r, _, _ = select.select([self.fd], [], [], 1.0)
+        if not r:
+            return b''
+        try:
+            data = os.read(self.fd, 4096)
+        except OSError:
+            return b''
+        if data:
+            self.log.write(data)
+        return data
+
+    def send(self, b):
+        os.write(self.fd, b)
+
+    def close(self):
+        try:
+            os.kill(self.pid, signal.SIGTERM)
+        except OSError:
+            pass
 
 
 class Pipes:
@@ -104,6 +150,8 @@ def unescape(text):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--socket')
+    p.add_argument('--spawn', help='emulator を pty の上で起こす (これを渡すと '
+                                   'そのまま起動まで面倒を見る)')
     p.add_argument('--outfile', help='-nographic の書き出し先')
     p.add_argument('--infile', help='-nographic の読み込み元 (FIFO)')
     p.add_argument('--log', required=True)
@@ -124,16 +172,20 @@ def main():
         pat, _, text = s.partition('=>')
         steps.append((re.compile(pat), unescape(text)))
 
-    if args.socket:
+    if args.spawn:
+        io = Spawn(args.spawn, args.log)
+    elif args.socket:
         io = Sock(args.socket)
     elif args.outfile and args.infile:
         io = Pipes(args.outfile, args.infile)
     else:
         raise SystemExit("talk.py: --socket か --outfile/--infile のどちらかが要る")
 
-    # -nographic のときは書き出し先そのものが記録になる。二重に書かない。
+    # 書き出し先そのものが記録になっている場合は二重に書かない。
     log = None
-    if args.log != args.outfile:
+    if args.spawn:
+        pass
+    elif args.log != args.outfile:
         log = open(args.log, 'ab', buffering=0)
     if args.kick:
         io.send(b'\n')
