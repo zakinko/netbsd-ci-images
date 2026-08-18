@@ -167,7 +167,7 @@ release の資産は 1 ファイル 2 GiB までなので、圧縮した qcow2 �
 | --- | --- | --- |
 | SunOS 4.1.4 の完成イメージ | QEMU sparc で SunOS 4.1.4 | **ssh まで通った**。専有 PROM は不要で QEMU 同梱の OpenBIOS で起きる。gcc は無く `/bin/cc` は K&R なので組めないが、当時ビルドされた OpenSSH 5.x のバイナリ (OpenSSL は静的リンク済み) を TFTP で持ち込んで据えた |
 | HP-UX 10.20 の完成イメージ | QEMU hppa で HP-UX 10.20 | 同上。**root はパスワード無し**、バンドルの `/usr/bin/cc` で C が通る (K&R 止まり) |
-| HP-UX 11.11 の完成イメージ | QEMU hppa で HP-UX 11.11 | **起動する**。pkgsrc が公式に見ているのは 11.x で、PA-RISC 用の gcc 4.2.3 も配られている |
+| HP-UX 11.11 の完成イメージ | QEMU hppa で HP-UX 11.11 | **root で入れるところまで通った** (パスワードは `root`)。**`/usr/local/bin/gcc` 4.0.4 と `gmake` `gtar` `gzip` が最初から入っている**。pkgsrc が公式に見ているのも 11.x で、PA-RISC 用の gcc 4.2.3 が別途配られてもいる |
 | IRIX の導入済み CHD 二つ | MAME で IRIX。PROM も別に持っている | MAME の扱いを覚える最初の一台に向く |
 | Sun3 と Sun3x の素材 | TME か MAME の sun3 | 素材のみ。入れ方は自前 |
 | NWS-5000X の ROM と NEWS-OS の媒体 | MAME の **`nws5000x`** (`news_r4k`) | **NEWS-OS 4.2.1R が起動し、root で入れた**。ROM 三つの SHA1 は MAME の定義と一致。導入済み CHD があるので install は要らない。**mule 2.3 がここでビルド・ダンプ・起動まで通った** (`/bin/cc` = MIPS RISCompiler 2.11、1993 年) |
@@ -187,7 +187,9 @@ ssh は、ベンダの sshd が無い世代では **pkgsrc を bootstrap して�
 | **Sony NEWS (MAME)** | CD からの読み出しが **8MB で頭打ち**になる。36MB のファイルが 7.49MB で切れ、生デバイスから `dd` しても 3971 ブロックで止まる。荷物は **2 台目の SCSI ディスクを生のまま挿して `dd`** で渡す (`-scsi0:1 harddisk -hard2 <生の tar>`) |
 | **Sony NEWS (NEWS-OS)** | ゲストの時計が **1993 年**で起きる。tar の中の 1995 年のファイルのほうが新しくなり、`configure` が作った `config.h` を make が「古い」と見て拒む。`date 9908161700` で 1999 年にする (2 桁年なので 1970-1999 しか表せない)。shell は csh で `2>&1` が通らない |
 | **HP-UX 11.11** | **Ignite-UX のインストーラは qemu-hppa で動かない**。B160L は `Scanning system for IO devices` から進まず、C3700 はデバイス列挙の直後に `Data page fault` で panic する (NIC を外しても同じ番地)。**完成イメージなら B160L で起動する** |
-| **HP-UX (完成イメージに添えられた run.sh)** | `-d nochain` が付いている。落とすと `Checking root file system` から進まなくなった (41 時間放置して変化なし) |
+| **HP-UX (完成イメージに添えられた run.sh)** | `-d nochain` が付いている。落とすと `Checking root file system` から進まなくなった (41 時間放置して変化なし)。引数を書き写すときに落とさないこと |
+| **HP-UX (ゲストへの荷物)** | ゲストの DNS が QEMU の stub (10.0.2.3) に届かず、`ftp` が名前を引けない。`wget` も `curl` も無い。**ツリーは ISO に焼いて CD として渡す**と `mount -F cdfs -o ro /dev/dsk/c0t2d0` で読める。生ディスクを増やす手は使えない -- SCSI の若い id にディスクを足すと firmware がそちらから起動しようとして `LIF magic` で止まる (CD なら起動候補にならない) |
+| **HP-UX (置き場所)** | pkgsrc のツリーは展開に **約 1.3G** 要る。既定の切り方では `/var` に 716M しか無く `No space left on device` で落ちる。`/home` (2.0G 空き) か `/usr` (2.9G 空き) へ置く。`/home` を選んだのは、中身が空でツリーごと捨てられるため。`/usr` は OS の側なので混ぜない |
 | **UnixWare 7.1.1** | ライセンス画面は `<F8>` で 60 日評価に逃げられる。NIC は **`pcnet`** を挿しておく (無いまま入れると導入の途中で "No network adapter" になり、後から足せない)。画面は F10 で進む |
 | **QNX 6.3.2** | ブートメニューは `f3` を送ってから `3` を送ると通る。出揃う前の打鍵は捨てられる。媒体は Momentics 版なのでコンパイラが付いてくる |
 
@@ -200,7 +202,8 @@ ssh は、ベンダの sshd が無い世代では **pkgsrc を bootstrap して�
   画面越しに入れる必要がある
 - TME が今の Ubuntu で建つか
 - QNX 6.3 / UnixWare / SCO の取得が配布元の規約に触れないか
-- pkgsrc の bootstrap が IRIX 6.5 / HP-UX 10.20 / SunOS 4.1.4 で通るか
+- pkgsrc の bootstrap が IRIX 6.5 / HP-UX 10.20 / SunOS 4.1.4 で通るか。
+  HP-UX 11.11 では、ツリーを `/home` へ置いて `--prefix=/opt/pkg` で試している最中
 - SunOS 4.1.4 で ssh の接続ごとに entropy を集め直す作りのため、接続に
   時間がかかる。実用上の当たりを測る
 - MidnightBSD 4.0.7 (i386) は boot2 までは喋る。spinner の間に空白を二回
