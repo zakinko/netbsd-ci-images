@@ -260,6 +260,28 @@ dhclient=YES
 no_swap=YES
 RCC
 
+# コンソールをシリアルに出す。既定の VGA のままだと QEMU を -display none
+# で回したときに何も残らず、起動しなかったときに画面を撮るしか手が無い。
+# CI では読めるログが要る。
+#
+# boot.cfg は NetBSD 5.0 から。それ以前のブートローダは読まないので、
+# カーネルのメッセージは VGA のままになる。getty だけは効く。
+if [ $USE_MBR = yes ] && [ "$MAJOR" -ge 5 ] 2>/dev/null; then
+	cat > $MNT/boot.cfg <<BCFG
+menu=Boot normally:consdev com0;boot
+default=1
+timeout=2
+consdev=com0
+BCFG
+fi
+# シリアルに getty を出す。sparc64 は OpenBIOS が既にシリアルなので、
+# どちらの場合も ttys の該当行を on にしておけばよい。
+if [ -f $MNT/etc/ttys ]; then
+	sed -e 's|^\(console.*\)off\(.*\)|\1on \2|' \
+	    -e 's|^\(tty00\).*|\1	"/usr/libexec/getty std.9600"	vt100	on secure|' \
+		$MNT/etc/ttys > $MNT/etc/ttys.new && mv $MNT/etc/ttys.new $MNT/etc/ttys
+fi
+
 mkdir -p $MNT/root/.ssh
 cat $PUBKEY > $MNT/root/.ssh/authorized_keys
 chmod 700 $MNT/root/.ssh
