@@ -166,22 +166,38 @@ release の資産は 1 ファイル 2 GiB までなので、圧縮した qcow2 �
 | ある物 | 使い道 | 状態 |
 | --- | --- | --- |
 | SunOS 4.1.4 の完成イメージ | QEMU sparc で SunOS 4.1.4 | **ssh まで通った**。専有 PROM は不要で QEMU 同梱の OpenBIOS で起きる。gcc は無く `/bin/cc` は K&R なので組めないが、当時のバイナリ (openssh-5.4p1、OpenSSL は静的リンク済み) が第三者アーカイブにあり、TFTP で持ち込んで据えた |
-| HP-UX 10.20 の完成イメージ | QEMU hppa で HP-UX 10.20 | 同上 |
+| HP-UX 10.20 の完成イメージ | QEMU hppa で HP-UX 10.20 | 同上。**root はパスワード無し**、バンドルの `/usr/bin/cc` で C が通る (K&R 止まり) |
+| HP-UX 11.11 の完成イメージ | QEMU hppa で HP-UX 11.11 | **起動する**。pkgsrc が公式に見ているのは 11.x で、PA-RISC 用の gcc 4.2.3 も配られている |
 | IRIX の導入済み CHD 二つ | MAME で IRIX。PROM も別に持っている | MAME の扱いを覚える最初の一台に向く |
 | Sun3 と Sun3x の素材 | TME か MAME の sun3 | 素材のみ。入れ方は自前 |
-| NWS-5000X の ROM と NEWS-OS の媒体 | MAME の `news_68k` / `news_38xx` | 素材は厚い。未確認 |
-| `UnixWare/`, `SCO_OpenServer/`, `QNX/` の ISO | i386 なので QEMU で入る見込み | 未確認 |
+| NWS-5000X の ROM と NEWS-OS の媒体 | MAME の **`nws5000x`** (`news_r4k`) | **NEWS-OS 4.2.1R が起動し、root で入れた**。ROM 三つの SHA1 は MAME の定義と一致。導入済み CHD があるので install は要らない。**mule 2.3 がここでビルド・ダンプ・起動まで通った** (`/bin/cc` = MIPS RISCompiler 2.11、1993 年) |
+| `UnixWare/`, `SCO_OpenServer/`, `QNX/` の ISO | i386 なので QEMU で入る | **UnixWare 7.1.1 と QNX 6.3.2 はインストーラが起動する**ところまで確認。SCO OpenServer 6 は未確認 |
 | `Tru64/`, `AIX/` の ISO | 上の「届かないもの」を参照 | 見込み薄 |
 
 ssh は、ベンダの sshd が無い世代では **pkgsrc を bootstrap して入れます**
 (NetBSD 以外でも pkgsrc は動きます)。それも通らなければ「作れない」側へ
 移します。
 
+## 相手ごとの癖 (踏んだもの)
+
+一度踏むと二度目は避けられるものを、踏んだ順に置きます。
+
+| 相手 | 癖 |
+| --- | --- |
+| **Sony NEWS (MAME)** | CD からの読み出しが **8MB で頭打ち**になる。36MB のファイルが 7.49MB で切れ、生デバイスから `dd` しても 3971 ブロックで止まる。荷物は **2 台目の SCSI ディスクを生のまま挿して `dd`** で渡す (`-scsi0:1 harddisk -hard2 <生の tar>`) |
+| **Sony NEWS (NEWS-OS)** | ゲストの時計が **1993 年**で起きる。tar の中の 1995 年のファイルのほうが新しくなり、`configure` が作った `config.h` を make が「古い」と見て拒む。`date 9908161700` で 1999 年にする (2 桁年なので 1970-1999 しか表せない)。shell は csh で `2>&1` が通らない |
+| **HP-UX 11.11** | **Ignite-UX のインストーラは qemu-hppa で動かない**。B160L は `Scanning system for IO devices` から進まず、C3700 はデバイス列挙の直後に `Data page fault` で panic する (NIC を外しても同じ番地)。**完成イメージなら B160L で起動する** |
+| **HP-UX (完成イメージに添えられた run.sh)** | `-d nochain` が付いている。落とすと `Checking root file system` から進まなくなった (41 時間放置して変化なし) |
+| **UnixWare 7.1.1** | ライセンス画面は `<F8>` で 60 日評価に逃げられる。NIC は **`pcnet`** を挿しておく (無いまま入れると導入の途中で "No network adapter" になり、後から足せない)。画面は F10 で進む |
+| **QNX 6.3.2** | ブートメニューは `f3` を送ってから `3` を送ると通る。出揃う前の打鍵は捨てられる。媒体は Momentics 版なのでコンパイラが付いてくる |
+
 ## 未確認・調べること
 
 - NetBSD 0.8 / 0.9 の入手元 (公式ミラーには無い)
-- MAME で NetBSD や IRIX が実際に起動するか、headless (`-video none`) で
-  シリアルをどう引き出すか
+- MAME で NetBSD や IRIX が実際に起動するか。NEWS は `-video none` と
+  `-serial0 null_modem -bitb socket.127.0.0.1:4000` で外から喋れた (MAME 側が
+  listen する)。IRIX の Indy にはシリアルのスロットが無く、PROM の設定を
+  画面越しに入れる必要がある
 - TME が今の Ubuntu で建つか
 - QNX 6.3 / UnixWare / SCO の取得が配布元の規約に触れないか
 - pkgsrc の bootstrap が IRIX 6.5 / HP-UX 10.20 / SunOS 4.1.4 で通るか
