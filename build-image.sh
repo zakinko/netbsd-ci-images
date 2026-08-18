@@ -242,7 +242,11 @@ set -- \
 if [ -n "$SETS" ]; then set -- "$@" --sets "$SETS"; fi
 
 if [ "$VMM" = qemu ]; then
-	set -- "$@" --vmm-args "-accel $ACCEL"
+	# QEMU に足したいものがあれば外から渡せるようにしておく。古い版は
+	# 機械の型で挙動が変わる。NetBSD 5 は PIIX の IDE で
+	# "piixide0:0:0: lost interrupt" を繰り返し、入ったのに起動しない。
+	# どの型なら通るのかは試すしかないので、口だけ開けておく。
+	set -- "$@" --vmm-args "-accel $ACCEL ${QEMU_EXTRA:-}"
 fi
 
 # evbarm の vexpress-a15 は device tree を外から渡さないと起動しない。

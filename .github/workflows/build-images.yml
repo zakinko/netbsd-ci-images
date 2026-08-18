@@ -41,6 +41,9 @@ on:
         description: 'release に上げる'
         type: boolean
         default: true
+      qemu_extra:
+        description: 'QEMU に足す引数 (例 "-machine pc-i440fx-4.2")。古い版の調査用'
+        required: false
 
 permissions:
   contents: write
