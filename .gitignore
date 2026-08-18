@@ -1,4 +1,8 @@
 # イメージそのものは release に置く。git には入れない。
+#
+# 末尾に / を付けると、その名前の symlink は ignore されない。置き場を
+# 別の区画へ逃がしたくなる類のものは、/ 無しでも書いておく。
+imgs
 imgs/
 *.img
 *.img.gz
@@ -15,6 +19,7 @@ imgs/
 *.id.pub
 *.id.dsa
 *.id.dsa.pub
+*.seed
 *.seed/
 *.seed.log
 *.seedpid
@@ -29,5 +34,6 @@ disk_images/
 .DS_Store
 
 # 組んだものの置き場
+out
 out/
 media-paths.conf
