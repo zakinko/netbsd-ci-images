@@ -23,6 +23,8 @@ imgs/
 
 # 手元の媒体。18 GB あるうえ、大半は再配布の許されない商用 OS の
 # 配布物なので、public なこのリポジトリには絶対に入れない。
+# 実体でも symlink でも入れない。末尾に / を付けると symlink が漏れる。
+disk_images
 disk_images/
 .DS_Store
 

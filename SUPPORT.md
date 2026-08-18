@@ -165,7 +165,7 @@ release の資産は 1 ファイル 2 GiB までなので、圧縮した qcow2 �
 
 | ある物 | 使い道 | 状態 |
 | --- | --- | --- |
-| SunOS 4.1.4 の完成イメージ | QEMU sparc で SunOS 4.1.4 | **ssh まで通った**。専有 PROM は不要で QEMU 同梱の OpenBIOS で起きる。gcc は無く `/bin/cc` は K&R なので組めないが、当時のバイナリ (openssh-5.4p1、OpenSSL は静的リンク済み) が第三者アーカイブにあり、TFTP で持ち込んで据えた |
+| SunOS 4.1.4 の完成イメージ | QEMU sparc で SunOS 4.1.4 | **ssh まで通った**。専有 PROM は不要で QEMU 同梱の OpenBIOS で起きる。gcc は無く `/bin/cc` は K&R なので組めないが、当時ビルドされた OpenSSH 5.x のバイナリ (OpenSSL は静的リンク済み) を TFTP で持ち込んで据えた |
 | HP-UX 10.20 の完成イメージ | QEMU hppa で HP-UX 10.20 | 同上。**root はパスワード無し**、バンドルの `/usr/bin/cc` で C が通る (K&R 止まり) |
 | HP-UX 11.11 の完成イメージ | QEMU hppa で HP-UX 11.11 | **起動する**。pkgsrc が公式に見ているのは 11.x で、PA-RISC 用の gcc 4.2.3 も配られている |
 | IRIX の導入済み CHD 二つ | MAME で IRIX。PROM も別に持っている | MAME の扱いを覚える最初の一台に向く |
