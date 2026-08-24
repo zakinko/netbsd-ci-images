@@ -140,8 +140,14 @@ jobs:
           fi
 
       - name: イメージを作る
+        env:
+          # 古い版の起動を調べるための口。build-image.sh が anita の
+          # --vmm-args に足す。入力を渡す一行が無いと、指定したつもりで
+          # 何も効かないまま一時間走ることになる (実際にそれで二回無駄にした)。
+          QEMU_EXTRA: ${{ inputs.qemu_extra }}
         run: |
           set -e
+          echo "QEMU_EXTRA=[$QEMU_EXTRA]"
           # port に - は入らないので、最初の - までが port。
           port=${{ matrix.target }}; port=${port%%-*}
           rel=${{ matrix.target }};  rel=${rel#*-}
