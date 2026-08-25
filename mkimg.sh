@@ -464,8 +464,16 @@ fi
 # になっていて、resize_root がその間に走る。root はまだ read-only なので、
 # 書いた superblock がカーネルの古い写しに潰されない。
 #
-# 足りないのは label の方で、rc.conf の既定に resize_disklabel という名前は
-# あるのに、スクリプトは etc セットに入っていない。そこだけ自前で書く。
+# 足りないのは label の方。rc.conf の既定に resize_disklabel という名前はあるが、
+# 実装は stock の rc.d ではなく distrib/utils/embedded/files/ に置かれていて、
+# arm と liveimage がそこから自分の etc/rc.d へ焼き込んでいる。変数だけ既定に
+# あるのは rc を黙らせるためで、意図的なもの (「Used by arm images and is not
+# part of the stock rc.d yet」)。だから etc セットには入ってこない。
+#
+# その上流版はここでは使えない。NetBSD が MBR の #1 にある前提で PART1ID を見る
+# が、mkimg.sh は #0 に置く。そして disklabel -i に $ を流して root を末尾まで
+# 伸ばすので、末尾に swap を残せない。dd で入れ替える版は書き戻す元をそこに置く
+# ので、そこが要る。取り方だけ上流に倣う。
 #
 # vultr/README.md は長いこと「使うなら MBR と disklabel を広げて resize_ffs を
 # 掛ける」と書いていたが、instance にはその root しか無く、それは mount されて
@@ -508,11 +516,18 @@ growlabel_start()
 	disk=${dev%[a-p]}
 	[ -n "$disk" ] || return 0
 
-	# 実寸はカーネルが持っている既定の geometry から取る。on-disk の label は
-	# 焼いたときの大きさを言うので当てにならない。
-	total=$(fdisk "$disk" 2>/dev/null |
-		awk '/BIOS disk geometry/ { f = 1 }
-		     f && /^total sectors:/ { print $3; exit }')
+	# 実寸はドライバに訊く。on-disk の label は焼いたときの大きさを言うので
+	# 当てにならない。取り方は distrib/utils/embedded/files/resize_disklabel
+	# に倣った。
+	#
+	# 落ちたときの控えが fdisk -S で、DLSIZE は label 側なので使えない。
+	# 欲しいのは BIOS 側の BDLSIZE。人間向けの出力を削るより確実。
+	total=$(drvctl -p "$disk" disk-info/geometry/sectors-per-unit 2>/dev/null)
+	case "$total" in
+	''|*[!0-9]*)
+		eval "$(fdisk -S "$disk" 2>/dev/null)"
+		total=${BDLSIZE-} ;;
+	esac
 	case "$total" in
 	''|*[!0-9]*)	echo "growlabel: $disk の大きさが読めない"; return 0 ;;
 	esac
