@@ -310,7 +310,16 @@ FST
 
 # dhcpcd が既定になったのは NetBSD 6 から。それ以前は dhclient。
 # 知らない項目は無視されるので両方書いておく。
+# 既定を読む行を先に置く。NetBSD の /etc/rc.conf は冒頭で
+# /etc/defaults/rc.conf を source する作りで、丸ごと上書きするとその行ごと
+# 消える。既定が一つも入らないので、rc.subr が全サービスについて
+# "$foo is not set properly - see rc.conf(5)" を吐き、起動のたびに十数行
+# 流れる。起動そのものは通るので今まで見過ごしていた。
 cat > $MNT/etc/rc.conf <<RCC
+if [ -r /etc/defaults/rc.conf ]; then
+	. /etc/defaults/rc.conf
+fi
+
 rc_configured=YES
 hostname=nbimg-$ARCH-$REL
 sshd=YES
