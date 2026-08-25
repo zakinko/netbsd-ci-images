@@ -152,6 +152,43 @@ gh workflow run build-vultr-image -f authorized_key="$(cat ~/.ssh/id_rsa.pub)"
 理由はどれも Vultr 側の都合で、`mkimg.sh` と [vultr/README.md](vultr/README.md)
 に書いてあります。
 
+### 走っている箱を入れ替える
+
+取り込む口を持たない VPS もあります。さくらの VPS がそうで、入れる道は
+custom ISO から sysinst を叩くか、**走っている箱に自分で dd させるか**の
+二つしかありません。後者が `PROFILE=sakura` です。
+
+焼いたイメージを一旦 swap の領域に置き、そこからディスクの先頭へ書き戻します。
+swap はディスクの末尾にあるので、先頭を上書きしても読み元と重なりません。
+
+```sh
+PROFILE=sakura SECT=2621440 SWAPSECT=16778689 \
+IMGHOST=box.example.org IPV4=192.0.2.10/24 GATEWAY=192.0.2.1 \
+DNS=192.0.2.53 NETIF=vioif0 CONSDEV=com0 sh mkimg.sh amd64 11.0
+```
+
+住所とホスト名を外から渡すのは、**この repo が public だから**です。それと
+DHCP を配っていない相手では、焼く前に住所を入れておかないと、上がっても誰も
+繋げません。dd で入れ替える版はコンソールに逃げられないので、ここを外すと
+箱ごと失います。
+
+### 起動すると自分で広がる
+
+VPS 向けの二つは、焼いたときの大きさのまま、それより大きいディスクに載ります。
+Vultr は 10GB のディスクに 1.75GiB を書き戻し、さくらは 200GB のディスクの
+先頭に dd する。どちらも残りが空いたままになります。
+
+そこは**起動時に自分で広がります**。焼いてある `rc.d/growlabel` が disklabel を
+ディスク一杯まで伸ばし、続けて NetBSD 標準の `resize_root` が fs を伸ばす。
+初回だけ一度余分に再起動して上がります。
+
+`SWAPSECT` に sector 数を渡すと、その分をディスクの末尾に `b:` として残します。
+dd で入れ替える版は、書き戻す元をそこに置いてから先頭を上書きするので、控えが
+要らなくなるまで swap を上げられません。
+
+**mount したまま `resize_ffs` を掛けてはいけません。** 拒否されないのに壊れます。
+理由と、どこでなら伸ばせるかは `mkimg.sh` の `growlabel` のところに書いてあります。
+
 ## 新しい OS を足す
 
 手順が書かれていないものばかりなので、決まった型で当たります。
