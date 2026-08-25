@@ -249,6 +249,14 @@ if [ "$VMM" = qemu ]; then
 	set -- "$@" --vmm-args "-accel $ACCEL ${QEMU_EXTRA:-}"
 fi
 
+# どこから起こして入れるか。i386 の既定は floppy だが、その kernel は
+# 容量に合わせて削ってあり、新しめのディスクの繋ぎ方を知らない。q35 で
+# 起こすと AHCI になってディスクが見えず、sysinst が進まないまま待つ。
+# CD の kernel は削っていないので、そちらから起こせば見える見込み。
+if [ -n "${BOOT_FROM:-}" ]; then
+	set -- "$@" --boot-from "$BOOT_FROM"
+fi
+
 # evbarm の vexpress-a15 は device tree を外から渡さないと起動しない。
 # QEMU 自身が持っているものを吐かせて使う。
 if [ "$PORT" = evbarm ]; then

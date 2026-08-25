@@ -44,6 +44,9 @@ on:
       qemu_extra:
         description: 'QEMU に足す引数 (例 "-machine pc-i440fx-4.2")。古い版の調査用'
         required: false
+      boot_from:
+        description: 'どこから起こして入れるか (floppy / cdrom / kernel)。古い版の調査用'
+        required: false
 
 permissions:
   contents: write
@@ -145,9 +148,10 @@ jobs:
           # --vmm-args に足す。入力を渡す一行が無いと、指定したつもりで
           # 何も効かないまま一時間走ることになる (実際にそれで二回無駄にした)。
           QEMU_EXTRA: ${{ inputs.qemu_extra }}
+          BOOT_FROM: ${{ inputs.boot_from }}
         run: |
           set -e
-          echo "QEMU_EXTRA=[$QEMU_EXTRA]"
+          echo "QEMU_EXTRA=[$QEMU_EXTRA] BOOT_FROM=[$BOOT_FROM]"
           # port に - は入らないので、最初の - までが port。
           port=${{ matrix.target }}; port=${port%%-*}
           rel=${{ matrix.target }};  rel=${rel#*-}
