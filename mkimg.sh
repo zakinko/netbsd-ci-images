@@ -25,7 +25,9 @@
 #   X_SETS    入れる X のセット。要らなければ X_SETS= で空に
 #   ROOTDEV   fstab に書く root デバイス。QEMU の繋ぎ方で決まる
 #   SECT      イメージの総セクタ数
-#   HOSTNAME  焼くホスト名 (既定は nbimg-<arch>-<release>)
+#   IMGHOST   焼くホスト名 (既定は nbimg-<arch>-<release>)。HOSTNAME という
+#             名前にしない。bash は自分でその変数を設定するので、sh のつもりで
+#             bash に読ませた瞬間、焼く側の箱の名前が黙って入る
 #   NETIF     静的な住所を付ける口 (既定 vioif0)
 #   IPV4      静的に焼く住所。<addr>/<prefixlen>。空なら dhcpcd に任せる
 #   GATEWAY   既定経路。IPV4 を渡したときだけ見る
@@ -239,6 +241,20 @@ fetchset() {	# 取ってなければ取る。どちらの綴りも無ければ 1
 for s in base etc comp text; do
 	fetchset $s || { echo "$0: $s が取れない ($MIRROR)" >&2; exit 1; }
 done
+# rescue は別セット。base には入っていない。
+#
+# 無いと toor が壊れる。NetBSD が配る master.passwd の toor は shell が
+# /rescue/sh で、これはそのセットに入っている。今まで焼いたイメージは
+# どれも「shell の無い toor」を持っていた。toor はロックされているので
+# 表に出なかったが、パスワードを付けた途端に入れなくなる。
+#
+# それとは別に、静的リンクの一式が入っていること自体に価値がある。
+# /usr や /usr/pkg が壊れても、そこから入って直せる。コンソールに
+# 逃げられない箱ではなおさら。8 MB ほどしか食わない。
+#
+# 古い版には無いので、取れなければ黙って飛ばす。
+RESCUE_SET=rescue
+fetchset $RESCUE_SET || { echo "    (rescue は無い)"; RESCUE_SET=; }
 # X は無いアーキテクチャ・版があるので、取れなければ黙って飛ばす。
 for s in $X_SETS; do
 	fetchset $s || echo "    ($s は無い)"
@@ -327,7 +343,7 @@ newfs -O $FFS /dev/r${VND}a > /dev/null
 
 echo "--- セット展開 ---"
 mount /dev/${VND}a $MNT
-for s in base etc comp text $X_SETS; do
+for s in base etc comp text $RESCUE_SET $X_SETS; do
 	f=$(setfile $s) || continue
 	echo "    $s"
 	tar -xpf $f -C $MNT
