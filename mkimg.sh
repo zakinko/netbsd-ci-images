@@ -21,10 +21,20 @@
 #
 # 環境変数で変えられるもの:
 #   BASE      作業場所 (既定はこのスクリプトの置き場)
-#   PROFILE   出来上がりの使い道。qemu (既定) か vultr
+#   PROFILE   出来上がりの使い道。qemu (既定)、vultr、sakura
 #   X_SETS    入れる X のセット。要らなければ X_SETS= で空に
 #   ROOTDEV   fstab に書く root デバイス。QEMU の繋ぎ方で決まる
 #   SECT      イメージの総セクタ数
+#   HOSTNAME  焼くホスト名 (既定は nbimg-<arch>-<release>)
+#   NETIF     静的な住所を付ける口 (既定 vioif0)
+#   IPV4      静的に焼く住所。<addr>/<prefixlen>。空なら dhcpcd に任せる
+#   GATEWAY   既定経路。IPV4 を渡したときだけ見る
+#   DNS       resolv.conf に書く nameserver。空白区切り
+#   CONSDEV   コンソール。com0 か pc。既定は PROFILE ごと
+#   SWAPDEV   fstab に書く swap (例 ld0b)。空なら swap 無しで上げる
+#
+# 住所やホスト名をここに書かないのは、この repo が public なため。焼く側が
+# 渡す。
 
 set -e
 
@@ -51,17 +61,37 @@ VND=${VND:-vnd3}
 #   - 一番安い vc2-1c-0.5gb-v6 には IPv4 が付かない。住所は RA で降ってくる
 #     ので、dhcpcd を上げるだけでは足りない
 #
+# sakura は「既に走っている箱のディスクへ、自力で dd して入れ替える」版。
+# さくらの VPS には Vultr のような「URL から snapshot を作る」口が無いので、
+# 焼いたイメージを一旦 swap の領域に置き、そこから先頭へ書き戻す。向こうの
+# 都合は二つ。
+#
+#   - DHCP を配っていない。住所は契約で決まった静的なものなので、焼く前に
+#     入れておかないと、上がっても誰も繋げない
+#   - コンソールはシリアル。今 techne が com0 で上がっているのがその証拠で、
+#     consdev はそちらに向けておく
+#
+# 置き場の 2GiB 制限は掛からないが、大きさは swap に収まることと、書き戻す
+# 時間の短さで決まる。vultr と同じ 1.75GiB にしてある。起動してからディスク
+# 一杯に広げる。
+#
 # ディスクは virtio-blk で見える。NetBSD からは ld0 で、10 以降の QEMU 側の
 # 既定にしている virtio-scsi (sd0) とは名前が違う。fstab と食い違うと root が
 # 見つからずに止まる。
 PROFILE=${PROFILE:-qemu}
 case $PROFILE in
 qemu)	NAME=$ARCH-$REL
-	DEFSECT=25165824 ;;	# 12 GiB。sparse なので実際に食うのは展開したぶんだけ
+	DEFSECT=25165824	# 12 GiB。sparse なので実際に食うのは展開したぶんだけ
+	CONSDEV=${CONSDEV:-com0} ;;
 vultr)	NAME=$ARCH-$REL-vultr
 	DEFSECT=3670016		# 1.75 GiB。release の asset 一つ 2GiB に収める
-	ROOTDEV=${ROOTDEV:-ld0a} ;;
-*)	echo "$0: PROFILE=$PROFILE は知らない (qemu か vultr)" >&2; exit 1 ;;
+	ROOTDEV=${ROOTDEV:-ld0a}
+	CONSDEV=${CONSDEV:-pc} ;;
+sakura)	NAME=$ARCH-$REL-sakura
+	DEFSECT=3670016		# 1.75 GiB。swap に置いてから先頭へ書き戻す
+	ROOTDEV=${ROOTDEV:-ld0a}
+	CONSDEV=${CONSDEV:-com0} ;;
+*)	echo "$0: PROFILE=$PROFILE は知らない (qemu, vultr, sakura)" >&2; exit 1 ;;
 esac
 IMG=$BASE/$NAME.img
 SECT=${SECT:-$DEFSECT}
@@ -115,11 +145,20 @@ sparc64)
 	echo "$0: $ARCH は未対応 (MBR とブートローダの扱いを足すこと)"; exit 1 ;;
 esac
 
-# Vultr が繋ぐのは virtio-blk と virtio-net。10 以降の既定 (virtio-scsi) の
-# ままだと .qemu の中身が実物と食い違い、手元で試し起動したときだけ通って
-# 本番で root が見つからない、という一番たちの悪い転け方をする。
-if [ $PROFILE = vultr ]; then
-	[ $USE_MBR = yes ] || { echo "$0: PROFILE=vultr は x86 のみ" >&2; exit 1; }
+# vultr と sakura は「本物の VPS のディスクに書く」版で、X を落とすところ、
+# raw で置くところ、virtio-blk で繋ぐところが同じ。片方だけ直す事故を避けたい
+# ので、判定を一つにまとめておく。
+case $PROFILE in
+vultr|sakura)	VPS=yes ;;
+*)		VPS=no ;;
+esac
+
+# どちらの VPS も繋ぐのは virtio-blk と virtio-net。10 以降の既定
+# (virtio-scsi) のままだと .qemu の中身が実物と食い違い、手元で試し起動した
+# ときだけ通って本番で root が見つからない、という一番たちの悪い転け方をする。
+if [ $VPS = yes ]; then
+	[ $USE_MBR = yes ] ||
+		{ echo "$0: PROFILE=$PROFILE は x86 のみ" >&2; exit 1; }
 	DISKIF=virtio
 	NICDEV=virtio-net-pci
 fi
@@ -166,8 +205,8 @@ echo "--- セットを取る ---"
 mkdir -p $SETS
 # X は base の x セットから入る。pkgsrc の x11-links がここを指すので、
 # X を使うものを組むなら入れておかないと話が始まらない。Xvfb もここ。
-# vultr は 1.75GiB に収めるのが先で、X の五セットは入り切らない。
-if [ $PROFILE = vultr ]; then
+# VPS 向けは 1.75GiB に収めるのが先で、X の五セットは入り切らない。
+if [ $VPS = yes ]; then
 	X_SETS=${X_SETS-}
 else
 	X_SETS=${X_SETS-"xbase xcomp xetc xfont xserver"}
@@ -308,6 +347,12 @@ kernfs		/kern	kernfs	rw	0 0
 procfs		/proc	procfs	rw	0 0
 FST
 
+# swap は焼く側が知っている。QEMU で回すぶんには要らないが、実機に書く版で
+# 無いままだと 2GB の箱がそのまま 2GB で回ることになる。
+if [ -n "${SWAPDEV-}" ]; then
+	echo "/dev/$SWAPDEV	none	swap	sw	0 0" >> $MNT/etc/fstab
+fi
+
 # ホスト名の点は潰す。版の番号をそのまま入れると nbimg-amd64-10.1 になり、
 # 点を含む名前は FQDN と解釈されてドメイン部が "1" になる。postfix は数字
 # だけのドメインを不正として mydomain の設定に失敗し、起動に転ける。
@@ -326,12 +371,45 @@ if [ -r /etc/defaults/rc.conf ]; then
 fi
 
 rc_configured=YES
-hostname=nbimg-$ARCH-$(echo $REL | tr . -)
+hostname=${IMGHOST:-nbimg-$ARCH-$(echo $REL | tr . -)}
 sshd=YES
+RCC
+
+# 住所の付け方。IPV4 を渡されたら静的に焼いて dhcpcd は上げない。DHCP を
+# 配っていない相手 (さくらの VPS がそう) では、これが無いと上がっても誰も
+# 繋げない。dd で入れ替える版はコンソールに逃げられないので、ここを外すと
+# 箱ごと失う。
+if [ -n "${IPV4-}" ]; then
+	cat >> $MNT/etc/rc.conf <<RCC
+dhcpcd=NO
+RCC
+	cat > $MNT/etc/ifconfig.${NETIF:-vioif0} <<IFC
+up
+inet $IPV4
+IFC
+	# set -e の下では && で繋ぐと、条件が偽になった時点で script ごと
+	# 落ちる。GATEWAY を渡さない使い方があるので if で書く。
+	if [ -n "${GATEWAY-}" ]; then
+		echo "$GATEWAY" > $MNT/etc/mygate
+	fi
+	if [ -n "${DNS-}" ]; then
+		: > $MNT/etc/resolv.conf
+		for _ns in $DNS; do
+			echo "nameserver $_ns" >> $MNT/etc/resolv.conf
+		done
+	fi
+else
+	cat >> $MNT/etc/rc.conf <<RCC
 dhcpcd=YES
 dhclient=YES
-no_swap=YES
 RCC
+fi
+
+# swap を fstab に書いたなら no_swap は要らない。書いていない版は swap の
+# 無いディスクで回るので、探しに行かせない。
+if [ -z "${SWAPDEV-}" ]; then
+	echo "no_swap=YES" >> $MNT/etc/rc.conf
+fi
 
 # Vultr の一番安い plan には IPv4 が付かず、住所は RA で降ってくる。RA を
 # 受け取るかどうかは ip6mode で決まるので、dhcpcd を上げてあっても既定の
@@ -349,11 +427,12 @@ fi
 #
 # boot.cfg は NetBSD 5.0 から。それ以前のブートローダは読まないので、
 # カーネルのメッセージは VGA のままになる。getty だけは効く。
+#
+# どこに出すかは相手による。Vultr にシリアルは無く、見えるのは VGA を覗く
+# web console だけなので pc のまま置く。さくらの VPS はシリアルで、今の
+# techne が com0 で上がっているのがその証拠。CONSDEV で選ぶ。
 if [ $USE_MBR = yes ] && [ "$MAJOR" -ge 5 ] 2>/dev/null; then
-	if [ $PROFILE = vultr ]; then
-		# Vultr にシリアルは無い。見えるのは VGA を覗く web console
-		# だけなので、consdev は既定のまま置く。動かすと起動しなかった
-		# ときに読むものが何も残らない。
+	if [ "${CONSDEV:-com0}" = pc ]; then
 		cat > $MNT/boot.cfg <<BCFG
 menu=Boot normally:boot
 default=1
@@ -361,10 +440,10 @@ timeout=2
 BCFG
 	else
 		cat > $MNT/boot.cfg <<BCFG
-menu=Boot normally:consdev com0;boot
+menu=Boot normally:consdev $CONSDEV;boot
 default=1
 timeout=2
-consdev=com0
+consdev=$CONSDEV
 BCFG
 	fi
 fi
@@ -396,7 +475,20 @@ mkdir -p $MNT/root/.ssh
 cat $PUBKEY > $MNT/root/.ssh/authorized_keys
 chmod 700 $MNT/root/.ssh
 chmod 600 $MNT/root/.ssh/authorized_keys
-echo 'PermitRootLogin prohibit-password' >> $MNT/etc/ssh/sshd_config
+# 鍵だけで入れるようにする。パスワードは誰にも設定していないので今すぐの
+# 実害は無いが、後から誰かがパスワードを付けたときに、そこが入口になる。
+#
+# KbdInteractiveAuthentication は OpenSSH 8.7 で
+# ChallengeResponseAuthentication から改名されたもので、それより古い sshd は
+# 知らない語を見ると起動そのものを拒む。ここは 1.x まで焼くので、その語が
+# 通る 10 以降にだけ書く。PasswordAuthentication はどの版でも通る。
+cat >> $MNT/etc/ssh/sshd_config <<SSHD
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+SSHD
+if [ "$MAJOR" -ge 10 ] 2>/dev/null; then
+	echo 'KbdInteractiveAuthentication no' >> $MNT/etc/ssh/sshd_config
+fi
 
 mkdir -p $MNT/kern $MNT/proc $MNT/dev/pts
 ( cd $MNT/dev && sh MAKEDEV all ) > /dev/null 2>&1 || echo "    (MAKEDEV 省略)"
@@ -452,11 +544,14 @@ META
 echo "--- 繋ぎ方 ($BASE/$NAME.qemu) ---"
 cat $BASE/$NAME.qemu
 
-# Vultr の snapshot-from-URL は raw しか受け取らないので、vultr の版は
-# 固めない。公開 URL にこのまま置く。
-if [ $PROFILE = vultr ]; then
+# VPS 向けは固めない。Vultr の snapshot-from-URL は raw しか受け取らないし、
+# さくらの版は dd の入力にそのまま食わせる。
+if [ $VPS = yes ]; then
 	ls -l $IMG
-	echo "OK: $IMG (raw のまま。公開 URL に置いて vultr/up.yml に渡す)"
+	case $PROFILE in
+	vultr)	echo "OK: $IMG (raw のまま。公開 URL に置いて vultr/up.yml に渡す)" ;;
+	sakura)	echo "OK: $IMG (raw のまま。swap へ dd してから先頭へ書き戻す)" ;;
+	esac
 else
 	echo "--- 圧縮 ---"
 	gzip -9 $IMG

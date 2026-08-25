@@ -39,3 +39,28 @@ ssh_allow_v6: ""
 ssh_allow_v6_size: 64
 ssh_allow_v4: ""
 ssh_allow_v4_size: 32
+
+# 実際のサーバ名。ホームは /usr/home/<この名前>/<user> になり、点を含む
+# 名前 (FQDN) なら Vultr の逆引きにも同じ値を入れる。
+#
+# 逆引きだけ入れても正引きが無ければ片肺になる。snowrabbit.org の zone は
+# bambi が権威なので、AAAA はそちらに足すこと。
+target_hostname: "{{ label }}"
+
+# 作るアカウント。uid と gid は bambi に合わせてある。同じ人が同じ番号で
+# 居ると、tar で持ち回ったときに所有者がずれない。
+#
+# 鍵はここに書かないこと。この repo は public。zakinko の分は手元の鍵から
+# 読み、fukachan の分は追跡外の vultr/local.yml に fukachan_key として置く。
+zakinko_key_file: "~/.ssh/id_rsa.pub"
+fukachan_key: ""
+
+accounts:
+  - name: zakinko
+    uid: 3001
+    wheel: true
+    key: "{{ lookup('file', zakinko_key_file) }}"
+  - name: fukachan
+    uid: 2801
+    wheel: false
+    key: "{{ fukachan_key }}"

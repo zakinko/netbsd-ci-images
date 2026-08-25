@@ -182,6 +182,27 @@
           {{ (instances.vultr_instance_info
               | selectattr('label', 'equalto', label)
               | list | first).v6_main_ip }}
+        instance_id: >-
+          {{ (instances.vultr_instance_info
+              | selectattr('label', 'equalto', label)
+              | list | first).id }}
+
+    # 逆引き。専用のモジュールは無いので API を直に叩く。点を含まない名前は
+    # FQDN ではないので入れない (label のままのときが該当する)。
+    #
+    # 正引きが無ければ片肺のままなので、AAAA は zone の側に足すこと。
+    - name: 逆引きを設定する
+      ansible.builtin.uri:
+        url: "https://api.vultr.com/v2/instances/{{ instance_id }}/ipv6/reverse"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ vultr_api_key }}"
+        body_format: json
+        body:
+          ip: "{{ vps_addr }}"
+          reverse: "{{ target_hostname }}"
+        status_code: [200, 201, 202, 204]
+      when: '"." in target_hostname'
 
     - name: sshd が上がるのを待つ
       ansible.builtin.wait_for:
@@ -208,8 +229,53 @@
       register: uname
       changed_when: false
 
+    # イメージにはアカウントを焼いていない。焼くと、公開している release に
+    # 個人の名前と鍵が入ることになるし、ホームの下に来る名前は立てるまで
+    # 決まらない。名前が外から与えられる以上、ここでやるのが素直。
+    - name: ホスト名を決めてアカウントを作る
+      ansible.builtin.script:
+        cmd: >-
+          files/setup-accounts.sh {{ target_hostname }}
+          {% for a in accounts %}{{ a.name }}:{{ a.uid }}:{{ 'yes' if a.wheel else 'no' }} {% endfor %}
+      register: setup
+      changed_when: "'を作った' in setup.stdout"
+
+    # NetBSD に python は無いので copy も authorized_key も使えない。raw で置く。
+    #
+    # PATH を書くのは、ssh の非対話ログインが login shell を通らず /sbin と
+    # /usr/sbin が入らないため。chown も install も mkdir 以外はそこにある。
+    # script モジュール越しに走る setup-accounts.sh も同じ理由で自分で
+    # PATH を設定している。
+    - name: 鍵を置く
+      ansible.builtin.raw: |
+        set -e
+        PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
+        d=/usr/home/{{ target_hostname }}/{{ item.name }}/.ssh
+        mkdir -p $d
+        cat > $d/authorized_keys <<'AKEY'
+        {{ item.key }}
+        AKEY
+        chmod 700 $d; chmod 600 $d/authorized_keys
+        chown -R {{ item.name }} $d
+      loop: "{{ accounts }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.key | length > 0
+      changed_when: true
+
+    - name: 鍵の無いアカウントを知らせる
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.name }} の鍵が無い。vultr/local.yml に
+          {{ item.name }}_key として置けば次の実行で焼かれる
+      loop: "{{ accounts }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.key | length == 0
+
     - name: 入り方
       ansible.builtin.debug:
         msg:
           - "{{ uname.stdout | trim }}"
           - "ssh root@{{ ansible_host }}"
+          - "ssh zakinko@{{ ansible_host }}"
