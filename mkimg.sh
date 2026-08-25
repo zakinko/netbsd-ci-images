@@ -21,6 +21,7 @@
 #
 # 環境変数で変えられるもの:
 #   BASE      作業場所 (既定はこのスクリプトの置き場)
+#   PROFILE   出来上がりの使い道。qemu (既定) か vultr
 #   X_SETS    入れる X のセット。要らなければ X_SETS= で空に
 #   ROOTDEV   fstab に書く root デバイス。QEMU の繋ぎ方で決まる
 #   SECT      イメージの総セクタ数
@@ -37,8 +38,33 @@ BASE=${BASE:-$(cd "$(dirname "$0")" && pwd)}
 SETS=$BASE/sets/$ARCH-$REL
 MNT=${MNT:-/mnt/nbimg}
 VND=${VND:-vnd3}
-IMG=$BASE/$ARCH-$REL.img
-SECT=${SECT:-25165824}		# 12 GiB。sparse なので実際に食うのは展開したぶんだけ
+# 出来上がりの使い道。qemu は CI で QEMU に食わせるいつもの版、vultr は
+# Vultr の snapshot-from-URL に渡して VPS のディスクへ書く版。
+#
+# 分けているのは向こうの都合が三つあるため。
+#
+#   - Vultr は raw しか受け取らない。gz も qcow2 も通らないので、置き場を
+#     GitHub の release にすると asset 一つ 2GiB の上限に当たる。全セット
+#     入り 12GiB のままでは載らないので、X を落として 1.75GiB に切り詰める
+#   - Vultr にシリアルは出ていない。見えるのは VGA を noVNC で覗く web
+#     console だけで、consdev=com0 にすると起動しなかったときに何も残らない
+#   - 一番安い vc2-1c-0.5gb-v6 には IPv4 が付かない。住所は RA で降ってくる
+#     ので、dhcpcd を上げるだけでは足りない
+#
+# ディスクは virtio-blk で見える。NetBSD からは ld0 で、10 以降の QEMU 側の
+# 既定にしている virtio-scsi (sd0) とは名前が違う。fstab と食い違うと root が
+# 見つからずに止まる。
+PROFILE=${PROFILE:-qemu}
+case $PROFILE in
+qemu)	NAME=$ARCH-$REL
+	DEFSECT=25165824 ;;	# 12 GiB。sparse なので実際に食うのは展開したぶんだけ
+vultr)	NAME=$ARCH-$REL-vultr
+	DEFSECT=3670016		# 1.75 GiB。release の asset 一つ 2GiB に収める
+	ROOTDEV=${ROOTDEV:-ld0a} ;;
+*)	echo "$0: PROFILE=$PROFILE は知らない (qemu か vultr)" >&2; exit 1 ;;
+esac
+IMG=$BASE/$NAME.img
+SECT=${SECT:-$DEFSECT}
 
 # 9.0 より前は本ミラーから外れて archive にある。
 MAJOR=${REL%%.*}
@@ -89,6 +115,15 @@ sparc64)
 	echo "$0: $ARCH は未対応 (MBR とブートローダの扱いを足すこと)"; exit 1 ;;
 esac
 
+# Vultr が繋ぐのは virtio-blk と virtio-net。10 以降の既定 (virtio-scsi) の
+# ままだと .qemu の中身が実物と食い違い、手元で試し起動したときだけ通って
+# 本番で root が見つからない、という一番たちの悪い転け方をする。
+if [ $PROFILE = vultr ]; then
+	[ $USE_MBR = yes ] || { echo "$0: PROFILE=vultr は x86 のみ" >&2; exit 1; }
+	DISKIF=virtio
+	NICDEV=virtio-net-pci
+fi
+
 # virtio-scsi は -drive if=... では繋がらない。コントローラと scsi-hd を
 # 別々に並べる必要があるので、インタフェース名ではなくディスク指定の全体を
 # 持たせる。@IMG@ は動かす側がイメージのパスに置き換える。
@@ -131,7 +166,12 @@ echo "--- セットを取る ---"
 mkdir -p $SETS
 # X は base の x セットから入る。pkgsrc の x11-links がここを指すので、
 # X を使うものを組むなら入れておかないと話が始まらない。Xvfb もここ。
-X_SETS=${X_SETS-"xbase xcomp xetc xfont xserver"}
+# vultr は 1.75GiB に収めるのが先で、X の五セットは入り切らない。
+if [ $PROFILE = vultr ]; then
+	X_SETS=${X_SETS-}
+else
+	X_SETS=${X_SETS-"xbase xcomp xetc xfont xserver"}
+fi
 # セットの綴りは port と版で割れている。i386 は今も .tgz だが、amd64 と
 # sparc64 は .tar.xz になっており、10.1 でも port によって違う。どちらが
 # 置いてあるかはミラーを叩くまで分からないので順に試す。展開する tar は
@@ -279,6 +319,16 @@ dhclient=YES
 no_swap=YES
 RCC
 
+# Vultr の一番安い plan には IPv4 が付かず、住所は RA で降ってくる。RA を
+# 受け取るかどうかは ip6mode で決まるので、dhcpcd を上げてあっても既定の
+# host のままでは住所が付かないまま上がってしまう。
+if [ $PROFILE = vultr ]; then
+	cat >> $MNT/etc/rc.conf <<RCC
+ip6mode=autohost
+rtsol=YES
+RCC
+fi
+
 # コンソールをシリアルに出す。既定の VGA のままだと QEMU を -display none
 # で回したときに何も残らず、起動しなかったときに画面を撮るしか手が無い。
 # CI では読めるログが要る。
@@ -286,12 +336,23 @@ RCC
 # boot.cfg は NetBSD 5.0 から。それ以前のブートローダは読まないので、
 # カーネルのメッセージは VGA のままになる。getty だけは効く。
 if [ $USE_MBR = yes ] && [ "$MAJOR" -ge 5 ] 2>/dev/null; then
-	cat > $MNT/boot.cfg <<BCFG
+	if [ $PROFILE = vultr ]; then
+		# Vultr にシリアルは無い。見えるのは VGA を覗く web console
+		# だけなので、consdev は既定のまま置く。動かすと起動しなかった
+		# ときに読むものが何も残らない。
+		cat > $MNT/boot.cfg <<BCFG
+menu=Boot normally:boot
+default=1
+timeout=2
+BCFG
+	else
+		cat > $MNT/boot.cfg <<BCFG
 menu=Boot normally:consdev com0;boot
 default=1
 timeout=2
 consdev=com0
 BCFG
+	fi
 fi
 # シリアルに getty を出す。sparc64 は OpenBIOS が既にシリアルなので、
 # どちらの場合も ttys の該当行を on にしておけばよい。
@@ -349,7 +410,7 @@ vnconfig -u $VND
 
 # 動かす側がイメージを見ただけでは繋ぎ方が分からないので、添えておく。
 # 食い違うと root が見つからず起動しない。
-cat > $BASE/$ARCH-$REL.qemu <<META
+cat > $BASE/$NAME.qemu <<META
 ARCH=$ARCH
 RELEASE=$REL
 QEMU=qemu-system-$(case $ARCH in amd64) echo x86_64 ;; *) echo $ARCH ;; esac)
@@ -358,10 +419,17 @@ DISKARGS="$DISKARGS"
 NICDEV=$NICDEV
 ROOTDEV=$ROOTDEV
 META
-echo "--- 繋ぎ方 ($BASE/$ARCH-$REL.qemu) ---"
-cat $BASE/$ARCH-$REL.qemu
+echo "--- 繋ぎ方 ($BASE/$NAME.qemu) ---"
+cat $BASE/$NAME.qemu
 
-echo "--- 圧縮 ---"
-gzip -9 $IMG
-ls -l $IMG.gz
-echo "OK: $IMG.gz"
+# Vultr の snapshot-from-URL は raw しか受け取らないので、vultr の版は
+# 固めない。公開 URL にこのまま置く。
+if [ $PROFILE = vultr ]; then
+	ls -l $IMG
+	echo "OK: $IMG (raw のまま。公開 URL に置いて vultr/up.yml に渡す)"
+else
+	echo "--- 圧縮 ---"
+	gzip -9 $IMG
+	ls -l $IMG.gz
+	echo "OK: $IMG.gz"
+fi

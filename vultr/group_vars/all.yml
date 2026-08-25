@@ -1,0 +1,27 @@
+---
+# API 鍵は環境変数から取る。playbook にも git にも入れない。
+#
+#   export VULTR_API_KEY=...
+#
+vultr_api_key: "{{ lookup('env', 'VULTR_API_KEY') }}"
+
+# 立てるものの名前。instance の label と hostname、snapshot の description
+# を全部これで揃えてある。down.yml が消す相手もこれで引く。
+label: netbsd-vultr
+
+# 一番安い plan。$2.50/月 = $0.003/時で、一時間触って一円に届かない。
+# ただし IPv4 が付かず、取れるのは ewr (ニュージャージー) と atl だけ。
+# IPv4 が要るなら vc2-1c-0.5gb ($3.50/月、ewr のみ)、日本に置きたいなら
+# vc2-1c-1gb ($5/月、nrt と itm) へ。plan を変えたら region も見直すこと。
+plan: vc2-1c-0.5gb-v6
+region: ewr
+
+# mkimg.sh に PROFILE=vultr を渡して焼いた raw イメージの置き場。
+# Vultr がここへ取りに来るので、認証もクエリも付かない公開 URL であること。
+# 詳しくは README.md。
+image_url: ""
+
+# イメージに焼いた鍵に対応する秘密鍵。mkimg.sh は同じ場所に置いた
+# authorized_keys を、無ければ ~/.ssh/id_rsa.pub を焼く。焼いたのがどちらか
+# 分からなくなったら mkimg.sh の出力の「鍵」の行を見ること。
+ansible_ssh_private_key_file: "~/.ssh/id_rsa"

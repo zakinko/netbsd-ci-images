@@ -1,0 +1,30 @@
+---
+# 立てたものを壊す。時間割なので、触り終えたら消しておく。
+#
+#   ansible-playbook down.yml                     # instance だけ
+#   ansible-playbook down.yml -e drop_snapshot=true   # snapshot も
+#
+# snapshot は残しておくと立て直しが速い ($0.05/GB/月)。イメージを焼き直した
+# ときだけ落とす。
+
+- name: Vultr の NetBSD を片づける
+  hosts: localhost
+  gather_facts: false
+  vars:
+    drop_snapshot: false
+  module_defaults:
+    vultr.cloud.instance: { api_key: "{{ vultr_api_key }}" }
+    vultr.cloud.snapshot: { api_key: "{{ vultr_api_key }}" }
+
+  tasks:
+    - name: instance を消す
+      vultr.cloud.instance:
+        label: "{{ label }}"
+        region: "{{ region }}"
+        state: absent
+
+    - name: snapshot も消す
+      vultr.cloud.snapshot:
+        description: "{{ label }}"
+        state: absent
+      when: drop_snapshot | bool

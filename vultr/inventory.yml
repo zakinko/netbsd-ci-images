@@ -1,0 +1,6 @@
+# 作る側 (手元) だけ。出来た VPS は up.yml が add_host で足す。
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"

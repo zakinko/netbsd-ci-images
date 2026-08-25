@@ -1,0 +1,139 @@
+---
+# Vultr に NetBSD を立てる。
+#
+# やっていることは二手だけ。公開 URL に置いた raw イメージを snapshot と
+# して取り込み、その snapshot から instance を deploy する。Vultr 側が
+# ディスクへイメージをそのまま書き戻すので、レスキューに落ちて dd するのと
+# 同じことを API 越しに済ませている。VNC もコンソールも要らない。
+#
+#   export VULTR_API_KEY=...
+#   ansible-playbook up.yml -e image_url=https://.../amd64-10.1-vultr.img
+#
+# 取り込んだ snapshot は消すまで残る。二度目からは image_url を渡さなくても
+# 同じ description のものを拾って立て直すので、料金は snapshot の保管分
+# ($0.05/GB/月) と instance の時間割だけになる。
+
+- name: Vultr に NetBSD の instance を立てる
+  hosts: localhost
+  gather_facts: false
+  module_defaults:
+    vultr.cloud.snapshot: { api_key: "{{ vultr_api_key }}" }
+    vultr.cloud.snapshot_info: { api_key: "{{ vultr_api_key }}" }
+    vultr.cloud.instance: { api_key: "{{ vultr_api_key }}" }
+    vultr.cloud.instance_info: { api_key: "{{ vultr_api_key }}" }
+
+  tasks:
+    - name: API 鍵があるか確かめる
+      ansible.builtin.assert:
+        that: vultr_api_key | length > 0
+        fail_msg: >-
+          VULTR_API_KEY が空。export VULTR_API_KEY=... してから走らせる
+
+    - name: 取り込み済みの snapshot を探す
+      vultr.cloud.snapshot_info:
+      register: snapshots
+
+    - name: 同じ名前のものが在るか
+      ansible.builtin.set_fact:
+        snapshot_exists: >-
+          {{ snapshots.vultr_snapshot_info
+             | selectattr('description', 'equalto', label)
+             | list | length > 0 }}
+
+    - name: 無ければ image_url が要る
+      ansible.builtin.assert:
+        that: image_url | length > 0
+        fail_msg: >-
+          "{{ label }}" という snapshot がまだ無い。PROFILE=vultr で焼いた
+          raw イメージを公開 URL に置き、-e image_url=... で渡すこと
+      when: not snapshot_exists
+
+    # Vultr は raw しか受け取らない。gz や qcow2 を渡すと取り込み自体は
+    # 通っても、起動しないディスクが出来上がる。mkimg.sh の vultr が
+    # 固めずに置いているのはこのため。
+    - name: raw イメージを snapshot として取り込む
+      vultr.cloud.snapshot:
+        description: "{{ label }}"
+        url: "{{ image_url }}"
+        uefi: false  # mkimg.sh が作るのは MBR + disklabel の BIOS 起動
+      when: not snapshot_exists
+
+    # 上のモジュールは自分で complete まで待つ。それでも引き直すのは、
+    # 前回の実行が待ちきれずに落ちていると、まだ取り込み中の snapshot を
+    # 掴んだまま deploy へ進んでしまうため。
+    - name: 取り込みが終わっているか確かめる
+      vultr.cloud.snapshot_info:
+      register: snapshots
+      vars:
+        snap: >-
+          {{ snapshots.vultr_snapshot_info
+             | selectattr('description', 'equalto', label)
+             | list | first | default({}) }}
+      until: snap.status | default('') == 'complete'
+      retries: 90
+      delay: 20
+
+    - name: instance を deploy する
+      vultr.cloud.instance:
+        label: "{{ label }}"
+        hostname: "{{ label }}"
+        region: "{{ region }}"
+        plan: "{{ plan }}"
+        snapshot: "{{ label }}"
+        enable_ipv6: true
+        state: present
+      register: instance
+
+    # 一番安い plan には IPv4 が付かない。deploy が返った時点ではまだ住所が
+    # 埋まっていないことがあるので、付くまで引き直す。
+    - name: IPv6 の住所が付くのを待つ
+      vultr.cloud.instance_info:
+      register: instances
+      vars:
+        vps: >-
+          {{ instances.vultr_instance_info
+             | selectattr('label', 'equalto', label)
+             | list | first | default({}) }}
+      until: >-
+        vps.v6_main_ip | default('') | length > 0
+        and vps.v6_main_ip != '::'
+      retries: 60
+      delay: 10
+
+    - name: 繋ぎ先を控える
+      ansible.builtin.set_fact:
+        vps_addr: >-
+          {{ (instances.vultr_instance_info
+              | selectattr('label', 'equalto', label)
+              | list | first).v6_main_ip }}
+
+    - name: sshd が上がるのを待つ
+      ansible.builtin.wait_for:
+        host: "{{ vps_addr }}"
+        port: 22
+        timeout: 900
+        search_regex: OpenSSH
+
+    - name: 出来たものを inventory に足す
+      ansible.builtin.add_host:
+        name: "{{ label }}"
+        groups: netbsd
+        ansible_host: "{{ vps_addr }}"
+        ansible_user: root
+
+- name: 本当に NetBSD が起きているか確かめる
+  hosts: netbsd
+  gather_facts: false
+  tasks:
+    # NetBSD の base に python は無い。facts も普通のモジュールも動かないので
+    # raw で叩く。要るなら pkgin install python312 を入れてから。
+    - name: uname
+      ansible.builtin.raw: uname -a
+      register: uname
+      changed_when: false
+
+    - name: 入り方
+      ansible.builtin.debug:
+        msg:
+          - "{{ uname.stdout | trim }}"
+          - "ssh root@{{ ansible_host }}"

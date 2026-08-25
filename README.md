@@ -127,6 +127,23 @@ release ツリーでの名前が anita の期待と食い違う場合 (`hp700`�
 無い `evbarm-earmv7hf`) があるので、302 を返すだけの中継 (`mirror-alias.py`)
 を手元に立てて名前を揃えています。
 
+## VPS に書く
+
+同じイメージを本物の VPS のディスクへ書けます。Vultr の API に公開 URL の
+raw イメージを snapshot として取り込む口があり、そこから instance を deploy
+すると、レスキューに落ちて dd するのと同じことが API 越しに済みます。
+Ansible の playbook を [vultr/](vultr/) に置いてあります。
+
+```sh
+PROFILE=vultr sh mkimg.sh amd64 10.1     # NetBSD 機で。VPS 向けの版
+cd vultr && ansible-playbook up.yml -e image_url=https://.../amd64-10.1-vultr.img
+```
+
+`PROFILE=vultr` はいつもの版と四つ違います。1.75 GiB (X 抜き)、root は
+`ld0a` (virtio-blk)、コンソールは VGA のまま、そして固めずに raw で置きます。
+理由はどれも Vultr 側の都合で、`mkimg.sh` と [vultr/README.md](vultr/README.md)
+に書いてあります。
+
 ## 新しい OS を足す
 
 手順が書かれていないものばかりなので、決まった型で当たります。
