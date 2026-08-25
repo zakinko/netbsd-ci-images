@@ -242,6 +242,14 @@
 
     # NetBSD に python は無いので copy も authorized_key も使えない。raw で置く。
     #
+    # raw は中身をそのまま ssh に渡すので、外側は必ず相手のログインシェルに
+    # なる。ここは root で入っており、焼いたイメージの root の shell は
+    # /bin/sh なので sh の構文がそのまま通る。**繋ぐ口座を zakinko や
+    # fukachan に変えるとここは壊れる。** 作る口座の shell は /bin/csh で、
+    # for も $var も csh に食われる。executable: を足しても直らない (あれは
+    # 内側の話で、csh を経由する事実は変わらない)。そのときは sh -c '...' で
+    # 包むか、script モジュールに移すこと。
+    #
     # PATH を書くのは、ssh の非対話ログインが login shell を通らず /sbin と
     # /usr/sbin が入らないため。chown も install も mkdir 以外はそこにある。
     # script モジュール越しに走る setup-accounts.sh も同じ理由で自分で
