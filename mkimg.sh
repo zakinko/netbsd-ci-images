@@ -132,27 +132,46 @@ mkdir -p $SETS
 # X は base の x セットから入る。pkgsrc の x11-links がここを指すので、
 # X を使うものを組むなら入れておかないと話が始まらない。Xvfb もここ。
 X_SETS=${X_SETS-"xbase xcomp xetc xfont xserver"}
+# セットの綴りは port と版で割れている。i386 は今も .tgz だが、amd64 と
+# sparc64 は .tar.xz になっており、10.1 でも port によって違う。どちらが
+# 置いてあるかはミラーを叩くまで分からないので順に試す。展開する tar は
+# libarchive なので、-z を外して見分けを任せればどちらも読める。
+SETEXT="tgz tar.xz"
+
+setfile() {	# 取ってあるセットの実体を書き出す。無ければ 1 を返す
+	for _x in $SETEXT; do
+		[ -s "$SETS/$1.$_x" ] && { echo "$SETS/$1.$_x"; return 0; }
+	done
+	return 1
+}
+
+fetchset() {	# 取ってなければ取る。どちらの綴りも無ければ 1 を返す
+	setfile "$1" > /dev/null && return 0
+	for _x in $SETEXT; do
+		ftp -o "$SETS/$1.$_x" "$MIRROR/$ARCH/binary/sets/$1.$_x" \
+			2>/dev/null && return 0
+		rm -f "$SETS/$1.$_x"
+	done
+	return 1
+}
+
 for s in base etc comp text; do
-	[ -s $SETS/$s.tgz ] || ftp -o $SETS/$s.tgz \
-		$MIRROR/$ARCH/binary/sets/$s.tgz
+	fetchset $s || { echo "$0: $s が取れない ($MIRROR)" >&2; exit 1; }
 done
 # X は無いアーキテクチャ・版があるので、取れなければ黙って飛ばす。
 for s in $X_SETS; do
-	[ -s $SETS/$s.tgz ] && continue
-	ftp -o $SETS/$s.tgz $MIRROR/$ARCH/binary/sets/$s.tgz 2>/dev/null || {
-		echo "    ($s は無い)"; rm -f $SETS/$s.tgz; }
+	fetchset $s || echo "    ($s は無い)"
 done
 # カーネルの置き場と綴りは版によって違う。1.6 以降は netbsd-GENERIC.gz、
 # 1.5 以前は netbsd.GENERIC.gz (中黒ではなく点)、版によってはセットの
 # kern-GENERIC.tgz に入っているだけのこともある。
-if [ ! -s $SETS/netbsd-GENERIC.gz ] && [ ! -s $SETS/kern-GENERIC.tgz ]; then
+if [ ! -s $SETS/netbsd-GENERIC.gz ] && ! setfile kern-GENERIC > /dev/null; then
 	ftp -o $SETS/netbsd-GENERIC.gz \
 		$MIRROR/$ARCH/binary/kernel/netbsd-GENERIC.gz 2>/dev/null || \
 	ftp -o $SETS/netbsd-GENERIC.gz \
 		$MIRROR/$ARCH/binary/kernel/netbsd.GENERIC.gz 2>/dev/null || \
-	ftp -o $SETS/kern-GENERIC.tgz \
-		$MIRROR/$ARCH/binary/sets/kern-GENERIC.tgz
-	[ -s $SETS/netbsd-GENERIC.gz ] || [ -s $SETS/kern-GENERIC.tgz ] || \
+	fetchset kern-GENERIC
+	[ -s $SETS/netbsd-GENERIC.gz ] || setfile kern-GENERIC > /dev/null || \
 		{ echo "$0: カーネルが見つからない"; exit 1; }
 fi
 
@@ -228,16 +247,16 @@ newfs -O $FFS /dev/r${VND}a > /dev/null
 echo "--- セット展開 ---"
 mount /dev/${VND}a $MNT
 for s in base etc comp text $X_SETS; do
-	[ -s $SETS/$s.tgz ] || continue
+	f=$(setfile $s) || continue
 	echo "    $s"
-	tar -xpzf $SETS/$s.tgz -C $MNT
+	tar -xpf $f -C $MNT
 done
 
 echo "--- カーネル ---"
 if [ -s $SETS/netbsd-GENERIC.gz ]; then
 	zcat $SETS/netbsd-GENERIC.gz > $MNT/netbsd
 else
-	tar -xpzf $SETS/kern-GENERIC.tgz -C $MNT
+	tar -xpf "$(setfile kern-GENERIC)" -C $MNT
 fi
 chmod 644 $MNT/netbsd
 
