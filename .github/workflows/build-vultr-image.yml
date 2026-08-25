@@ -83,7 +83,13 @@ jobs:
           printf '%s\n' "${{ inputs.authorized_key }}" | \
             $SSH 'cat > /root/authorized_keys'
           $SSH 'cat > /root/mkimg.sh' < mkimg.sh
-          $SSH "PROFILE=vultr BASE=/root sh /root/mkimg.sh $ARCH $REL"
+          $SSH 'df -h /'
+          # PATH を明示する。ssh の非対話ログインは login shell を通らないので
+          # /sbin と /usr/sbin が入らず、vnconfig も disklabel も newfs も
+          # installboot も見つからない。手で root で叩くと通るぶん、ここでしか
+          # 出ない。
+          $SSH "PATH=/sbin:/usr/sbin:/bin:/usr/bin \
+                PROFILE=vultr BASE=/root sh /root/mkimg.sh $ARCH $REL"
 
       - name: 出来たものを持ち帰る
         run: |
