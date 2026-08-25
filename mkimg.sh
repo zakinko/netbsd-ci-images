@@ -371,6 +371,18 @@ if [ -f $MNT/etc/ttys ]; then
 		$MNT/etc/ttys > $MNT/etc/ttys.new && mv $MNT/etc/ttys.new $MNT/etc/ttys
 fi
 
+# dhcpcd の既定は slaac private で、RFC 7217 の乱数識別子から住所を作る。
+# Vultr は MAC から EUI-64 で作った住所を台帳に載せ、API の v6_main_ip も
+# それを返すので、guest が乱数を選ぶと両者が 食い違う。/64 は丸ごと経路
+# 付けされているので通信自体は成立するが、API で住所を引いて ssh する側から
+# は「起動しているのに繋がらない機械」にしか見えない。実際にこれで半日
+# 溶かした。hwaddr にすると Vultr が言う住所そのものが付く。
+if [ $PROFILE = vultr ] && [ -f $MNT/etc/dhcpcd.conf ]; then
+	sed -e 's/^slaac private/slaac hwaddr/' $MNT/etc/dhcpcd.conf \
+		> $MNT/etc/dhcpcd.conf.new &&
+		mv $MNT/etc/dhcpcd.conf.new $MNT/etc/dhcpcd.conf
+fi
+
 mkdir -p $MNT/root/.ssh
 cat $PUBKEY > $MNT/root/.ssh/authorized_keys
 chmod 700 $MNT/root/.ssh

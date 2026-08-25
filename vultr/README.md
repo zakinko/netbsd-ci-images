@@ -80,13 +80,25 @@ disklabel を広げて `resize_ffs` を掛ける。
 
 ## 置き場
 
-Vultr が取りに来るので、**認証もクエリ文字列も付かない公開 URL**が要る。
-GitHub の release に置くのが手近いが、**asset は一つ 2GiB まで**で、しかも
-Vultr は gz を受け取らない。1.75 GiB に切ってあるのはこの二つに挟まれた
-結果で、余裕は 250MB ほどしかない。
+Vultr が取りに来るので、**認証もクエリ文字列も付かない公開 URL**が要ります。
+GitHub の release に置けますが、**そのままの URL は使えません。**
+
+```
+https://github.com/.../amd64-10.1-vultr.img
+  → 302 → https://release-assets.githubusercontent.com/...?<署名付きクエリ>
+```
+
+**Vultr の取り込みは 302 を追いません。** 追えないと snapshot は `pending` に
+なった直後に黙って消され、API はエラーを返しません。待っている側からは
+固まったようにしか見えません。[up.yml](up.yml) が渡す前に `curl -sIL` で
+最終 URL を解決しているのはこのためです。クエリ文字列そのものは通ります
+(署名付き URL で取り込めることを確認済み)。
+
+asset は一つ 2GiB まで、しかも Vultr は gz を受け取りません。1.75 GiB に
+切ってあるのはこの二つに挟まれた結果で、余裕は 250MB ほどしかありません。
 
 ```sh
-gh release upload images amd64-10.1-vultr.img --repo <owner>/netbsd-ci-images
+gh release upload vultr amd64-10.1-vultr.img --repo <owner>/netbsd-ci-images
 ```
 
 ## 走らせる
@@ -106,17 +118,23 @@ ansible-playbook down.yml -e drop_snapshot=true  # snapshot も落とす
 instance は時間割 ($0.003/時) なので、触り終えたら壊しておく。一時間で
 一円に届かない。snapshot の保管は $0.05/GB/月。
 
-## まだ確かめていないこと
+## 実際に通したときに分かったこと
 
-**ここに書いた手順は通しで走らせていない。** 立てて初めて分かることが
-三つある。
+一度通してあります。当たったところと、外していたところ。
 
-- **root が `ld0a` で合っているか。** Vultr は virtio-blk で見せているはずだが、
-  実物で確かめていない。違えば `root device:` で止まる。web console に出るので
-  そこで読めるし、`ROOTDEV=sd0a` を付け直して焼けばよい
-- **`ip6mode=autohost` で住所が付くか。** Vultr の IPv6 が RA で降ってくる
-  前提で書いてある。静的に振る作りだった場合は `/etc/ifconfig.vioif0` に
-  焼き込む必要がある
-- **MBR/BIOS の snapshot が通るか。** API に `uefi` の旗があり既定が false
-  なので通るはずだが、Vultr の移行案内は「UEFI であること」と書いている。
-  転けたら UEFI 版を焼くか、custom ISO からの sysinst に切り替える
+- **root は `ld0a` で合っていた。** Vultr は virtio-blk で見せる。実機でも
+  MBR から起動して multi-user まで行った
+- **MBR/BIOS の snapshot は通る。** Vultr の移行案内は「UEFI であること」と
+  書いているが、API の `uefi: false` で問題なく取り込まれる
+- **Vultr は RA を流している。** `ip6mode=autohost` で住所は付く
+- **しかし住所が API の `v6_main_ip` と食い違う。** dhcpcd の既定 `slaac
+  private` が RFC 7217 の乱数識別子を使うのに対し、Vultr が台帳に載せるのは
+  MAC から EUI-64 で作った住所。/64 は丸ごと経路付けされているので通信は
+  できるが、API から住所を引いて ssh する側からは繋がらない機械に見える。
+  `mkimg.sh` が `slaac hwaddr` に書き換えているのはこのため
+- **`rc.conf` が既定を読んでいなかった。** これは別のバグで、通信は止めない。
+  `motd` が `NetBSD ?.?` のままなのと、起動のたびに
+  `$foo is not set properly` が十数行流れるのがそれ
+
+残っているのは IPv4 付きの plan を試していないことくらいで、そちらは DHCP
+なので素直に通るはず。

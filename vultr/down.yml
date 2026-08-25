@@ -15,6 +15,7 @@
   module_defaults:
     vultr.cloud.instance: { api_key: "{{ vultr_api_key }}" }
     vultr.cloud.snapshot: { api_key: "{{ vultr_api_key }}" }
+    vultr.cloud.firewall_group: { api_key: "{{ vultr_api_key }}" }
 
   tasks:
     - name: instance を消す
@@ -28,3 +29,9 @@
         description: "{{ label }}"
         state: absent
       when: drop_snapshot | bool
+
+    # instance を消したあとに。付いたままだと消せない。
+    - name: firewall group を消す
+      vultr.cloud.firewall_group:
+        description: "{{ label }}"
+        state: absent

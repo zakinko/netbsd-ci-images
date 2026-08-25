@@ -37,3 +37,6 @@ disk_images/
 out
 out/
 media-paths.conf
+
+# 手元の住所を書く。public repo なので追跡しない。
+vultr/local.yml

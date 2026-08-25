@@ -25,3 +25,17 @@ image_url: ""
 # authorized_keys を、無ければ ~/.ssh/id_rsa.pub を焼く。焼いたのがどちらか
 # 分からなくなったら mkimg.sh の出力の「鍵」の行を見ること。
 ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+
+# 22 番を開ける相手。ここに書かないこと。この repo は public なので、
+# 手元の住所を commit すると公開される。書くのは vultr/local.yml (追跡外)
+# か、走らせるときの -e。
+#
+#   ssh_allow_v6: "2001:db8:1234:5678::"
+#   ssh_allow_v6_size: 64
+#
+# IPv6 の prefix は契約次第で変わる。弾かれるようになったら書き直すこと。
+# 締め出されても Vultr の web console からは入れる。
+ssh_allow_v6: ""
+ssh_allow_v6_size: 64
+ssh_allow_v4: ""
+ssh_allow_v4_size: 32
