@@ -29,7 +29,9 @@
 #   NETIF     静的な住所を付ける口 (既定 vioif0)
 #   IPV4      静的に焼く住所。<addr>/<prefixlen>。空なら dhcpcd に任せる
 #   GATEWAY   既定経路。IPV4 を渡したときだけ見る
-#   DNS       resolv.conf に書く nameserver。空白区切り
+#   IPV6      静的に焼く v6 の住所。<addr>/<prefixlen>
+#   GATEWAY6  v6 の既定経路。link-local なら %<if> まで書く (fe80::1%vioif0)
+#   DNS       resolv.conf に書く nameserver。空白区切り。v4 も v6 も書ける
 #   CONSDEV   コンソール。com0 か pc。既定は PROFILE ごと
 #   SWAPDEV   fstab に書く swap (例 ld0b)。空なら swap 無しで上げる
 #
@@ -387,10 +389,25 @@ RCC
 up
 inet $IPV4
 IFC
+	# v6 も静的に焼く。さくらは /64 を一つ割り当てるが、台帳に載る住所は
+	# IPv4 を埋め込んだもの (…:49:212:144:112) で、MAC から作る SLAAC の
+	# 住所とは一致しない。RA を受けても DNS の AAAA と食い違うので、
+	# ip6mode は既定の host のまま、住所は書いて渡す。
+	if [ -n "${IPV6-}" ]; then
+		echo "inet6 $IPV6" >> $MNT/etc/ifconfig.${NETIF:-vioif0}
+	fi
 	# set -e の下では && で繋ぐと、条件が偽になった時点で script ごと
 	# 落ちる。GATEWAY を渡さない使い方があるので if で書く。
 	if [ -n "${GATEWAY-}" ]; then
 		echo "$GATEWAY" > $MNT/etc/mygate
+	fi
+	# v6 の既定経路は rc.conf 側。空なら /etc/mygate6 が読まれる。
+	# さくらのゲートウェイは fe80::1 で、link-local は scope が無いと
+	# route が付かないので %<if> まで要る。
+	if [ -n "${GATEWAY6-}" ]; then
+		cat >> $MNT/etc/rc.conf <<RCC
+defaultroute6="$GATEWAY6"
+RCC
 	fi
 	if [ -n "${DNS-}" ]; then
 		: > $MNT/etc/resolv.conf
