@@ -308,6 +308,11 @@ kernfs		/kern	kernfs	rw	0 0
 procfs		/proc	procfs	rw	0 0
 FST
 
+# ホスト名の点は潰す。版の番号をそのまま入れると nbimg-amd64-10.1 になり、
+# 点を含む名前は FQDN と解釈されてドメイン部が "1" になる。postfix は数字
+# だけのドメインを不正として mydomain の設定に失敗し、起動に転ける。
+# rc.conf が既定を読んでいなかった間は postfix がそもそも起動対象にならず、
+# この壊れは隠れていた。
 # dhcpcd が既定になったのは NetBSD 6 から。それ以前は dhclient。
 # 知らない項目は無視されるので両方書いておく。
 # 既定を読む行を先に置く。NetBSD の /etc/rc.conf は冒頭で
@@ -321,7 +326,7 @@ if [ -r /etc/defaults/rc.conf ]; then
 fi
 
 rc_configured=YES
-hostname=nbimg-$ARCH-$REL
+hostname=nbimg-$ARCH-$(echo $REL | tr . -)
 sshd=YES
 dhcpcd=YES
 dhclient=YES
@@ -381,6 +386,10 @@ if [ $PROFILE = vultr ] && [ -f $MNT/etc/dhcpcd.conf ]; then
 	sed -e 's/^slaac private/slaac hwaddr/' $MNT/etc/dhcpcd.conf \
 		> $MNT/etc/dhcpcd.conf.new &&
 		mv $MNT/etc/dhcpcd.conf.new $MNT/etc/dhcpcd.conf
+	# 置換は行が在ることが前提で、綴りが変わると黙って何もしない。効いた
+	# かどうかは住所が食い違って初めて分かるので、ここで確かめて足す。
+	grep -q '^slaac hwaddr' $MNT/etc/dhcpcd.conf ||
+		echo 'slaac hwaddr' >> $MNT/etc/dhcpcd.conf
 fi
 
 mkdir -p $MNT/root/.ssh
