@@ -35,7 +35,18 @@ SSHPORT=${2:-2222}
 
 DIR=${DIR:-.}
 META=$DIR/$NAME.qemu
-SMP=${SMP:-2}
+# 既定は動かしている機械のコア数 (上限 4)。2 に固定していたので、4 vCPU の
+# CI runner では半分しか使えていなかった。ゲストの中で pkgsrc が MAKE_JOBS を
+# hw.ncpu から取るため、ここが効かないと build がそのぶん長くなる。
+#
+# 上限を 4 に置くのは、古い NetBSD ほど SMP の面倒を見た年数が短く、コアを
+# 増やすほど当たりにくい不具合を踏む余地が増えるため。手元でもっと出したい
+# ときは SMP= を渡す。
+if [ -z "${SMP:-}" ]; then
+	SMP=`(nproc || sysctl -n hw.ncpu || getconf _NPROCESSORS_ONLN) 2>/dev/null | head -1`
+	case $SMP in ''|*[!0-9]*) SMP=2 ;; esac
+	[ "$SMP" -gt 4 ] && SMP=4
+fi
 KEY=${KEY:-$DIR/$NAME.id}
 SEED=$DIR/$NAME.seed
 BASE=${BASE:-$(cd "$(dirname "$0")" && pwd)}
