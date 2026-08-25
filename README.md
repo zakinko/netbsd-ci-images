@@ -139,6 +139,14 @@ PROFILE=vultr sh mkimg.sh amd64 10.1     # NetBSD 機で。VPS 向けの版
 cd vultr && ansible-playbook up.yml -e image_url=https://.../amd64-10.1-vultr.img
 ```
 
+手元に NetBSD の機械が無くても組めます。`build-vultr-image` workflow が、
+release に置いてある NetBSD のイメージを runner で起こし、**その中で
+`mkimg.sh` を走らせて**持ち帰ります。
+
+```sh
+gh workflow run build-vultr-image -f authorized_key="$(cat ~/.ssh/id_rsa.pub)"
+```
+
 `PROFILE=vultr` はいつもの版と四つ違います。1.75 GiB (X 抜き)、root は
 `ld0a` (virtio-blk)、コンソールは VGA のまま、そして固めずに raw で置きます。
 理由はどれも Vultr 側の都合で、`mkimg.sh` と [vultr/README.md](vultr/README.md)

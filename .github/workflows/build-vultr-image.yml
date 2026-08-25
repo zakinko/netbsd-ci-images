@@ -1,0 +1,148 @@
+name: build-vultr-image
+
+# Vultr へ持っていく生イメージを組んで release に置く。
+#
+# mkimg.sh は NetBSD の上でしか動かない。vnconfig / disklabel / newfs /
+# installboot が要るためで、runner の Linux には無い。そこで release に
+# 置いてある NetBSD のイメージを runner で起こし、その中で mkimg.sh を
+# 走らせて、出来たものを ssh 越しに持ち帰る。手元に NetBSD の機械と root が
+# 要らなくなる。
+#
+# 組む相手と組ませる側は同じ port・同じ版にしてある。installboot は -m で
+# 他の port 向けにも書けるが、揃えておけば試す組み合わせが一つ減る。
+#
+# **root を通す公開鍵はイメージに焼かれる。** VPS にはホストから鍵を取りに
+# 行く先が無いので、この版だけは焼くしかない。焼いた鍵は release に置いた
+# イメージを見れば分かるので、Vultr が取り込み終わったら asset は落とすこと
+# (snapshot さえ出来ていれば立て直せる)。だから鍵は repo にも secret にも
+# 置かず、走らせるときに入力で渡す。
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'port'
+        required: false
+        default: 'amd64'
+      release:
+        description: '版'
+        required: false
+        default: '10.1'
+      authorized_key:
+        description: 'root に通す公開鍵 (ssh-ed25519 ... の一行)'
+        required: true
+      publish:
+        description: 'release に上げる'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+# 続けて掛けたときに、前のが VM を掴んだまま二つ目が 8123 を取りに行くと
+# 両方転ける。runvm.sh がゲストの rc.d に焼かれた番号を使うため変えられない。
+concurrency:
+  group: build-vultr-image
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      ARCH: ${{ inputs.arch }}
+      REL: ${{ inputs.release }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: QEMU を入れる
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils netpbm
+          ls -l /dev/kvm || echo "!! KVM が無い。emulation で 10 倍以上遅い"
+
+      - name: 名前を決める
+        run: |
+          echo "BUILDER=$ARCH-$REL" >> $GITHUB_ENV
+          echo "IMGNAME=$ARCH-$REL-vultr" >> $GITHUB_ENV
+
+      - name: 組ませる側の NetBSD を起こす
+        run: |
+          set -e
+          gh release download images --repo "$GITHUB_REPOSITORY" \
+            -p "$BUILDER.qcow2" -p "$BUILDER.qemu"
+          # KEEP=1 で qcow2 に直接書く。-snapshot だと差分が TMPDIR に載り、
+          # セットの展開とイメージ本体で 3GB ほど積むことになる。
+          KEEP=1 sh runvm.sh "$BUILDER" 2222
+
+      - name: ゲストの中で mkimg.sh を走らせる
+        run: |
+          set -e
+          SSH=$(cat "$BUILDER.ssh")
+          # 焼く鍵。mkimg.sh は BASE/authorized_keys を先に見る。
+          printf '%s\n' "${{ inputs.authorized_key }}" | \
+            $SSH 'cat > /root/authorized_keys'
+          $SSH 'cat > /root/mkimg.sh' < mkimg.sh
+          $SSH "PROFILE=vultr BASE=/root sh /root/mkimg.sh $ARCH $REL"
+
+      - name: 出来たものを持ち帰る
+        run: |
+          set -e
+          SSH=$(cat "$BUILDER.ssh")
+          $SSH "cat /root/$IMGNAME.img"  > "$IMGNAME.img"
+          $SSH "cat /root/$IMGNAME.qemu" > "$IMGNAME.qemu"
+          ls -l "$IMGNAME.img"
+          # release の asset は一つ 2GiB まで。超えていたら上げる前に気づく。
+          [ "$(stat -c %s "$IMGNAME.img")" -lt 2147483648 ] || {
+            echo "!! 2GiB を超えた。SECT を減らすか X を落とすこと"; exit 1; }
+
+      - name: 組ませた側を止める
+        if: always()
+        run: sh stopvm.sh "$BUILDER" || true
+
+      # Vultr にシリアルは無いので、焼いたイメージのコンソールは VGA のまま。
+      # 起動を確かめる手は画面を撮るしかない。root が ld0a で合っているか、
+      # multi-user まで行くかは、この一枚で分かる。
+      - name: 焼いたイメージが起動するか、画面を撮って残す
+        continue-on-error: true
+        run: |
+          set -e
+          SSH=no sh runvm.sh "$IMGNAME" 2223
+          sleep 120
+          python3 - <<'PY'
+          import os, socket
+          s = socket.socket(socket.AF_UNIX)
+          s.connect(os.environ["IMGNAME"] + ".mon")
+          s.sendall(b"screendump " + os.path.abspath("boot.ppm").encode() + b"\n")
+          import time; time.sleep(5)
+          PY
+          pnmtopng boot.ppm > boot.png
+          sh stopvm.sh "$IMGNAME" || true
+
+      - name: 撮った画面を artifact に
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-screen
+          path: boot.png
+          if-no-files-found: warn
+
+      - name: release に上げる
+        if: inputs.publish
+        run: |
+          set -e
+          cat > notes.md <<'NOTE'
+          **この release のイメージには root を通す公開鍵が焼かれています。**
+
+          VPS にはホストから鍵を取りに行く先が無いので、焼くしかありません。
+          焼いた鍵はイメージを見れば分かるので、Vultr が取り込み終わったら
+          asset は落としてください。snapshot さえ出来ていれば立て直せます。
+
+          images の側は今までどおり鍵を焼いていません。
+          NOTE
+          gh release view vultr --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create vultr --repo "$GITHUB_REPOSITORY" \
+              --title "VPS へ書く生イメージ" --notes-file notes.md
+          gh release upload vultr "$IMGNAME.img" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "取り込ませる URL:"
+          echo "  https://github.com/$GITHUB_REPOSITORY/releases/download/vultr/$IMGNAME.img"

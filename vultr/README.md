@@ -42,6 +42,28 @@ IP しか通らないので、手元の回線から叩くならそこに足し�
 PROFILE=vultr sh mkimg.sh amd64 10.1
 ```
 
+### CI で焼く
+
+手元に NetBSD の機械が無くても組める。runner は Linux だが、release に
+置いてある NetBSD のイメージを QEMU で起こし、**その中で `mkimg.sh` を
+走らせて**出来たものを ssh 越しに持ち帰れば同じことになる。
+[`build-vultr-image`](../.github/workflows/build-vultr-image.yml) が
+それをする。
+
+```sh
+gh workflow run build-vultr-image \
+    -f arch=amd64 -f release=10.1 \
+    -f authorized_key="$(cat ~/.ssh/id_rsa.pub)"
+```
+
+`vultr` という別の release に上がる。**鍵を焼いたイメージなので、`images`
+とは分けてある。** 取り込みが済んだら asset は落とすこと (snapshot さえ
+出来ていれば立て直せる)。
+
+焼いたイメージが起動するかも、そのまま QEMU で確かめて画面を artifact に
+残す。VGA しか出ていないので読む手はこれしかないが、`root device:` で
+止まっているのか multi-user まで行ったのかはこの一枚で分かる。
+
 いつもの版との違いは四つ。どれも Vultr 側の都合で、理由は `mkimg.sh` の
 `PROFILE` のところに書いてある。
 
