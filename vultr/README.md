@@ -75,8 +75,22 @@ gh workflow run build-vultr-image \
 | 出来上がり | `.img.gz` | `.img` (raw のまま) |
 
 小さいのは置き場の都合で、大きいのは Vultr 側の都合ではない。10GB の
-ディスクに 1.75GiB を書くので残りは空いたままになる。使うなら MBR と
-disklabel を広げて `resize_ffs` を掛ける。
+ディスクに 1.75GiB を書くので残りは空いたままになるが、**起動すると自分で
+広がる。** 焼いてある `rc.d/growlabel` が disklabel をディスク一杯まで伸ばし、
+続けて NetBSD 標準の `resize_root` が fs を伸ばす。そのために一度だけ再起動
+するので、初回だけ二回上がる。
+
+ここには以前「使うなら MBR と disklabel を広げて `resize_ffs` を掛ける」と
+書いてあった。**そのとおりにやると壊れる。** instance にはその root しか無く、
+それは mount されている。mount した fs に `resize_ffs` は拒否を返さず、伸ばした
+と言うのに `dumpfs` で見ると元の大きさのままで、書いた瞬間に bitmap が食い違い
+fsck が `UNRESOLVED INCONSISTENCIES REMAIN` を出す。カーネルが抱えている古い
+superblock が後から書き戻されるためで、qemu で再現して確かめた。
+
+だから伸ばせるのは root がまだ read-only の起動途中だけ、しかも伸ばした直後に
+`reboot -n` して落とす必要がある。`rc.d/resize_root` がその位置に居るので、
+足りない label の側だけ `growlabel` で補い、`resize_root_postcmd` で落として
+いる。
 
 ## 置き場
 

@@ -411,6 +411,148 @@ if [ -z "${SWAPDEV-}" ]; then
 	echo "no_swap=YES" >> $MNT/etc/rc.conf
 fi
 
+# 起動して自分で広がるようにする。
+#
+# VPS 向けの版はどちらも、焼いたときの大きさの MBR と disklabel を持ったまま、
+# それより大きいディスクの先頭に載る。Vultr は 10GB のディスクに 1.75GiB の
+# snapshot を書き戻すし、さくらは 200GB のディスクの先頭に dd する。理由は
+# 別々で、前者は release の asset 2GiB の上限、後者は戻せない窓を短くしたい
+# から。結果は同じで、残りが空いたままになる。
+#
+# **mount したまま resize_ffs を掛けてはいけない。** 拒否されないのに壊れる。
+# カーネルが持っている superblock は古いままなので、伸ばした直後に書くと
+# bitmap が食い違い、fsck が UNRESOLVED INCONSISTENCIES REMAIN を出す。実際に
+# qemu で踏んだ。
+#
+# NetBSD にはそのための段が用意されている。rc.d の並びが
+#
+#	fsck_root -> [ここ] -> root (mount -u -w /) -> mountcritlocal
+#
+# になっていて、resize_root がその間に走る。root はまだ read-only なので、
+# 書いた superblock がカーネルの古い写しに潰されない。
+#
+# 足りないのは label の方で、rc.conf の既定に resize_disklabel という名前は
+# あるのに、スクリプトは etc セットに入っていない。そこだけ自前で書く。
+#
+# vultr/README.md は長いこと「使うなら MBR と disklabel を広げて resize_ffs を
+# 掛ける」と書いていたが、instance にはその root しか無く、それは mount されて
+# いる。読んだとおりに実行すると上の壊れ方をする。仕掛けはプロファイルに依らな
+# いので、両方に焼いて README のその段落を消す。
+if [ $VPS = yes ]; then
+	cat > $MNT/etc/rc.d/growlabel <<'GLBL'
+#!/bin/sh
+#
+# PROVIDE: growlabel
+# REQUIRE: fsck_root
+# BEFORE: resize_root
+# KEYWORD: interactive
+#
+# 焼いたときの大きさの disklabel を、実際のディスク一杯まで広げる。fs の方は
+# 続けて走る resize_root が伸ばす。
+#
+# growlabel_swap に sector 数を渡すと、その分をディスクの末尾に b: として残す。
+# dd の元にした控えをそこに置いてあるうちは fstab に swap を書かないこと。
+# swapon した時点で控えが消える。
+#
+# 広げられなくても起動は続ける。小さいまま上がれば ssh で入って手で直せるが、
+# ここで止めるとコンソールの無い箱は失われる。
+#
+# / がまだ read-only なので中間ファイルは置けない。label は変数に読み、書き
+# 戻しはパイプと /dev/stdin で渡す。
+
+$_rc_subr_loaded . /etc/rc.subr
+
+name="growlabel"
+rcvar=$name
+start_cmd="growlabel_start"
+stop_cmd=":"
+
+growlabel_start()
+{
+	local dev disk total swap asize boff cur have
+
+	dev=$(sysctl -n kern.root_device) || return 0
+	disk=${dev%[a-p]}
+	[ -n "$disk" ] || return 0
+
+	# 実寸はカーネルが持っている既定の geometry から取る。on-disk の label は
+	# 焼いたときの大きさを言うので当てにならない。
+	total=$(fdisk "$disk" 2>/dev/null |
+		awk '/BIOS disk geometry/ { f = 1 }
+		     f && /^total sectors:/ { print $3; exit }')
+	case "$total" in
+	''|*[!0-9]*)	echo "growlabel: $disk の大きさが読めない"; return 0 ;;
+	esac
+
+	cur=$(disklabel -r "$disk" 2>/dev/null) || return 0
+	have=$(printf '%s\n' "$cur" | awk '/^total sectors:/ { print $3 }')
+	if [ "$have" = "$total" ]; then
+		echo "Not resizing $disk label: already correct size"
+		return 0
+	fi
+
+	swap=${growlabel_swap:-0}
+	case "$swap" in
+	''|*[!0-9]*)	swap=0 ;;
+	esac
+
+	boff=$((total - swap))
+	asize=$((boff - 63))
+	[ "$asize" -gt 0 ] || { echo "growlabel: 広げる先が無い"; return 0; }
+
+	echo "Resizing $disk label to $total sectors"
+	fdisk -f -u -0 -s "169/63/$((total - 63))" -a "$disk" > /dev/null 2>&1 ||
+		{ echo "growlabel: fdisk が失敗した"; return 0; }
+
+	# a: の fsize/bsize/cpg は焼いたときの newfs に合わせてあるので、読んだ
+	# ものをそのまま書き戻す。決め打ちにすると fs と label が食い違う。
+	# unused の行は fsize と bsize まで書かないと "too few fields" で撥ねられる。
+	if printf '%s\n' "$cur" | awk \
+		-v tot="$total" -v cyl="$((total / 1008))" \
+		-v asz="$asize" -v swp="$swap" -v boff="$boff" '
+		/^total sectors:/ { print "total sectors: " tot; next }
+		/^cylinders:/	  { print "cylinders: " cyl; next }
+		/^ a:/ { printf " a: %9d %9d %10s %6s %5s %4s\n", \
+				 asz, 63, $4, $5, $6, $7
+			 if (swp > 0)
+				printf " b: %9d %9d %10s\n", swp, boff, "swap"
+			 next }
+		/^ b:/ { next }
+		/^ c:/ { printf " c: %9d %9d %10s %6d %5d\n", tot - 63, 63, "unused", 0, 0; next }
+		/^ d:/ { printf " d: %9d %9d %10s %6d %5d\n", tot, 0, "unused", 0, 0; next }
+		{ print }
+	' | disklabel -R -r "$disk" /dev/stdin; then
+		echo "growlabel: $disk を $total sector にした"
+	else
+		echo "growlabel: disklabel が失敗した。小さいまま続ける"
+	fi
+	return 0
+}
+
+load_rc_config $name
+run_rc_command "$1"
+GLBL
+	chmod 555 $MNT/etc/rc.d/growlabel
+	# 伸ばしたら、その場で落とす。
+	#
+	# resize_ffs は root が read-only の間に新しい superblock を書くが、
+	# カーネルはまだ焼いたときの大きさの写しを抱えている。そのまま
+	# mount -u -w / して multi-user まで行くと、古い写しが書き戻されて
+	# 伸びが無かったことになり、しかも bitmap が食い違って fsck が
+	# UNRESOLVED INCONSISTENCIES REMAIN を出す。qemu で dumpfs を見て
+	# 確かめた: 「Resizing / 」と言った後の on-disk が元の大きさのまま。
+	#
+	# reboot -n は sync しないので、書いた superblock がそのまま残る。
+	# 二度目の起動でカーネルが読み直し、resize_ffs -c が「もう合っている」
+	# と言うので postcmd は二度と走らない。ループにはならない。
+	cat >> $MNT/etc/rc.conf <<RCC
+growlabel=YES
+growlabel_swap=${SWAPSECT:-0}
+resize_root=YES
+resize_root_postcmd="/sbin/reboot -qn"
+RCC
+fi
+
 # Vultr の一番安い plan には IPv4 が付かず、住所は RA で降ってくる。RA を
 # 受け取るかどうかは ip6mode で決まるので、dhcpcd を上げてあっても既定の
 # host のままでは住所が付かないまま上がってしまう。
