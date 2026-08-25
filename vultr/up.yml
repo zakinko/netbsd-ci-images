@@ -253,25 +253,14 @@
         d=/usr/home/{{ target_hostname }}/{{ item.name }}/.ssh
         mkdir -p $d
         cat > $d/authorized_keys <<'AKEY'
-        {{ item.key }}
+        {{ lookup('url', 'https://github.com/' ~ item.github ~ '.keys', split_lines=false) | trim }}
         AKEY
         chmod 700 $d; chmod 600 $d/authorized_keys
         chown -R {{ item.name }} $d
       loop: "{{ accounts }}"
       loop_control:
         label: "{{ item.name }}"
-      when: item.key | length > 0
       changed_when: true
-
-    - name: 鍵の無いアカウントを知らせる
-      ansible.builtin.debug:
-        msg: >-
-          {{ item.name }} の鍵が無い。vultr/local.yml に
-          {{ item.name }}_key として置けば次の実行で焼かれる
-      loop: "{{ accounts }}"
-      loop_control:
-        label: "{{ item.name }}"
-      when: item.key | length == 0
 
     - name: 入り方
       ansible.builtin.debug:

@@ -50,17 +50,20 @@ target_hostname: "{{ label }}"
 # 作るアカウント。uid と gid は bambi に合わせてある。同じ人が同じ番号で
 # 居ると、tar で持ち回ったときに所有者がずれない。
 #
-# 鍵はここに書かないこと。この repo は public。zakinko の分は手元の鍵から
-# 読み、fukachan の分は追跡外の vultr/local.yml に fukachan_key として置く。
-zakinko_key_file: "~/.ssh/id_rsa.pub"
-fukachan_key: ""
-
+# 鍵は GitHub から取る。repo に書かずに済み、向こうで入れ替えれば次の実行で
+# 追随する。github の項に書くのは **アカウント名であって人名ではない**。
+#
+#   fukachan -> fmlorg     Ken'ichi Fukamachi, https://www.fml.org/
+#
+# 紛らわしいものが二つある。GitHub の fukachan は名前も鍵も無い別アカウント、
+# fukamachi は Eitaro Fukamachi さんで別人。どちらを入れても他人に shell を
+# 渡すことになる。
 accounts:
   - name: zakinko
     uid: 3001
     wheel: true
-    key: "{{ lookup('file', zakinko_key_file) }}"
+    github: zakinko
   - name: fukachan
     uid: 2801
-    wheel: false
-    key: "{{ fukachan_key }}"
+    wheel: true
+    github: fmlorg
