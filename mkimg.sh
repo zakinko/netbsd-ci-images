@@ -683,6 +683,28 @@ fi
 mkdir -p $MNT/kern $MNT/proc $MNT/dev/pts
 ( cd $MNT/dev && sh MAKEDEV all ) > /dev/null 2>&1 || echo "    (MAKEDEV 省略)"
 
+# 証明書を張る。
+#
+# 焼いたイメージは /etc/openssl/certs が空で、**https を一切引けない。** 信頼点
+# そのものは base の /usr/share/certs/mozilla に 150 個入っているが、それを
+# /etc/openssl/certs へ展開するのは sysinst の仕事で、セットを直接展開して作る
+# この方法にはその段が無い。
+#
+# 気づきにくいのは、pkg_add が返すのが証明書の話ではなく "no pkg found for
+# 'pkgin', sorry" だから。置き場が悪いのだと思って URL を疑うことになる。
+# 実機に入れ替えてから踏んだ。
+#
+# certctl は展開先を引数で選べないので chroot して走らせる。ホストと相手の arch
+# が違うと動かないので、そのときは黙って飛ばす。起動してから certctl rehash を
+# 打てば済む。
+if [ -x $MNT/usr/sbin/certctl ] && [ -d $MNT/usr/share/certs ]; then
+	if chroot $MNT /usr/sbin/certctl rehash > /dev/null 2>&1; then
+		echo "    (証明書 $(ls $MNT/etc/openssl/certs 2>/dev/null | wc -l) 本)"
+	else
+		echo "    (certctl は走らなかった。起動してから rehash すること)"
+	fi
+fi
+
 echo "--- ブートローダ ---"
 # installboot と fdisk -c は生デバイスに書くので、先に要るものを取り出して
 # から umount する。
