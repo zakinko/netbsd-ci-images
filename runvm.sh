@@ -55,7 +55,11 @@ BASE=${BASE:-$(cd "$(dirname "$0")" && pwd)}
 . "$META"
 SEED_PORT=${SEED_PORT:-8123}
 VMM=${VMM:-qemu}
-MEM=${MEM:-2048}
+# 2048 では足りない。イメージは no_swap=YES で焼いてあるので swap が無く、
+# コンパイラが要求した瞬間に足りなければ、そこで殺される。実際 cmake を
+# 4 本並列で組ませたら g++ が "Killed signal terminated program cc1plus" で
+# 落ちた。CI の runner は 16 GB あるので、渡さない理由が無い。
+MEM=${MEM:-4096}
 EXTRAARGS=${EXTRAARGS:-}
 ANSWERS=${ANSWERS:-}
 SSHOPTS=${SSHOPTS:-}
