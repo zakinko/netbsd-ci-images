@@ -100,10 +100,39 @@ workflow)。ただし何も残しません。イメージも媒体も release �
 | gxemul の port (pmax hpcmips landisk) で ssh | gxemul に user networking も port forward も無い。ホストから繋ぐ口が作れない。コンソール経由でなら使える |
 | simh の vax で ssh | 同上。simh の VAX の NIC は pcap 直結で、NAT が無い |
 | NetBSD 1.2.1 以前 | sysinst そのものが 1.3 から。anita では入らない |
+| NetBSD 5.x 以前を QEMU の x86 で | 下記のとおり、四通り試して届かなかった |
 | NetBSD 1.4 以前で base の ssh | ssh が base に入るのは 1.5 から。OpenSSH を自前で組む道は用意したが、gcc 2.7 世代では通らない見込み |
 | NetBSD 0.8 / 0.9 | 公式ミラーに残っていない (`archive.netbsd.org` は 1.0 から)。第三者アーカイブにも 1.0 までしか見当たらない。加えて ssh も pkgsrc も存在しない世代 |
 | Tru64 を QEMU で | QEMU の alpha は SRM を持たない。手元の `firmware/es40*` は ES40 の実機用で、QEMU の clipper では使えない |
 | AIX 5.3 を QEMU で | POWER の QEMU 対応が薄く、AIX が要求する機種が揃わない |
+
+### NetBSD 5.x 以前で試したこと
+
+入れることは出来る。**入ったものが起動できない。** 既定の pc では、install は
+完走するのに、起動した途端に
+
+	piixide0:0:0: lost interrupt
+		type: ata tc_bcount: 16384 tc_skip: 0
+
+を繰り返して login まで来ない。virtio は 6.0 からなので 5.x では使えない。
+CI で四通り試した結果が以下。
+
+| 試したこと | どうなったか |
+| --- | --- |
+| `-machine pc-i440fx-4.2` | 変わらず。機械の型を古くしても IDE の挙動は同じ |
+| `-machine q35` (AHCI 狙い) | 変わらず。**NetBSD 5 は ICH9 を互換モードで piixide として掴む** |
+| `q35` + CD から起こす | 同じ。floppy の kernel が AHCI を知らない件は解けたが、掴み方が変わらない |
+| `-machine isapc` + CD | **piixide は消えた** (`wdc0 at isa0 port 0x1f0-0x1f7 irq 14`)。ただし sysinst が最後まで進まず時間切れ |
+
+isapc は方向としては当たっている。PCI を使わないので DMA の取りこぼしが起きる
+余地が無い。残りは sysinst が止まる理由で、ISA だけの機械では CD や NIC の
+見え方が変わるあたりが怪しい。
+
+次に試すなら anita 側になる。anita は i386 のディスクを常に既定の IDE で
+繋いでおり、繋ぎ方を選ぶ口が無い。pip で入れているので、CI の中で小さな patch
+を当てて `-drive if=none` + コントローラ指定を渡せるようにすれば、pc のまま
+AHCI や SCSI に載せられる。そこまでやる価値があるかは、5.x 以前が要るかどうか
+次第。
 
 ## 見込みのあるもの
 
