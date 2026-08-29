@@ -124,6 +124,29 @@ ansible-playbook up.yml -e image_url=https://github.com/.../amd64-10.1-vultr.img
 
 一度取り込んだ snapshot は残るので、二度目からは `image_url` は要らない。
 
+**取り込みが済んだら置き場の asset を落とすこと。** snapshot さえ在れば立て直せる
+し、鍵を焼いたイメージを公開したまま残す理由も無い。`up.yml` が取り込んだ回に
+だけその命令を出す。
+
+```sh
+gh release delete-asset vultr amd64-11.0-vultr.img --repo <owner>/netbsd-ci-images --yes
+```
+
+### 同じイメージから複数台立てる
+
+snapshot の名前は `snapshot_name` で、既定は `label` と同じ。揃えれば取り込みは
+一度で済み、instance だけが増える。
+
+```sh
+ansible-playbook up.yml -e label=emacs20 -e snapshot_name=netbsd-11.0-amd64 \
+    -e image_url=https://github.com/.../amd64-11.0-vultr.img
+ansible-playbook up.yml -e label=emacs21 -e snapshot_name=netbsd-11.0-amd64
+```
+
+二台目は取り込み済みなので `image_url` は要らない。**揃えたときは
+`down.yml -e drop_snapshot=true` を打たないこと。** まだ使っている instance の
+立て直しができなくなる。落とすのは全部壊したあと。
+
 ```sh
 ansible-playbook down.yml                        # instance だけ壊す
 ansible-playbook down.yml -e drop_snapshot=true  # snapshot も落とす

@@ -16,6 +16,17 @@ label: netbsd-vultr
 plan: vc2-1c-0.5gb-v6
 region: ewr
 
+# snapshot の名前。既定は label と同じで、これまでどおり一台につき一つ
+# 取り込む。同じイメージから複数台立てるときは、ここを揃えて label だけ
+# 変えると、取り込みが一度で済む。
+#
+#   ansible-playbook up.yml -e label=emacs20 -e snapshot_name=netbsd-11.0-amd64
+#   ansible-playbook up.yml -e label=emacs21 -e snapshot_name=netbsd-11.0-amd64
+#
+# 揃えたときは down.yml で snapshot を落とさないこと。まだ使っている instance
+# の立て直しができなくなる。落とすのは全部壊したあと。
+snapshot_name: "{{ label }}"
+
 # mkimg.sh に PROFILE=vultr を渡して焼いた raw イメージの置き場。
 # Vultr がここへ取りに来るので、認証もクエリも付かない公開 URL であること。
 # 詳しくは README.md。

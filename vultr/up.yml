@@ -53,14 +53,14 @@
       ansible.builtin.set_fact:
         snapshot_exists: >-
           {{ snapshots.vultr_snapshot_info
-             | selectattr('description', 'equalto', label)
+             | selectattr('description', 'equalto', snapshot_name)
              | list | length > 0 }}
 
     - name: 無ければ image_url が要る
       ansible.builtin.assert:
         that: image_url | length > 0
         fail_msg: >-
-          "{{ label }}" という snapshot がまだ無い。PROFILE=vultr で焼いた
+          "{{ snapshot_name }}" という snapshot がまだ無い。PROFILE=vultr で焼いた
           raw イメージを公開 URL に置き、-e image_url=... で渡すこと
       when: not snapshot_exists
 
@@ -84,7 +84,7 @@
     # 固めずに置いているのはこのため。
     - name: raw イメージを snapshot として取り込む
       vultr.cloud.snapshot:
-        description: "{{ label }}"
+        description: "{{ snapshot_name }}"
         url: "{{ resolved.stdout }}"
         uefi: false  # mkimg.sh が作るのは MBR + disklabel の BIOS 起動
       when: not snapshot_exists
@@ -101,12 +101,25 @@
       vars:
         snap: >-
           {{ snapshots.vultr_snapshot_info
-             | selectattr('description', 'equalto', label)
+             | selectattr('description', 'equalto', snapshot_name)
              | list | first | default({}) }}
       until: snap.status | default('') == 'complete'
       failed_when: snap == {}
       retries: 90
       delay: 20
+
+    # 取り込みが済めば置き場の asset は要らない。snapshot さえ在れば
+    # 立て直せる。release に置きっぱなしにすると、鍵を焼いたイメージが
+    # 公開されたまま残ることにもなる。消すのはこちらの手では出来ない
+    # (GitHub 側の話なので) から、命令だけ出す。
+    - name: 置き場の asset を落とすよう促す
+      ansible.builtin.debug:
+        msg: >-
+          snapshot "{{ snapshot_name }}" を取り込んだ。置き場の asset はもう
+          要らないので落とすこと:
+          gh release delete-asset vultr {{ image_url | basename }}
+          --repo zakinko/netbsd-ci-images --yes
+      when: not snapshot_exists
 
     # 何も付けないと 22 番が全世界に開く。鍵しか通らない設定なので入られ
     # はしないが、開いている必要も無い。
@@ -154,7 +167,7 @@
         hostname: "{{ label }}"
         region: "{{ region }}"
         plan: "{{ plan }}"
-        snapshot: "{{ label }}"
+        snapshot: "{{ snapshot_name }}"
         firewall_group: "{{ label }}"
         enable_ipv6: true
         state: present
