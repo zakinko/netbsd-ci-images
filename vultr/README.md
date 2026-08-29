@@ -80,6 +80,16 @@ gh workflow run build-vultr-image \
 続けて NetBSD 標準の `resize_root` が fs を伸ばす。そのために一度だけ再起動
 するので、初回だけ二回上がる。
 
+`growlabel` が焼かれる前に作ったイメージには、この仕掛けが入っていない。
+起動しても `/` は 1.75GiB のままで、`/etc/rc.d/growlabel` も無い。焼いた
+日が `mkimg.sh` に `growlabel` が入るより前かどうかで決まる。**手で
+`disklabel -R` して `resize_ffs` を掛けると下の理由で壊れる**ので、その
+イメージは捨てて焼き直すのが早い。
+
+`/etc/rc.d/growlabel` だけを後から置いて `growlabel=YES` を書き、二度
+再起動すれば label と fs の両方が伸びる。ただし一度目の再起動で label が
+伸び、二度目で `resize_root` が fs を伸ばす、という順になる。
+
 ここには以前「使うなら MBR と disklabel を広げて `resize_ffs` を掛ける」と
 書いてあった。**そのとおりにやると壊れる。** instance にはその root しか無く、
 それは mount されている。mount した fs に `resize_ffs` は拒否を返さず、伸ばした
@@ -107,6 +117,19 @@ https://github.com/.../amd64-10.1-vultr.img
 固まったようにしか見えません。[up.yml](up.yml) が渡す前に `curl -sIL` で
 最終 URL を解決しているのはこのためです。クエリ文字列そのものは通ります
 (署名付き URL で取り込めることを確認済み)。
+
+`up.yml` を使わず `vultr-cli` や API を直に叩くときは、**自分で解決してから
+渡すこと。** 忘れると `pending` の ID が返り、40 秒ほどで消えて
+`Invalid snapshot ID.` になる。エラーメッセージは取り込み失敗を指さないので、
+何が起きたか分からない。
+
+```sh
+U=$(curl -s -o /dev/null -w '%{redirect_url}' \
+	https://github.com/<owner>/netbsd-ci-images/releases/download/vultr/amd64-11.0-vultr.img)
+vultr-cli snapshot create-url -u "$U" -d 'netbsd-11.0-amd64'
+```
+
+署名は一時間ほどで切れるが、Vultr は受け取った直後に取りに行くので間に合う。
 
 asset は一つ 2GiB まで、しかも Vultr は gz を受け取りません。1.75 GiB に
 切ってあるのはこの二つに挟まれた結果で、余裕は 250MB ほどしかありません。
