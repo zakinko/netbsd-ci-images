@@ -701,7 +701,27 @@ if [ -x $MNT/usr/sbin/certctl ] && [ -d $MNT/usr/share/certs ]; then
 	if chroot $MNT /usr/sbin/certctl rehash > /dev/null 2>&1; then
 		echo "    (証明書 $(ls $MNT/etc/openssl/certs 2>/dev/null | wc -l) 本)"
 	else
-		echo "    (certctl は走らなかった。起動してから rehash すること)"
+		# chroot が使えないのは、焼いている側と像の arch が違うとき。
+		# CI では Linux の runner の上で NetBSD の像を焼くので、ここは
+		# 必ず飛ぶ。飛んだことはこの行に出るが、焼くときのログを後から
+		# 読む人はいないので、実質は黙って空のまま出荷される。
+		#
+		# 起きてから一度だけ張らせる。/etc/openssl/certs が空のときだけ
+		# 走るので、chroot が効いた像に置いても何も起きないし、二度目の
+		# 起動でも走らない。rc.d に certctl の枠は無いので rc.local を使う。
+		#
+		# これが要るのは「焼いた像をそのまま実機や VPS へ持っていく」道
+		# だけ。VM を起こす CI の道は guest-bootstrap.sh が rehash する。
+		echo "    (certctl は走らなかった。起動時に張る段を置く)"
+		cat >> $MNT/etc/rc.local <<'RCL'
+
+# 焼いたときに certctl を走らせられなかったぶんを、起動時に一度だけ張る。
+if [ -x /usr/sbin/certctl ] && [ -d /usr/share/certs ] &&
+   [ -z "$(ls /etc/openssl/certs 2>/dev/null)" ]; then
+	echo "certctl rehash (初回)"
+	/usr/sbin/certctl rehash || true
+fi
+RCL
 	fi
 fi
 
