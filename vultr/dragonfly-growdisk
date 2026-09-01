@@ -1,0 +1,135 @@
+#!/bin/sh
+#
+# PROVIDE: growdisk
+# REQUIRE: fsck
+# BEFORE: root
+#
+# 焼いたイメージは配られる先のディスクより小さい。置き場の上限 (release の
+# asset 一つ 2GiB) に収めるためで、残りは空いたまま届く。ここで slice と
+# label と fs をディスク一杯まで伸ばし、一度だけ再起動する。
+#
+# root がまだ read-only の間にやる。rw で mount した fs を伸ばすと、カーネルが
+# 抱えている古い superblock が後から書き戻されて bitmap が食い違う。伸ばした
+# 直後に reboot -qn で落とすのはそのため。sync してはいけない。
+#
+# 二度目の起動では大きさが揃っているので何もしない。
+
+. /etc/rc.subr
+
+name="growdisk"
+rcvar="growdisk"
+start_cmd="growdisk_start"
+stop_cmd=":"
+
+# 焼いたときに disklabel へ入れた名前。自分のディスクはこれで見つける。
+# fstab も loader.conf も /dev/part-by-label/<この名前>.a を指している。
+: ${growdisk_label:="DFLYVULTR"}
+
+growdisk_start()
+{
+	disk=
+	for d in $(sysctl -n kern.disks); do
+		case $d in
+		md*|vn*|cd*|acd*)	continue ;;
+		esac
+		if disklabel64 "/dev/${d}s1" 2>/dev/null |
+		    grep -q "^label:[ 	]*${growdisk_label}\$"; then
+			disk=$d
+			break
+		fi
+	done
+	[ -n "$disk" ] || { echo "growdisk: 自分のディスクが分からない"; return 0; }
+
+	# diskinfo は size=0x… をバイトで出す。
+	total=$(diskinfo "/dev/$disk" | sed -n 's/.*size=0x\([0-9a-f]*\).*/\1/p')
+	case $total in
+	''|*[!0-9a-f]*)	echo "growdisk: $disk の大きさが読めない"; return 0 ;;
+	esac
+	total=$((0x$total / 512))
+
+	cur=$(fdisk "/dev/$disk" 2>/dev/null |
+		sed -n 's/.*start 63, size \([0-9]*\).*/\1/p' | head -1)
+	case $cur in
+	''|*[!0-9]*)	echo "growdisk: $disk の slice が読めない"; return 0 ;;
+	esac
+
+	# 63 は slice の先頭。余地がこれだけ無ければ、もう広げ終わっている。
+	#
+	# 閾値を小さく取ってはいけない。**fdisk -I は slice をシリンダ境界で
+	# 丸める**ので、広げ終わった後も末尾に一シリンダぶん (ここでは 2048
+	# sector) 余りが残る。最初これをちょうど 2048 にしていたため、二度目の
+	# 起動でも「まだ広げられる」と読んで label を書き直し、growfs は伸びない
+	# ので reboot もせず、書き直したせいで root を rw に出来ずに single user
+	# へ落ちた。一シリンダは高々 16065 sector なので、32MB 取っておけば
+	# 丸めと区別が付く。
+	[ $((total - 63 - cur)) -ge 65536 ] || return 0
+
+	echo "growdisk: $disk を $total sector まで広げる"
+
+	# slice 1 をディスク一杯に取り直す。先頭 (63) は動かないので中身は
+	# そのまま。fdisk は mount 中のディスクにも書けて、新しい大きさは
+	# その場でカーネルに入る (diskinfo /dev/${disk}s1 で確かめた)。
+	fdisk -IB "/dev/$disk" > /dev/null 2>&1 ||
+		{ echo "growdisk: fdisk が失敗した。小さいまま続ける"; return 0; }
+
+	# ここから先はディスクを読めなくなる。label を書き直す一瞬、root の
+	# partition がカーネルから消えるためで、まだ page-in していない実行
+	# ファイルはそこで読めない。最初はこれで awk が
+	#
+	#	vnode_pager_getpage: I/O read error
+	#	eval: awk: Input/output error
+	#
+	# と落ち、空の proto を渡して label を壊した。だから窓に入る前に、使う
+	# 道具を RAM へ写しておく。共有ライブラリと ld-elf.so.2 は走っている
+	# プロセスが軒並み写像しているので、そちらは読み直しが起きない。
+	#
+	# disklabel64 -R が書き出す先をファイルでしか受け取らないので、その
+	# 置き場も要る。root は read-only、/dev/stdin もこの段では開けない
+	# (procfs も fdescfs もまだ乗っていない)。同じ tmpfs で足りる。
+	mount -t tmpfs dummy /tmp ||
+		{ echo "growdisk: 置き場が作れない。小さいまま続ける"; return 0; }
+	for t in /sbin/disklabel64 /sbin/growfs /sbin/reboot /usr/bin/awk; do
+		cp "$t" /tmp/ ||
+			{ echo "growdisk: $t を写せない。小さいまま続ける"; return 0; }
+	done
+	PATH=/tmp:$PATH
+	export PATH
+
+	# label は自分の中に slice の大きさを控えており、fdisk では変わらない。
+	# 取り直させるには auto で書き直すしかないが、これは label: の名前も
+	# partition も消す。消えている間は /dev/part-by-label/… が無くなるので、
+	# 続く -R まで一気にやる。ここで転ぶと次は起動しない。
+	disklabel64 -r -w "/dev/${disk}s1" auto ||
+		{ echo "growdisk: label を取り直せない。小さいまま続ける"; return 0; }
+	disklabel64 "/dev/${disk}s1" |
+	    awk -v l="$growdisk_label" '
+		/^label:/		{ print "label: " l; next }
+		/^16 partitions:/	{ print; print "  a:\t*\t*\t4.2BSD"; next }
+					{ print }' > /tmp/label
+	if [ ! -s /tmp/label ] || ! disklabel64 -R "/dev/${disk}s1" /tmp/label; then
+		echo "growdisk: !! label を書き戻せなかった。このままでは起動しない"
+		return 0
+	fi
+	# disklabel64 -B はここでは呼べない。二次ブートを /boot から読むので、
+	# ちょうど読めなくなっている窓の中では失敗する。呼ばなくても label を
+	# 書き直した後のディスクは起動した (4 GiB のディスクで確認)。auto が
+	# 書き直すのは label の頭だけで、boot2 はその先に居るため。
+
+	# root がまだ read-only のこの位置でしか掛けられない。
+	growfs -y "/dev/${disk}s1a" || echo "growdisk: growfs が失敗した"
+
+	# growfs が失敗しても落とす。label を書き直した時点で root の device が
+	# 別物になっており、この後 rc.d/root が mount -u -o rw / を掛けても
+	#
+	#	cannot update mount, v_rdev does not match
+	#	specified device does not match mounted device
+	#
+	# で撥ねられ、startup aborted から single user に落ちる。戻れる道は
+	# 落とすことしかない。
+	echo "growdisk: 一度落とす"
+	# 伸びた superblock を読み直させる。sync すると古いほうが書き戻る。
+	reboot -qn
+}
+
+load_rc_config $name
+run_rc_command "$1"

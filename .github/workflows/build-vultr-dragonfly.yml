@@ -1,0 +1,134 @@
+name: build-vultr-dragonfly
+
+# Vultr へ持っていく DragonFly の生イメージを組んで release に置く。
+#
+# NetBSD の側 (build-vultr-image.yml) は mkimg.sh が配布セットを展開して
+# 組むが、DragonFly には配布セットが無い。公開されているのは起動できる live
+# の img だけなので、それを runner の QEMU で起こし、その中で
+# vultr/dragonfly-install.sh を走らせて、繋いでおいた生ディスクへ入れる。
+#
+# **root を通す公開鍵はイメージに焼かれる。** VPS にはホストから鍵を取りに
+# 行く先が無いのでそうするしかない。焼いた鍵は release に置いたイメージを
+# 見れば分かるので、Vultr が取り込み終わったら asset は落とすこと。だから
+# 鍵は repo にも secret にも置かず、走らせるときに入力で渡す。
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'DragonFly の版'
+        required: false
+        default: '6.4.2'
+      authorized_key:
+        description: 'root に通す公開鍵 (ssh-ed25519 ... の一行)'
+        required: true
+      size:
+        description: '焼く大きさ (MiB)'
+        required: false
+        default: '1024'
+      publish:
+        description: 'release に上げる'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-vultr-dragonfly
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      REL: ${{ inputs.release }}
+      SIZE: ${{ inputs.size }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: QEMU を入れる
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils netpbm
+          ls -l /dev/kvm || echo "!! KVM が無い。emulation で 10 倍以上遅い"
+
+      - name: 名前を決める
+        run: |
+          echo "TARGET=dragonfly-$REL-x86_64" >> $GITHUB_ENV
+          echo "IMGNAME=dragonfly-$REL-x86_64-vultr" >> $GITHUB_ENV
+
+      # live の img を配布元から取り、起こして ssh まで通す。ここで出来た
+      # out/<target>.raw が、次の段で入れる元になる。
+      - name: live の img を用意する
+        run: sh build.sh "$TARGET"
+
+      # 確かめる版は使い捨ての鍵で組む。出す版に焼くのは渡された鍵なので、
+      # runner にはその秘密鍵が無く、ssh で入って df を見ることが出来ない。
+      # 組み方も大きさも版も同じで、違うのは焼いた公開鍵だけ。
+      - name: 使い捨ての鍵で、確かめる版を組む
+        run: |
+          ssh-keygen -q -t ed25519 -f verify.key -N '' -C verify
+          cp verify.key.pub authorized_keys
+          SIZE="$SIZE" sh build-vultr-dragonfly.sh "$REL"
+
+      # 配られた先の大きさのディスクで起動して自分で広がるか。Vultr の一番
+      # 小さい plan でも 10 GB あるので、そこまで届くことを見る。
+      - name: 起動して自分で広がるか確かめる
+        run: KEY=$PWD/verify.key sh verify-vultr-dragonfly.sh "$REL" 10
+
+      - name: 出す版を、渡された鍵で組み直す
+        run: |
+          rm -f verify.key verify.key.pub
+          printf '%s\n' "${{ inputs.authorized_key }}" > authorized_keys
+          SIZE="$SIZE" sh build-vultr-dragonfly.sh "$REL"
+
+      # 出す版そのものにも一度火を入れる。鍵が違うので ssh では入れないから、
+      # 見るのは画面。root が見つからずに止まっているのか multi-user まで
+      # 行ったのかは、この一枚で分かる (NetBSD の側と同じやり方)。
+      - name: 出す版が起動するか、画面を撮って残す
+        run: |
+          set -e
+          MON=/tmp/pub.mon
+          qemu-system-x86_64 -enable-kvm -m 1024 -smp 2 \
+            -drive file="out/$IMGNAME.img",format=raw,if=virtio \
+            -display none -serial none -monitor "unix:$MON,server,nowait" &
+          EMUPID=$!
+          sleep 90
+          python3 screendump.py "$MON" out/publish.ppm
+          pnmtopng out/publish.ppm > out/publish.png
+          rm -f out/publish.ppm
+          kill $EMUPID || true
+
+      - name: コンソールの記録を artifact に
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: console-and-screens
+          path: |
+            out/*.log
+            out/*.png
+            out/*.ppm
+          if-no-files-found: warn
+
+      - name: release に上げる
+        if: inputs.publish
+        run: |
+          set -e
+          ls -l "out/$IMGNAME.img"
+          cat > notes.md <<'NOTE'
+          **この release のイメージには root を通す公開鍵が焼かれています。**
+
+          VPS にはホストから鍵を取りに行く先が無いので、焼くしかありません。
+          焼いた鍵はイメージを見れば分かるので、Vultr が取り込み終わったら
+          asset は落としてください。snapshot さえ出来ていれば立て直せます。
+
+          images の側は今までどおり鍵を焼いていません。
+          NOTE
+          gh release view vultr --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create vultr --repo "$GITHUB_REPOSITORY" \
+              --title "VPS へ書く生イメージ" --notes-file notes.md
+          gh release upload vultr "out/$IMGNAME.img" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "取り込ませる URL:"
+          echo "  https://github.com/$GITHUB_REPOSITORY/releases/download/vultr/$IMGNAME.img"

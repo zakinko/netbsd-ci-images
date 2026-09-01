@@ -178,6 +178,125 @@ ansible-playbook down.yml -e drop_snapshot=true  # snapshot も落とす
 instance は時間割 ($0.003/時) なので、触り終えたら壊しておく。一時間で
 一円に届かない。snapshot の保管は $0.05/GB/月。
 
+## DragonFly BSD
+
+同じ口 (snapshot-from-URL) に、DragonFly の生イメージも流せる。
+
+```sh
+sh build-vultr-dragonfly.sh 6.4.2        # 手元 (QEMU が要る)
+gh workflow run build-vultr-dragonfly \
+    -f release=6.4.2 -f authorized_key="$(cat ~/.ssh/id_rsa.pub)"
+```
+
+組み方は NetBSD と違う。**DragonFly には配布セットが無い。** 公開されている
+のは起動できる live の img と、その中から走らせる `installer(8)` だけで、
+`installer` は DFUI 越しの対話なので応答ファイルを置く道が無い。そこで live を
+QEMU で起こし、**その中で** [`dragonfly-install.sh`](dragonfly-install.sh) を
+走らせて、繋いでおいた生ディスクへ handbook どおりの手順で入れる。live の
+`/` を `cpdup` で写しているので、中身は配布されている live そのままになる。
+
+| | NetBSD | DragonFly |
+| --- | --- | --- |
+| 元 | 配布セットを展開 (`mkimg.sh`) | live img を写す (`dragonfly-install.sh`) |
+| 組む場所 | NetBSD ゲストの中 | DragonFly ゲストの中 |
+| 大きさ | 1.75 GiB | 1 GiB |
+| root | `ld0a` | `part-by-label/DFLYVULTR.a` |
+| 広げる | `rc.d/growlabel` + `resize_root` | `rc.d/growdisk` |
+
+root は `/dev/part-by-label/DFLYVULTR.a` で指してある。ディスクの名前は繋ぎ方で
+変わり (Vultr は virtio-blk なので `vbd0`、QEMU に IDE で繋げば `ad0`)、
+`fstab` と食い違えば root が見つからない。label で指せば同じイメージがどちらでも
+起動する。
+
+住所については NetBSD で要った手当てが要らない。あちらは dhcpcd の既定
+`slaac private` が RFC 7217 の乱数識別子を使うので、Vultr が台帳に載せる
+EUI-64 の住所と食い違い、`slaac hwaddr` へ書き換えていた。DragonFly の SLAAC は
+カーネルが EUI-64 で作るので、初めから台帳と同じになる。
+
+### 起きてから自分で広がる
+
+1 GiB で焼いてあるので、10 GB のディスクに書かれると残りは空いたまま届く。
+[`rc.d/growdisk`](dragonfly-growdisk) が初回の起動で三つを順に伸ばし、一度だけ
+落ちる。**初回だけ二回上がる。**
+
+	fdisk -IB      slice 1 をディスク一杯に取り直す
+	disklabel64    label を取り直し、a: を slice 一杯にする
+	growfs         fs を partition 一杯にする
+
+順番はこのとおりでないと通らない。実測で分かったのは三つ。
+
+- **`fdisk` は mount 中のディスクにも書けて、新しい大きさはその場でカーネルに
+  入る。** 書いた直後の `diskinfo /dev/vbd0s1` が 4094.97 MB を返した
+- **label は自分の中に slice の大きさを控えており、`fdisk` では変わらない。**
+  取り直させるには `disklabel64 -r -w … auto` で書き直すしかないが、これは
+  `label:` の名前も partition も消す。消したままにすると
+  `/dev/part-by-label/…` が無くなって次は起動しない。名前を書き戻すまでが
+  一続き
+- **`disklabel64 -R` に `/dev/stdin` は渡せない。** この段では procfs も
+  fdescfs もまだ乗っていないため。tmpfs を一枚借りて置き場にしている
+- **label を書き直している間はディスクを読めない。** root の partition が
+  カーネルから消えるので、まだ page-in していない実行ファイルがそこで読め
+  なくなる。最初これで `awk` が `vnode_pager_getpage: I/O read error` と
+  落ち、空の proto を渡して label を壊した。窓に入る前に、使う道具を tmpfs
+  へ写してある
+- **もう広げ終わったかの判定に、小さい閾値を使ってはいけない。** `fdisk -I`
+  は slice をシリンダ境界で丸めるので、広げ終わった後も末尾に一シリンダぶん
+  余りが残る。閾値をちょうどその 2048 sector にしていたため、二度目の起動でも
+  「まだ広げられる」と読んで label を書き直し、`growfs` は伸びないので reboot
+  もせず、書き直したせいで root を rw に出来ずに single user へ落ちた
+
+label を書き直した後は、`growfs` が失敗しても必ず落とす。書き直した時点で
+root の device が別物になっており、`rc.d/root` の `mount -u -o rw /` が
+
+	cannot update mount, v_rdev does not match
+	specified device does not match mounted device
+
+で撥ねられる。戻れる道は落とすことしかない。
+
+`growfs` を掛けられるのは root がまだ read-only の間だけで、掛けた直後に
+`reboot -qn` で落とす。rw で mount した fs を伸ばすと、カーネルが抱えている
+古い superblock が後から書き戻されて壊れる。NetBSD で `resize_ffs` を掛けたとき
+と同じ話で、`sync` してはいけないのも同じ。
+
+### 確かめ方
+
+```sh
+sh verify-vultr-dragonfly.sh 6.4.2 10    # 10 GiB のディスクに置いて起こす
+```
+
+焼いた raw を大きなファイルの先頭に置き、Vultr が書き戻したのと同じ形にして
+起こす。見るのは、落ちて上がり直してくるかと、`/` がディスク一杯になって
+いるかの二つ。1 GiB で焼いたものが 10 GiB になっていれば、growdisk が走った
+以外に説明が付かない。
+
+**loader には何も打たない。** コンソールは焼いた側が VGA のままなので (Vultr に
+シリアルが無い)、シリアルで中を見るには loader の促しで
+`set console="comconsole"` と打つことになる。ところが**この loader は促しを出した
+直後の何文字かを落とす**。`boot` が `bot` に、次は `oot` になって
+`unknown command` で止まった。打鍵の間隔を 0.08 秒から 0.2 秒に伸ばしても直らない。
+
+悪いのは、促しに落とすと自動起動の待ち時間も止まることで、一文字落とした時点で
+その機械は永久に上がってこない。**見るために打った結果、見る対象が起動しない。**
+だから何も打たず、10 秒待って勝手に起動させ、中は ssh で見る。上がってこなかった
+ときだけ QEMU のモニタから画面を一枚撮る ([`screendump.py`](../screendump.py))。
+single user に落ちていたのは、この一枚で分かった。
+
+CI は二度組む。出す版に焼くのは渡された公開鍵なので、runner にその秘密鍵は無く、
+ssh で入れない。確かめる版だけ使い捨ての鍵で組み、同じスクリプト・同じ大きさ・
+同じ版で、違うのは焼いた公開鍵だけにしてある。出す版そのものにも一度火を入れて
+画面を撮る。
+
+### まだ通していないところ
+
+- **本物の Vultr に立てていない。** 確かめたのは QEMU に virtio-blk で繋いだ
+  ところまでで、snapshot の取り込みから先は NetBSD と同じ口を通るはずという
+  だけ
+- `up.yml` は instance を立てるところまでは OS を選ばないが、**そのあとの
+  アカウントを作る段は NetBSD 前提**。[`files/setup-accounts.sh`](files/setup-accounts.sh)
+  が `groupadd` と `useradd` を呼ぶが、DragonFly にあるのは `pw`
+- swap は切ってある。一番安い plan は 512MB しかないので、要るなら立ててから
+  `swapfile` を足すこと
+
 ## 実際に通したときに分かったこと
 
 一度通してあります。当たったところと、外していたところ。
