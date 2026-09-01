@@ -59,6 +59,9 @@ KEY_PATHS="/root/.ssh"   # 置き場は .ssh まで含めて書く
 HOSTKEY=
 MEDIA_URL=
 ARCHIVE_MEMBER=
+# KVM を使うか。auto は x86 の相手で /dev/kvm が書けるときだけ使う。
+# 古い x86 が KVM で転ぶようなら、その conf に ACCEL=none と書く。
+ACCEL=auto
 NOTE=
 QEMUARGS=
 EMU=
@@ -84,6 +87,18 @@ autoinstall)	exec sh "$BASE/build-openbsd-image.sh" "$PORT" "$VERSION" ;;
 esac
 
 command -v "$EMU" > /dev/null 2>&1 || { echo "$0: $EMU が無い" >&2; exit 1; }
+
+# emulation のままだと x86 の相手は十倍以上遅い。CI の runner にも
+# self-hosted の箱にも /dev/kvm はあるので、あれば使う。
+case $ACCEL in
+auto)	ACCEL=
+	case $EMU in
+	qemu-system-x86_64|qemu-system-i386)
+		[ -w /dev/kvm ] && ACCEL="-enable-kvm" ;;
+	esac ;;
+none)	ACCEL= ;;
+esac
+[ -n "$ACCEL" ] && echo "    KVM を使う"
 
 mkdir -p "$WORK" "$OUTDIR"
 IMG=$OUTDIR/$TARGET.$IMGFMT
@@ -349,7 +364,7 @@ if [ "$CONSOLE" = stdio ]; then
 	(sleep 36000 > "$FIFO" &)
 	sleep 1
 	# shellcheck disable=SC2086
-	"$EMU" $DISK $SNAP $NET -nographic < "$FIFO" > "$CONLOG" 2>&1 &
+	"$EMU" $ACCEL $DISK $SNAP $NET -nographic < "$FIFO" > "$CONLOG" 2>&1 &
 	EMUPID=$!
 	TALKIO="--outfile $CONLOG --infile $FIFO"
 else
@@ -358,7 +373,7 @@ else
 	TTY=/tmp/$TARGET.tty
 	rm -f "$TTY"
 	# shellcheck disable=SC2086
-	"$EMU" $DISK $SNAP $NET \
+	"$EMU" $ACCEL $DISK $SNAP $NET \
 		-display none -vga none \
 		-serial "unix:$TTY,server,nowait" -monitor none \
 		> "$WORK/emu.log" 2>&1 &
@@ -403,13 +418,13 @@ if [ "$DRIVER" = install ] && [ -n "$POST_STEPS" ]; then
 		(sleep 36000 > "$FIFO" &)
 		sleep 1
 		# shellcheck disable=SC2086
-		"$EMU" $POSTARGS $NET -nographic < "$FIFO" > "$CONLOG.post" 2>&1 &
+		"$EMU" $ACCEL $POSTARGS $NET -nographic < "$FIFO" > "$CONLOG.post" 2>&1 &
 		EMUPID=$!
 		TALKIO="--outfile $CONLOG.post --infile $FIFO"
 	else
 		rm -f "$TTY"
 		# shellcheck disable=SC2086
-		"$EMU" $POSTARGS $NET -display none -vga none \
+		"$EMU" $ACCEL $POSTARGS $NET -display none -vga none \
 			-serial "unix:$TTY,server,nowait" -monitor none \
 			> "$WORK/emu.log" 2>&1 &
 		EMUPID=$!
