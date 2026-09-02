@@ -38,11 +38,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # /dev/kvm は在っても root しか開けないことがある。runner の user を
+      # kvm group に入れて、駄目なら emulation へ落とす。-enable-kvm を
+      # 決め打ちにすると Permission denied で qemu ごと落ちる。
       - name: 動かすものを入れる
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-system-x86 qemu-utils netpbm
-          ls -l /dev/kvm || echo "!! KVM が無い。emulation で 10 倍以上遅い"
+          sudo chmod 0666 /dev/kvm 2>/dev/null || true
+          if [ -w /dev/kvm ]; then
+            echo "ACCEL=-enable-kvm" >> $GITHUB_ENV
+          else
+            echo "ACCEL=" >> $GITHUB_ENV
+            echo "!! KVM が使えない。emulation で 10 倍以上遅い"
+          fi
 
       - name: 素のイメージを組む
         run: |
@@ -71,7 +80,7 @@ jobs:
           cp "out/dragonfly-$REL-x86_64-vultr.img" build.img
           truncate -s 24576M build.img
           cp "out/dragonfly-$REL-x86_64-vultr.img" target.img
-          qemu-system-x86_64 -enable-kvm -m 4096 -smp $(nproc) \
+          qemu-system-x86_64 $ACCEL -m 4096 -smp $(nproc) \
             -drive file=build.img,format=raw,if=none,id=b0 \
             -device virtio-blk-pci,drive=b0,bootindex=0 \
             -drive file=target.img,format=raw,if=none,id=t0 \
@@ -113,7 +122,7 @@ jobs:
           set -e
           cp target.img boot-test.img
           truncate -s 10240M boot-test.img
-          qemu-system-x86_64 -enable-kvm -m 1024 -smp 2 \
+          qemu-system-x86_64 $ACCEL -m 1024 -smp 2 \
             -drive file=boot-test.img,format=raw,if=none,id=d0 \
             -device virtio-blk-pci,drive=d0,bootindex=0,disable-legacy=on,vectors=0 \
             -netdev user,id=n0 \
