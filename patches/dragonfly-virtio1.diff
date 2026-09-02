@@ -1,0 +1,715 @@
+diff --git a/sys/dev/virtual/virtio/pci/virtio_pci.c b/sys/dev/virtual/virtio/pci/virtio_pci.c
+index 2ff67c17..247b320f 100644
+--- a/sys/dev/virtual/virtio/pci/virtio_pci.c
++++ b/sys/dev/virtual/virtio/pci/virtio_pci.c
+@@ -61,6 +61,29 @@ struct vtpci_softc {
+ 	struct resource			*vtpci_res;
+ 	struct resource			*vtpci_msix_res;
+ 	uint64_t			 vtpci_features;
++
++	/*
++	 * VirtIO 1.0 (modern).  The register block is no longer a fixed
++	 * layout in BAR0; the device points at four structures through PCI
++	 * capabilities and we map each one.  Zero here means the legacy
++	 * transport, which keeps using vtpci_res.
++	 */
++	int				 vtpci_modern;
++	struct resource			*vtpci_common_res;
++	struct resource			*vtpci_notify_res;
++	struct resource			*vtpci_isr_res;
++	struct resource			*vtpci_device_res;
++	int				 vtpci_common_rid;
++	int				 vtpci_notify_rid;
++	int				 vtpci_isr_rid;
++	int				 vtpci_device_rid;
++	bus_size_t			 vtpci_common_off;
++	bus_size_t			 vtpci_notify_off;
++	bus_size_t			 vtpci_isr_off;
++	bus_size_t			 vtpci_device_off;
++	uint32_t			 vtpci_notify_off_mult;
++	uint16_t			 vtpci_vq_notify_off[VIRTIO_MAX_VIRTQUEUES];
++
+ 	uint32_t			 vtpci_flags;
+ #define VIRTIO_PCI_FLAG_MSI		 0x0001
+ #define VIRTIO_PCI_FLAG_MSIX		 0x0010
+@@ -163,6 +186,29 @@ static void	vtpci_msix_intr(void *);
+ #define vtpci_write_config_2(sc, o, v)	bus_write_2((sc)->vtpci_res, (o), (v))
+ #define vtpci_write_config_4(sc, o, v)	bus_write_4((sc)->vtpci_res, (o), (v))
+ 
++/*
++ * Modern accessors.  The common configuration structure lives at an offset
++ * inside whichever BAR the capability named, so every access is relative to
++ * the resource we mapped for it.
++ */
++#define vtpci_m_read_1(sc, o)	\
++	bus_read_1((sc)->vtpci_common_res, (sc)->vtpci_common_off + (o))
++#define vtpci_m_read_2(sc, o)	\
++	bus_read_2((sc)->vtpci_common_res, (sc)->vtpci_common_off + (o))
++#define vtpci_m_read_4(sc, o)	\
++	bus_read_4((sc)->vtpci_common_res, (sc)->vtpci_common_off + (o))
++#define vtpci_m_write_1(sc, o, v)	\
++	bus_write_1((sc)->vtpci_common_res, (sc)->vtpci_common_off + (o), (v))
++#define vtpci_m_write_2(sc, o, v)	\
++	bus_write_2((sc)->vtpci_common_res, (sc)->vtpci_common_off + (o), (v))
++#define vtpci_m_write_4(sc, o, v)	\
++	bus_write_4((sc)->vtpci_common_res, (sc)->vtpci_common_off + (o), (v))
++
++static int	vtpci_find_cap(device_t, uint8_t, int *);
++static void	vtpci_setup_modern_vq(struct vtpci_softc *, uint16_t,
++		    struct virtqueue *);
++static int	vtpci_map_modern(struct vtpci_softc *);
++
+ /* Tunables. */
+ static int vtpci_disable_msix = 0;
+ TUNABLE_INT("hw.virtio.pci.disable_msix", &vtpci_disable_msix);
+@@ -216,6 +262,126 @@ MODULE_VERSION(virtio_pci, 1);
+ MODULE_DEPEND(virtio_pci, pci, 1, 1, 1);
+ MODULE_DEPEND(virtio_pci, virtio, 1, 1, 1);
+ 
++/*
++ * Walk the PCI capability list looking for a virtio vendor capability of the
++ * given cfg_type.  pci_find_extcap() only reports the first capability of an
++ * ID, and a virtio 1.0 device carries four vendor capabilities, so the list
++ * has to be walked by hand.
++ */
++static int
++vtpci_find_cap(device_t dev, uint8_t cfg_type, int *offp)
++{
++	uint8_t ptr, type;
++	int i;
++
++	if ((pci_read_config(dev, PCIR_STATUS, 2) & PCIM_STATUS_CAPPRESENT) == 0)
++		return (ENXIO);
++
++	ptr = pci_read_config(dev, PCIR_CAP_PTR, 1);
++	/* Bound the walk; a broken device could point the list at itself. */
++	for (i = 0; ptr != 0 && i < 48; i++) {
++		if (pci_read_config(dev, ptr + PCICAP_ID, 1) == PCIY_VENDOR) {
++			type = pci_read_config(dev,
++			    ptr + VIRTIO_PCI_CAP_CFG_TYPE, 1);
++			if (type == cfg_type) {
++				*offp = ptr;
++				return (0);
++			}
++		}
++		ptr = pci_read_config(dev, ptr + PCICAP_NEXTPTR, 1);
++	}
++
++	return (ENXIO);
++}
++
++/*
++ * Map one of the structures a virtio 1.0 device advertises.  The capability
++ * names the BAR and the offset within it; several structures usually share
++ * one BAR, so the resource is allocated per rid and reused.
++ */
++static int
++vtpci_map_cap(struct vtpci_softc *sc, uint8_t cfg_type, struct resource **resp,
++    int *ridp, bus_size_t *offp, uint32_t *multp)
++{
++	device_t dev = sc->vtpci_dev;
++	int cap, rid;
++	uint8_t bar;
++
++	if (vtpci_find_cap(dev, cfg_type, &cap) != 0)
++		return (ENXIO);
++
++	bar = pci_read_config(dev, cap + VIRTIO_PCI_CAP_BAR, 1);
++	*offp = pci_read_config(dev, cap + VIRTIO_PCI_CAP_OFFSET, 4);
++	if (multp != NULL) {
++		*multp = pci_read_config(dev,
++		    cap + VIRTIO_PCI_CAP_NOTIFY_OFF_MULT, 4);
++	}
++
++	rid = PCIR_BAR(bar);
++	*ridp = rid;
++
++	/* Already mapped for another structure in the same BAR? */
++	if (sc->vtpci_common_res != NULL && sc->vtpci_common_rid == rid) {
++		*resp = sc->vtpci_common_res;
++		return (0);
++	}
++	if (sc->vtpci_notify_res != NULL && sc->vtpci_notify_rid == rid) {
++		*resp = sc->vtpci_notify_res;
++		return (0);
++	}
++	if (sc->vtpci_isr_res != NULL && sc->vtpci_isr_rid == rid) {
++		*resp = sc->vtpci_isr_res;
++		return (0);
++	}
++
++	*resp = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
++	if (*resp == NULL)
++		return (ENXIO);
++
++	return (0);
++}
++
++static int
++vtpci_map_modern(struct vtpci_softc *sc)
++{
++	device_t dev = sc->vtpci_dev;
++	int error;
++
++	error = vtpci_map_cap(sc, VIRTIO_PCI_CAP_COMMON_CFG,
++	    &sc->vtpci_common_res, &sc->vtpci_common_rid,
++	    &sc->vtpci_common_off, NULL);
++	if (error) {
++		device_printf(dev, "no common configuration capability\n");
++		return (error);
++	}
++
++	error = vtpci_map_cap(sc, VIRTIO_PCI_CAP_NOTIFY_CFG,
++	    &sc->vtpci_notify_res, &sc->vtpci_notify_rid,
++	    &sc->vtpci_notify_off, &sc->vtpci_notify_off_mult);
++	if (error) {
++		device_printf(dev, "no notify capability\n");
++		return (error);
++	}
++
++	error = vtpci_map_cap(sc, VIRTIO_PCI_CAP_ISR_CFG,
++	    &sc->vtpci_isr_res, &sc->vtpci_isr_rid, &sc->vtpci_isr_off, NULL);
++	if (error) {
++		device_printf(dev, "no ISR capability\n");
++		return (error);
++	}
++
++	/*
++	 * The device configuration structure is optional: a device with no
++	 * device-specific configuration space does not advertise one.
++	 */
++	if (vtpci_map_cap(sc, VIRTIO_PCI_CAP_DEVICE_CFG, &sc->vtpci_device_res,
++	    &sc->vtpci_device_rid, &sc->vtpci_device_off, NULL) != 0) {
++		sc->vtpci_device_res = NULL;
++	}
++
++	return (0);
++}
++
+ static int
+ vtpci_probe(device_t dev)
+ {
+@@ -225,14 +391,25 @@ vtpci_probe(device_t dev)
+ 	if (pci_get_vendor(dev) != VIRTIO_PCI_VENDORID)
+ 		return (ENXIO);
+ 
+-	if (pci_get_device(dev) < VIRTIO_PCI_DEVICEID_MIN ||
+-	    pci_get_device(dev) > VIRTIO_PCI_DEVICEID_MAX)
+-		return (ENXIO);
+-
+-	if (pci_get_revid(dev) != VIRTIO_PCI_ABI_VERSION)
++	/*
++	 * Two ranges.  The transitional/legacy devices are 0x1000-0x103F and
++	 * carry the device type in the subsystem ID; the modern ones are
++	 * 0x1040-0x107F and encode the type in the device ID itself.  Vultr
++	 * and other hosts that offer virtio 1.0 only present the latter, so
++	 * a driver that recognises just the first range finds no disk at all.
++	 */
++	if (pci_get_device(dev) >= VIRTIO_PCI_DEVICEID_MODERN_MIN &&
++	    pci_get_device(dev) <= VIRTIO_PCI_DEVICEID_MODERN_MAX) {
++		name = virtio_device_name(pci_get_device(dev) -
++		    VIRTIO_PCI_DEVICEID_MODERN_MIN);
++	} else if (pci_get_device(dev) >= VIRTIO_PCI_DEVICEID_MIN &&
++	    pci_get_device(dev) <= VIRTIO_PCI_DEVICEID_MAX) {
++		if (pci_get_revid(dev) != VIRTIO_PCI_ABI_VERSION)
++			return (ENXIO);
++		name = virtio_device_name(pci_get_subdevice(dev));
++	} else
+ 		return (ENXIO);
+ 
+-	name = virtio_device_name(pci_get_subdevice(dev));
+ 	if (name == NULL)
+ 		name = "Unknown";
+ 
+@@ -255,12 +432,22 @@ vtpci_attach(device_t dev)
+ 
+ 	pci_enable_busmaster(dev);
+ 
+-	rid = PCIR_BAR(0);
+-	sc->vtpci_res = bus_alloc_resource_any(dev, SYS_RES_IOPORT, &rid,
+-	    RF_ACTIVE);
+-	if (sc->vtpci_res == NULL) {
+-		device_printf(dev, "cannot map I/O space\n");
+-		return (ENXIO);
++	sc->vtpci_modern = (pci_get_device(dev) >=
++	    VIRTIO_PCI_DEVICEID_MODERN_MIN);
++
++	if (sc->vtpci_modern) {
++		if (vtpci_map_modern(sc) != 0) {
++			device_printf(dev, "cannot map virtio 1.0 structures\n");
++			return (ENXIO);
++		}
++	} else {
++		rid = PCIR_BAR(0);
++		sc->vtpci_res = bus_alloc_resource_any(dev, SYS_RES_IOPORT,
++		    &rid, RF_ACTIVE);
++		if (sc->vtpci_res == NULL) {
++			device_printf(dev, "cannot map I/O space\n");
++			return (ENXIO);
++		}
+ 	}
+ 
+ 	if (pci_find_extcap(dev, PCIY_MSIX, &msix_cap) == 0) {
+@@ -380,7 +567,18 @@ vtpci_read_ivar(device_t dev, device_t child, int index, uintptr_t *result)
+ 
+ 	switch (index) {
+ 	case VIRTIO_IVAR_DEVTYPE:
+-		*result = pci_get_subdevice(dev);
++		/*
++		 * A modern device puts its type in the device ID; only the
++		 * transitional ones carry it in the subsystem ID.  The child
++		 * drivers match on this, so reading the wrong one leaves the
++		 * transport attached with nothing on top of it.
++		 */
++		if (sc->vtpci_modern) {
++			*result = pci_get_device(dev) -
++			    VIRTIO_PCI_DEVICEID_MODERN_MIN;
++		} else {
++			*result = pci_get_subdevice(dev);
++		}
+ 		break;
+ 	default:
+ 		return (ENOENT);
+@@ -418,7 +616,16 @@ vtpci_negotiate_features(device_t dev, uint64_t child_features)
+ 
+ 	sc = device_get_softc(dev);
+ 
+-	host_features = vtpci_read_config_4(sc, VIRTIO_PCI_HOST_FEATURES);
++	if (sc->vtpci_modern) {
++		vtpci_m_write_4(sc, VIRTIO_PCI_M_DFSELECT, 0);
++		host_features = vtpci_m_read_4(sc, VIRTIO_PCI_M_DF);
++		vtpci_m_write_4(sc, VIRTIO_PCI_M_DFSELECT, 1);
++		host_features |=
++		    (uint64_t)vtpci_m_read_4(sc, VIRTIO_PCI_M_DF) << 32;
++	} else {
++		host_features = vtpci_read_config_4(sc,
++		    VIRTIO_PCI_HOST_FEATURES);
++	}
+ 	vtpci_describe_features(sc, "host", host_features);
+ 
+ 	/*
+@@ -427,10 +634,40 @@ vtpci_negotiate_features(device_t dev, uint64_t child_features)
+ 	 */
+ 	features = host_features & child_features;
+ 	features = virtqueue_filter_features(features);
++
++	if (sc->vtpci_modern) {
++		/*
++		 * A virtio 1.0 device only speaks the modern protocol once
++		 * the driver accepts VIRTIO_F_VERSION_1, and the filtering
++		 * above works on the low 32 bits, so put it back.
++		 */
++		features |= VIRTIO_F_VERSION_1;
++	}
+ 	sc->vtpci_features = features;
+ 
+ 	vtpci_describe_features(sc, "negotiated", features);
+-	vtpci_write_config_4(sc, VIRTIO_PCI_GUEST_FEATURES, features);
++
++	if (sc->vtpci_modern) {
++		vtpci_m_write_4(sc, VIRTIO_PCI_M_GFSELECT, 0);
++		vtpci_m_write_4(sc, VIRTIO_PCI_M_GF, features);
++		vtpci_m_write_4(sc, VIRTIO_PCI_M_GFSELECT, 1);
++		vtpci_m_write_4(sc, VIRTIO_PCI_M_GF, features >> 32);
++
++		/*
++		 * The device answers by clearing FEATURES_OK if it cannot
++		 * live with what we accepted.  There is no other way to be
++		 * told, so read the status back.
++		 */
++		vtpci_set_status(dev, VIRTIO_CONFIG_S_FEATURES_OK);
++		if ((vtpci_get_status(dev) &
++		    VIRTIO_CONFIG_S_FEATURES_OK) == 0) {
++			device_printf(dev,
++			    "device rejected the negotiated features\n");
++			return (0);
++		}
++	} else {
++		vtpci_write_config_4(sc, VIRTIO_PCI_GUEST_FEATURES, features);
++	}
+ 
+ 	return (features);
+ }
+@@ -618,16 +855,26 @@ vtpci_alloc_virtqueues(device_t dev, int nvqs, struct vq_alloc_info *vq_info)
+ 		info = &vq_info[queue];
+ 
+ 		vqx->ires_idx = -1;
+-		vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, queue);
+-
+-		vq_size = vtpci_read_config_2(sc, VIRTIO_PCI_QUEUE_NUM);
++		if (sc->vtpci_modern)
++			vtpci_m_write_2(sc, VIRTIO_PCI_M_QSELECT, queue);
++		else
++			vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, queue);
++
++		if (sc->vtpci_modern)
++			vq_size = vtpci_m_read_2(sc, VIRTIO_PCI_M_QSIZE);
++		else
++			vq_size = vtpci_read_config_2(sc, VIRTIO_PCI_QUEUE_NUM);
+ 		error = virtqueue_alloc(dev, queue, vq_size,
+ 		    VIRTIO_PCI_VRING_ALIGN, 0xFFFFFFFFUL, info, &vqx->vq);
+ 		if (error)
+ 			return (error);
+ 
+-		vtpci_write_config_4(sc, VIRTIO_PCI_QUEUE_PFN,
+-		    virtqueue_paddr(vqx->vq) >> VIRTIO_PCI_QUEUE_ADDR_SHIFT);
++		if (sc->vtpci_modern)
++			vtpci_setup_modern_vq(sc, queue, vqx->vq);
++		else
++			vtpci_write_config_4(sc, VIRTIO_PCI_QUEUE_PFN,
++			    virtqueue_paddr(vqx->vq) >>
++			    VIRTIO_PCI_QUEUE_ADDR_SHIFT);
+ 
+ 		*info->vqai_vq = vqx->vq;
+ 		sc->vtpci_nvqs++;
+@@ -636,6 +883,35 @@ vtpci_alloc_virtqueues(device_t dev, int nvqs, struct vq_alloc_info *vq_info)
+ 	return (0);
+ }
+ 
++/*
++ * Point a virtio 1.0 device at one virtqueue.  The three areas of the ring
++ * are handed over separately as 64 bit addresses, the queue has to be
++ * enabled explicitly, and the offset used to kick it is read here and kept
++ * for vtpci_notify_virtqueue().
++ */
++static void
++vtpci_setup_modern_vq(struct vtpci_softc *sc, uint16_t queue,
++    struct virtqueue *vq)
++{
++	vm_paddr_t desc, avail, used;
++
++	desc = virtqueue_desc_paddr(vq);
++	avail = virtqueue_avail_paddr(vq);
++	used = virtqueue_used_paddr(vq);
++
++	vtpci_m_write_4(sc, VIRTIO_PCI_M_QDESCLO, desc);
++	vtpci_m_write_4(sc, VIRTIO_PCI_M_QDESCHI, desc >> 32);
++	vtpci_m_write_4(sc, VIRTIO_PCI_M_QAVAILLO, avail);
++	vtpci_m_write_4(sc, VIRTIO_PCI_M_QAVAILHI, avail >> 32);
++	vtpci_m_write_4(sc, VIRTIO_PCI_M_QUSEDLO, used);
++	vtpci_m_write_4(sc, VIRTIO_PCI_M_QUSEDHI, used >> 32);
++
++	sc->vtpci_vq_notify_off[queue] =
++	    vtpci_m_read_2(sc, VIRTIO_PCI_M_QNOTIFY_OFF);
++
++	vtpci_m_write_2(sc, VIRTIO_PCI_M_QENABLE, 1);
++}
++
+ /* XXX Add argument to specify the callback function here. */
+ static int
+ vtpci_setup_intr(device_t dev, uint irq, lwkt_serialize_t slz)
+@@ -757,7 +1033,10 @@ vtpci_bind_intr(device_t dev, uint irq, int what,
+ 
+ 	vqx->ires_idx = irq;
+ 	if (sc->vtpci_flags & VIRTIO_PCI_FLAG_MSIX) {
+-		vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, what);
++		if (sc->vtpci_modern)
++			vtpci_m_write_2(sc, VIRTIO_PCI_M_QSELECT, what);
++		else
++			vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, what);
+ 		error = vtpci_register_msix_vector(sc, VIRTIO_MSI_QUEUE_VECTOR,
+ 		    irq);
+ 		if (error)
+@@ -798,7 +1077,10 @@ vtpci_unbind_intr(device_t dev, int what)
+ 	irq = vqx->ires_idx;
+ 	vqx->ires_idx = -1;
+ 	if (sc->vtpci_flags & VIRTIO_PCI_FLAG_MSIX) {
+-		vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, what);
++		if (sc->vtpci_modern)
++			vtpci_m_write_2(sc, VIRTIO_PCI_M_QSELECT, what);
++		else
++			vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, what);
+ 		vtpci_register_msix_vector(sc, VIRTIO_MSI_QUEUE_VECTOR, -1);
+ 	}
+ done:
+@@ -860,9 +1142,15 @@ vtpci_reinit(device_t dev, uint64_t features)
+ 		vq = vqx->vq;
+ 
+ 		KASSERT(vq != NULL, ("vq %d not allocated", queue));
+-		vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, queue);
+-
+-		vq_size = vtpci_read_config_2(sc, VIRTIO_PCI_QUEUE_NUM);
++		if (sc->vtpci_modern)
++			vtpci_m_write_2(sc, VIRTIO_PCI_M_QSELECT, queue);
++		else
++			vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_SEL, queue);
++
++		if (sc->vtpci_modern)
++			vq_size = vtpci_m_read_2(sc, VIRTIO_PCI_M_QSIZE);
++		else
++			vq_size = vtpci_read_config_2(sc, VIRTIO_PCI_QUEUE_NUM);
+ 		error = virtqueue_reinit(vq, vq_size);
+ 		if (error)
+ 			return (error);
+@@ -875,8 +1163,12 @@ vtpci_reinit(device_t dev, uint64_t features)
+ 				return (error);
+ 		}
+ 
+-		vtpci_write_config_4(sc, VIRTIO_PCI_QUEUE_PFN,
+-		    virtqueue_paddr(vqx->vq) >> VIRTIO_PCI_QUEUE_ADDR_SHIFT);
++		if (sc->vtpci_modern)
++			vtpci_setup_modern_vq(sc, queue, vqx->vq);
++		else
++			vtpci_write_config_4(sc, VIRTIO_PCI_QUEUE_PFN,
++			    virtqueue_paddr(vqx->vq) >>
++			    VIRTIO_PCI_QUEUE_ADDR_SHIFT);
+ 	}
+ 
+ 	return (0);
+@@ -896,7 +1188,17 @@ vtpci_notify_virtqueue(device_t dev, uint16_t queue)
+ 
+ 	sc = device_get_softc(dev);
+ 
+-	vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_NOTIFY, queue);
++	if (sc->vtpci_modern) {
++		/*
++		 * Each queue has its own doorbell, at notify_off multiplied
++		 * by the multiplier the notify capability gave us.
++		 */
++		bus_write_2(sc->vtpci_notify_res, sc->vtpci_notify_off +
++		    (bus_size_t)sc->vtpci_vq_notify_off[queue] *
++		    sc->vtpci_notify_off_mult, queue);
++	} else {
++		vtpci_write_config_2(sc, VIRTIO_PCI_QUEUE_NOTIFY, queue);
++	}
+ }
+ 
+ static uint8_t
+@@ -906,6 +1208,9 @@ vtpci_get_status(device_t dev)
+ 
+ 	sc = device_get_softc(dev);
+ 
++	if (sc->vtpci_modern)
++		return (vtpci_m_read_1(sc, VIRTIO_PCI_M_STATUS));
++
+ 	return (vtpci_read_config_1(sc, VIRTIO_PCI_STATUS));
+ }
+ 
+@@ -919,7 +1224,10 @@ vtpci_set_status(device_t dev, uint8_t status)
+ 	if (status != VIRTIO_CONFIG_STATUS_RESET)
+ 		status |= vtpci_get_status(dev);
+ 
+-	vtpci_write_config_1(sc, VIRTIO_PCI_STATUS, status);
++	if (sc->vtpci_modern)
++		vtpci_m_write_1(sc, VIRTIO_PCI_M_STATUS, status);
++	else
++		vtpci_write_config_1(sc, VIRTIO_PCI_STATUS, status);
+ }
+ 
+ static void
+@@ -932,6 +1240,27 @@ vtpci_read_dev_config(device_t dev, bus_size_t offset,
+ 	int size;
+ 
+ 	sc = device_get_softc(dev);
++
++	if (sc->vtpci_modern) {
++		off = sc->vtpci_device_off + offset;
++		for (d = dst; length > 0; d += size, off += size,
++		    length -= size) {
++			if (length >= 4) {
++				size = 4;
++				*(uint32_t *)d =
++				    bus_read_4(sc->vtpci_device_res, off);
++			} else if (length >= 2) {
++				size = 2;
++				*(uint16_t *)d =
++				    bus_read_2(sc->vtpci_device_res, off);
++			} else {
++				size = 1;
++				*d = bus_read_1(sc->vtpci_device_res, off);
++			}
++		}
++		return;
++	}
++
+ 	off = VIRTIO_PCI_CONFIG(sc) + offset;
+ 
+ 	for (d = dst; length > 0; d += size, off += size, length -= size) {
+@@ -958,6 +1287,27 @@ vtpci_write_dev_config(device_t dev, bus_size_t offset,
+ 	int size;
+ 
+ 	sc = device_get_softc(dev);
++
++	if (sc->vtpci_modern) {
++		off = sc->vtpci_device_off + offset;
++		for (s = src; length > 0; s += size, off += size,
++		    length -= size) {
++			if (length >= 4) {
++				size = 4;
++				bus_write_4(sc->vtpci_device_res, off,
++				    *(uint32_t *)s);
++			} else if (length >= 2) {
++				size = 2;
++				bus_write_2(sc->vtpci_device_res, off,
++				    *(uint16_t *)s);
++			} else {
++				size = 1;
++				bus_write_1(sc->vtpci_device_res, off, *s);
++			}
++		}
++		return;
++	}
++
+ 	off = VIRTIO_PCI_CONFIG(sc) + offset;
+ 
+ 	for (s = src; length > 0; s += size, off += size, length -= size) {
+@@ -1036,6 +1386,26 @@ vtpci_register_msix_vector(struct vtpci_softc *sc, int offset, int res_idx)
+ 		vector = VIRTIO_MSI_NO_VECTOR;
+ 	}
+ 
++	/*
++	 * The MSI-X vector registers moved into the common configuration
++	 * structure for virtio 1.0, and the queue one only makes sense after
++	 * a queue has been selected.  The caller selects the queue for the
++	 * legacy layout already, so the same order holds here.
++	 */
++	if (sc->vtpci_modern) {
++		int moff;
++
++		moff = (offset == VIRTIO_MSI_CONFIG_VECTOR) ?
++		    VIRTIO_PCI_M_MSIX_CONFIG : VIRTIO_PCI_M_QMSIX_VECTOR;
++		vtpci_m_write_2(sc, moff, vector);
++		if (vtpci_m_read_2(sc, moff) != vector) {
++			device_printf(dev, "insufficient host resources for "
++			    "MSIX interrupts\n");
++			return (ENODEV);
++		}
++		return (0);
++	}
++
+ 	vtpci_write_config_2(sc, offset, vector);
+ 
+ 	if (vtpci_read_config_2(sc, offset) != vector) {
+diff --git a/sys/dev/virtual/virtio/pci/virtio_pci.h b/sys/dev/virtual/virtio/pci/virtio_pci.h
+index 4773146c..3a8a8bea 100644
+--- a/sys/dev/virtual/virtio/pci/virtio_pci.h
++++ b/sys/dev/virtual/virtio/pci/virtio_pci.h
+@@ -84,4 +84,62 @@
+ /* The alignment to use between consumer and producer parts of vring. */
+ #define VIRTIO_PCI_VRING_ALIGN	4096
+ 
++
++/*
++ * VirtIO 1.0 (modern) PCI transport.
++ *
++ * The modern transport does not use a fixed register block in BAR0.  It
++ * advertises four structures through PCI capabilities, each naming the BAR
++ * and the offset within it, and the driver maps them.  Device IDs also move
++ * to a second range, and the device type is taken from the device ID rather
++ * than the subsystem ID.
++ */
++#define VIRTIO_PCI_DEVICEID_MODERN_MIN	0x1040
++#define VIRTIO_PCI_DEVICEID_MODERN_MAX	0x107F
++
++/* PCI capability cfg_type values. */
++#define VIRTIO_PCI_CAP_COMMON_CFG	1
++#define VIRTIO_PCI_CAP_NOTIFY_CFG	2
++#define VIRTIO_PCI_CAP_ISR_CFG		3
++#define VIRTIO_PCI_CAP_DEVICE_CFG	4
++#define VIRTIO_PCI_CAP_PCI_CFG		5
++
++/* Layout of a virtio PCI capability, following the two generic bytes. */
++#define VIRTIO_PCI_CAP_CAP_LEN		2	/* uint8  capability length */
++#define VIRTIO_PCI_CAP_CFG_TYPE		3	/* uint8  identifies the structure */
++#define VIRTIO_PCI_CAP_BAR		4	/* uint8  which BAR it lives in */
++#define VIRTIO_PCI_CAP_OFFSET		8	/* uint32 offset within the BAR */
++#define VIRTIO_PCI_CAP_LENGTH		12	/* uint32 length of the structure */
++#define VIRTIO_PCI_CAP_NOTIFY_OFF_MULT	16	/* uint32 notify only */
++
++/* Offsets within the common configuration structure. */
++#define VIRTIO_PCI_M_DFSELECT		0	/* uint32 device_feature_select */
++#define VIRTIO_PCI_M_DF			4	/* uint32 device_feature */
++#define VIRTIO_PCI_M_GFSELECT		8	/* uint32 driver_feature_select */
++#define VIRTIO_PCI_M_GF			12	/* uint32 driver_feature */
++#define VIRTIO_PCI_M_MSIX_CONFIG	16	/* uint16 config_msix_vector */
++#define VIRTIO_PCI_M_NUMQUEUES		18	/* uint16 num_queues */
++#define VIRTIO_PCI_M_STATUS		20	/* uint8  device_status */
++#define VIRTIO_PCI_M_CFGGENERATION	21	/* uint8  config_generation */
++#define VIRTIO_PCI_M_QSELECT		22	/* uint16 queue_select */
++#define VIRTIO_PCI_M_QSIZE		24	/* uint16 queue_size */
++#define VIRTIO_PCI_M_QMSIX_VECTOR	26	/* uint16 queue_msix_vector */
++#define VIRTIO_PCI_M_QENABLE		28	/* uint16 queue_enable */
++#define VIRTIO_PCI_M_QNOTIFY_OFF	30	/* uint16 queue_notify_off */
++#define VIRTIO_PCI_M_QDESCLO		32	/* uint32 queue_desc low */
++#define VIRTIO_PCI_M_QDESCHI		36	/* uint32 queue_desc high */
++#define VIRTIO_PCI_M_QAVAILLO		40	/* uint32 queue_driver low */
++#define VIRTIO_PCI_M_QAVAILHI		44	/* uint32 queue_driver high */
++#define VIRTIO_PCI_M_QUSEDLO		48	/* uint32 queue_device low */
++#define VIRTIO_PCI_M_QUSEDHI		52	/* uint32 queue_device high */
++
++/*
++ * Status bit the modern transport adds.  The device sets it back to zero if
++ * it cannot live with the features the driver accepted, which is the only
++ * way to find out that negotiation failed.
++ */
++#ifndef VIRTIO_CONFIG_S_FEATURES_OK
++#define VIRTIO_CONFIG_S_FEATURES_OK	0x08
++#endif
++
+ #endif /* _VIRTIO_PCI_H */
+diff --git a/sys/dev/virtual/virtio/virtio/virtio.h b/sys/dev/virtual/virtio/virtio/virtio.h
+index fa2c0078..bec8e151 100644
+--- a/sys/dev/virtual/virtio/virtio/virtio.h
++++ b/sys/dev/virtual/virtio/virtio/virtio.h
+@@ -69,6 +69,13 @@ struct vq_alloc_info;
+  */
+ #define VIRTIO_F_BAD_FEATURE (1 << 30)
+ 
++/*
++ * VirtIO 1.0.  A device that speaks only the modern protocol offers this and
++ * will not work until the driver accepts it.  It is bit 32, so unlike the
++ * bits above it does not fit in the 32 bit legacy feature registers.
++ */
++#define VIRTIO_F_VERSION_1 (1ULL << 32)
++
+ /*
+  * Some VirtIO feature bits (currently bits 28 through 31) are
+  * reserved for the transport being used (eg. virtio_ring), the
+diff --git a/sys/dev/virtual/virtio/virtio/virtqueue.c b/sys/dev/virtual/virtio/virtio/virtqueue.c
+index f366bb62..b931da5d 100644
+--- a/sys/dev/virtual/virtio/virtio/virtqueue.c
++++ b/sys/dev/virtual/virtio/virtio/virtqueue.c
+@@ -361,6 +361,29 @@ virtqueue_paddr(struct virtqueue *vq)
+ 	return (vtophys(vq->vq_ring_mem));
+ }
+ 
++/*
++ * VirtIO 1.0 hands the device the address of each of the three areas
++ * separately, instead of one page frame number for the lot.  The layout
++ * itself is unchanged, so these just point into the ring we already have.
++ */
++vm_paddr_t
++virtqueue_desc_paddr(struct virtqueue *vq)
++{
++	return (vtophys(vq->vq_ring.desc));
++}
++
++vm_paddr_t
++virtqueue_avail_paddr(struct virtqueue *vq)
++{
++	return (vtophys(vq->vq_ring.avail));
++}
++
++vm_paddr_t
++virtqueue_used_paddr(struct virtqueue *vq)
++{
++	return (vtophys(vq->vq_ring.used));
++}
++
+ int
+ virtqueue_size(struct virtqueue *vq)
+ {
+diff --git a/sys/dev/virtual/virtio/virtio/virtqueue.h b/sys/dev/virtual/virtio/virtio/virtqueue.h
+index 312984a8..a0a44e1b 100644
+--- a/sys/dev/virtual/virtio/virtio/virtqueue.h
++++ b/sys/dev/virtual/virtio/virtio/virtqueue.h
+@@ -77,6 +77,9 @@ void	 virtqueue_disable_intr(struct virtqueue *vq);
+ 
+ /* Get physical address of the virtqueue ring. */
+ vm_paddr_t virtqueue_paddr(struct virtqueue *vq);
++vm_paddr_t virtqueue_desc_paddr(struct virtqueue *vq);
++vm_paddr_t virtqueue_avail_paddr(struct virtqueue *vq);
++vm_paddr_t virtqueue_used_paddr(struct virtqueue *vq);
+ 
+ int	 virtqueue_full(struct virtqueue *vq);
+ int	 virtqueue_empty(struct virtqueue *vq);
