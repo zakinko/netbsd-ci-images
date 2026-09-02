@@ -54,6 +54,15 @@ vultrkey_start()
 		return 0
 	fi
 
+	# **鍵の形をしているものだけを置く。** 取れた中身が error ページだった
+	# ときにそれを書いてしまうと、次からは「鍵は在る」と見えて二度と取りに
+	# 行かず、しかも誰も入れない箱になる。空を書かない方は上で塞いである。
+	if ! grep -qE '^(ssh-|ecdsa-|sk-ssh-|sk-ecdsa-)' "$tmp"; then
+		echo "vultrkey: metadata の中身が鍵に見えない。置かない"
+		rm -f "$tmp"
+		return 0
+	fi
+
 	mkdir -p "$(dirname "$vultrkey_file")"
 	chmod 700 "$(dirname "$vultrkey_file")"
 	cat "$tmp" > "$vultrkey_file"
