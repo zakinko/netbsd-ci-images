@@ -53,28 +53,40 @@ growdisk_start()
 	''|*[!0-9]*)	echo "growdisk: $disk の slice が読めない"; return 0 ;;
 	esac
 
-	# 63 は slice の先頭。余地がこれだけ無ければ、もう広げ終わっている。
-	#
+	# カーネルが今そう見ている slice と label の大きさ。三つが揃って初めて
+	# 「広げ終わった」と言える。slice だけ見ていると、slice がディスク一杯で
+	# label が小さいまま止まった機械が「もう済んでいる」と読まれ、再起動して
+	# も直らない。実際 320GB のディスクでそうなった。
+	slicesz=$(diskinfo "/dev/${disk}s1" 2>/dev/null |
+		sed -n 's/.*size=0x\([0-9a-f]*\).*/\1/p')
+	labelsz=$(disklabel64 "/dev/${disk}s1" 2>/dev/null |
+		sed -n 's/^total size: *0x\([0-9a-f]*\).*/\1/p')
+
 	# 閾値を小さく取ってはいけない。**fdisk -I は slice をシリンダ境界で
-	# 丸める**ので、広げ終わった後も末尾に一シリンダぶん (ここでは 2048
-	# sector) 余りが残る。最初これをちょうど 2048 にしていたため、二度目の
-	# 起動でも「まだ広げられる」と読んで label を書き直し、growfs は伸びない
-	# ので reboot もせず、書き直したせいで root を rw に出来ずに single user
-	# へ落ちた。一シリンダは高々 16065 sector なので、32MB 取っておけば
-	# 丸めと区別が付く。
-	[ $((total - 63 - cur)) -ge 65536 ] || return 0
+	# 丸める**ので、広げ終わった後も末尾に一シリンダぶん余りが残る。最初
+	# これをちょうど 2048 にしていたため、二度目の起動でも「まだ広げられる」
+	# と読んで label を書き直し、growfs は伸びないので reboot もせず、書き
+	# 直したせいで root を rw に出来ずに single user へ落ちた。一シリンダは
+	# 高々 16065 sector なので、32MB 取っておけば丸めと区別が付く。
+	need_slice=no
+	[ $((total - 63 - cur)) -ge 65536 ] && need_slice=yes
 
-	echo "growdisk: $disk を $total sector まで広げる"
+	# label が slice より小さければ、slice が済んでいてもまだ途中。
+	need_label=no
+	if [ -n "$slicesz" ] && [ -n "$labelsz" ]; then
+		[ $(( (0x$slicesz - 0x$labelsz) / 512 )) -ge 65536 ] && need_label=yes
+	fi
 
-	# slice 1 をディスク一杯に取り直す。先頭 (63) は動かないので中身は
-	# そのまま。fdisk は mount 中のディスクにも書けて、新しい大きさは
-	# その場でカーネルに入る (diskinfo /dev/${disk}s1 で確かめた)。
-	fdisk -IB "/dev/$disk" > /dev/null 2>&1 ||
-		{ echo "growdisk: fdisk が失敗した。小さいまま続ける"; return 0; }
+	[ "$need_slice" = yes ] || [ "$need_label" = yes ] || return 0
 
-	# ここから先はディスクを読めなくなる。label を書き直す一瞬、root の
-	# partition がカーネルから消えるためで、まだ page-in していない実行
-	# ファイルはそこで読めない。最初はこれで awk が
+	echo "growdisk: $disk を広げる (slice=$need_slice label=$need_label)"
+
+	# **ディスクの割り方を書き換える前に、使う道具を RAM へ写しておく。**
+	# 窓は二つある。fdisk が slice table を書き換えた直後と、label を
+	# 書き直す一瞬。どちらもカーネルが持っている割り方が入れ替わるので、
+	# まだ page-in していない実行ファイルが root から読めなくなる。
+	#
+	# 最初は label の窓しか見ておらず、そこで awk が
 	#
 	#	vnode_pager_getpage: I/O read error
 	#	eval: awk: Input/output error
@@ -94,6 +106,31 @@ growdisk_start()
 	done
 	PATH=/tmp:$PATH
 	export PATH
+
+	# slice 1 をディスク一杯に取り直す。先頭 (63) は動かないので中身は
+	# そのまま。fdisk は mount 中のディスクにも書けて、新しい大きさは
+	# その場でカーネルに入る (diskinfo /dev/${disk}s1 で確かめた)。
+	if [ "$need_slice" = yes ]; then
+		fdisk -IB "/dev/$disk" > /dev/null 2>&1 ||
+			{ echo "growdisk: fdisk が失敗した。小さいまま続ける"
+			  return 0; }
+
+		# **書けたことと、カーネルがそう見ることは別。** 320GB の
+		# ディスクで、MBR は書けたのに in-core の slice が 1 GiB の
+		# ままで、続く disklabel64 -r -w auto が古い大きさから label を
+		# 作り直し、何も広がらないまま「済んだ」ことにされた。付いて
+		# きていなければ label には触らず、読み直させてから次の起動で
+		# 続きをやる。
+		now=$(diskinfo "/dev/${disk}s1" 2>/dev/null |
+			sed -n 's/.*size=0x\([0-9a-f]*\).*/\1/p')
+		if [ -z "$now" ] || [ $(( (0x$now - 0x$slicesz) / 512 )) -lt 65536 ]; then
+			echo "growdisk: slice を広げた。読み直させるため一度落とす"
+			reboot -qn
+			return 0
+		fi
+		slicesz=$now
+	fi
+
 
 	# label は自分の中に slice の大きさを控えており、fdisk では変わらない。
 	# 取り直させるには auto で書き直すしかないが、これは label: の名前も
