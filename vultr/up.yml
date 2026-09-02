@@ -170,6 +170,10 @@
         snapshot: "{{ snapshot_name }}"
         firewall_group: "{{ label }}"
         enable_ipv6: true
+        # 鍵を焼いていないイメージは、起動時に metadata から取る。ここで
+        # 渡さないと metadata の public-keys が空になり、誰も入れない箱が
+        # 立つ。焼いてある版には効かないので、渡しても害はない。
+        ssh_keys: "{{ ssh_keys | default([], true) }}"
         state: present
       register: instance
 

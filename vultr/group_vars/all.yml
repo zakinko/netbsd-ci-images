@@ -78,3 +78,11 @@ accounts:
     uid: 2801
     wheel: true
     github: fmlorg
+
+# instance に割り当てる SSH キー (Vultr に登録した名前か id)。鍵を焼いて
+# いないイメージは起動時に metadata から取るので、ここが空だと誰も入れない
+# 箱が立つ。焼いてある版には効かない。
+#
+#   ansible-playbook up.yml -e '{"ssh_keys":["zakinko-ec6dc2fb"]}'
+#
+ssh_keys: []
