@@ -74,12 +74,34 @@ jobs:
       # 建てる場所。焼いたイメージを大きなディスクに置いて起こすと growdisk が
       # 広げるので、そこに木と obj を置ける。二本目に焼いたイメージそのものを
       # 繋いでおき、建て終わったらカーネルを差し替える。
-      - name: 建てる場所を起こす
+      # **二本目は最初から挿さない。** growdisk は label で自分のディスクを
+      # 探すので、同じ label のイメージが二本挿さっていると、先に見つけた方
+      # (まだ小さい target) を掴んで「広げる余地なし」と判断し、build の側が
+      # 1 GiB のままになる。木を展開した途端に No space left on device で
+      # 転ぶ。一本で起こして広げ、落としてから二本目を繋ぐ。
+      - name: 建てる場所を起こして広げる
         run: |
           set -e
           cp "out/dragonfly-$REL-x86_64-vultr.img" build.img
           truncate -s 24576M build.img
           cp "out/dragonfly-$REL-x86_64-vultr.img" target.img
+          qemu-system-x86_64 $ACCEL -m 2048 -smp 2 \
+            -drive file=build.img,format=raw,if=none,id=b0 \
+            -device virtio-blk-pci,drive=b0,bootindex=0 \
+            -nic user,hostfwd=tcp:127.0.0.1:2240-:22 \
+            -display none -serial none \
+            -monitor unix:/tmp/dfg.mon,server,nowait &
+          SSHC="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR -o IdentitiesOnly=yes -i $PWD/build.key -p 2240 root@127.0.0.1"
+          n=0
+          while [ $n -lt 60 ]; do $SSHC true 2>/dev/null && break; n=$((n+1)); sleep 10; done
+          [ $n -lt 60 ] || { echo "!! 広げる段で上がってこない"; exit 1; }
+          $SSHC 'sh -c "df -h /"'
+          $SSHC 'sh -c "shutdown -p now"' || true
+          sleep 30
+
+      - name: 二本目を繋いで起こす
+        run: |
+          set -e
           qemu-system-x86_64 $ACCEL -m 4096 -smp $(nproc) \
             -drive file=build.img,format=raw,if=none,id=b0 \
             -device virtio-blk-pci,drive=b0,bootindex=0 \
