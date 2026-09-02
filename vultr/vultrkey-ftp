@@ -29,6 +29,14 @@ vultrkey_start()
 	tmp=/tmp/vultrkey.$$
 	i=0
 
+	# **既に鍵が置かれていれば触らない。** 毎回上書きすると、手で足した鍵が
+	# 再起動のたびに消える。実際それで、共同で使っていた箱から締め出した。
+	# metadata はイメージを配るときの初期値を渡すためのもので、その後の
+	# 管理は箱の持ち主のものにする。
+	if [ -s "$vultrkey_file" ]; then
+		return 0
+	fi
+
 	# 網が上がった直後は metadata がまだ答えないことがある。
 	while [ $i -lt 10 ]; do
 		if ftp -o "$tmp" "$vultrkey_url" 2> /dev/null &&
