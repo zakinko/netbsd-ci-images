@@ -1,0 +1,58 @@
+#!/bin/sh
+#
+# PROVIDE: vultrkey
+# REQUIRE: NETWORKING
+# BEFORE: sshd
+#
+# Vultr の metadata から root の公開鍵を取る。
+#
+# イメージに鍵を焼くと、落とした人が立てた VPS に焼いた側の鍵で入れること
+# になるので、配る版には焼けない。かといって鍵が無ければ ssh で入れない。
+# cloud-init を丸ごと入れる手もあるが、要るのは公開鍵一つだけで、そのために
+# python と依存一式を積むのは重い。metadata を一度引くだけで足りる。
+#
+# 住所は link-local の 169.254.169.254 で、IPv4 が付かない plan でも私設の
+# v4 が来るので届く。
+
+. /etc/rc.subr
+
+name="vultrkey"
+rcvar="vultrkey"
+start_cmd="vultrkey_start"
+stop_cmd=":"
+
+: ${vultrkey_url:="http://169.254.169.254/v1/public-keys"}
+: ${vultrkey_file:="/root/.ssh/authorized_keys"}
+
+vultrkey_start()
+{
+	tmp=/tmp/vultrkey.$$
+	i=0
+
+	# 網が上がった直後は metadata がまだ答えないことがある。
+	while [ $i -lt 10 ]; do
+		if ftp -o "$tmp" "$vultrkey_url" 2> /dev/null &&
+		    [ -s "$tmp" ]; then
+			break
+		fi
+		rm -f "$tmp"
+		i=$((i + 1))
+		sleep 3
+	done
+
+	if [ ! -s "$tmp" ]; then
+		echo "vultrkey: metadata から鍵を取れなかった"
+		rm -f "$tmp"
+		return 0
+	fi
+
+	mkdir -p "$(dirname "$vultrkey_file")"
+	chmod 700 "$(dirname "$vultrkey_file")"
+	cat "$tmp" > "$vultrkey_file"
+	chmod 600 "$vultrkey_file"
+	rm -f "$tmp"
+	echo "vultrkey: $(grep -c . "$vultrkey_file") 個の鍵を置いた"
+}
+
+load_rc_config $name
+run_rc_command "$1"
