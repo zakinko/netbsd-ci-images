@@ -1,0 +1,200 @@
+name: build-vps-images
+
+# VPS へ書く NetBSD の生イメージを、鍵を焼かずに組んで release に置く。
+#
+# build-vultr-image.yml との違いは三つ。
+#
+#   - **鍵を焼かない。** 起動時に Vultr の metadata から取る (vultr/vultrkey-ftp)。
+#     焼いた版は落とした人の VPS に焼いた側の鍵で入れることになるので、配る
+#     ものには入れられない
+#   - **9.x には当て物を掛ける。** 配布されたままのカーネルは virtio が legacy
+#     までしか喋らず、Vultr が見せる virtio 1.0 のディスクを掴めない。
+#     mountroot> で止まる。patches/netbsd9-virtio1.diff がそれを直す
+#   - 版と port を matrix で回す
+#
+# 9.x は木を取って tools から建てるので一本 40 分ほどかかる。10 と 11 は
+# 配布のカーネルがそのまま使えるので、セットを展開するだけで済む。
+
+on:
+  workflow_dispatch:
+    inputs:
+      releases:
+        description: '版 (空白区切り)'
+        required: false
+        default: '9.4 10.1 11.0'
+      arches:
+        description: 'port (空白区切り)'
+        required: false
+        default: 'amd64 i386'
+      publish:
+        description: 'release に上げる'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-vps-images
+  cancel-in-progress: true
+
+jobs:
+  # 当て物を当てたカーネルを先に建てる。9.x だけが要る。
+  kernel:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, i386]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 木を取る
+        run: |
+          git clone --depth 1 -b netbsd-9 \
+            https://github.com/NetBSD/src.git /tmp/nbsrc
+
+      # 当たらなくなったらここで止める。当たらないまま建てると、素のカーネルが
+      # 出来て「直っていないのに直ったつもり」になる。
+      - name: 当て物を掛ける
+        run: |
+          cd /tmp/nbsrc
+          patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/netbsd9-virtio1.diff"
+          patch -p1 < "$GITHUB_WORKSPACE/patches/netbsd9-virtio1.diff"
+          grep -c VERSION_1 sys/dev/pci/virtio_pci.c
+
+      - name: tools とカーネルを建てる
+        run: |
+          cd /tmp/nbsrc
+          ./build.sh -U -j$(nproc) -O /tmp/obj -T /tmp/tools \
+            -m ${{ matrix.arch }} tools
+          ./build.sh -U -j$(nproc) -O /tmp/obj -T /tmp/tools \
+            -m ${{ matrix.arch }} kernel=GENERIC
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netbsd9-kernel-${{ matrix.arch }}
+          path: /tmp/obj/sys/arch/${{ matrix.arch }}/compile/GENERIC/netbsd
+          if-no-files-found: error
+
+  image:
+    needs: kernel
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ['9.4', '10.1', '11.0']
+        arch: [amd64, i386]
+    env:
+      REL: ${{ matrix.release }}
+      ARCH: ${{ matrix.arch }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 動かすものを入れる
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils
+          ls -l /dev/kvm || echo "!! KVM が無い。emulation で 10 倍以上遅い"
+
+      - name: 名前を決める
+        run: |
+          echo "BUILDER=$ARCH-$REL" >> $GITHUB_ENV
+          case "$REL" in
+          9.*)	echo "IMGNAME=$ARCH-$REL-virtio1-vultr" >> $GITHUB_ENV
+            echo "PATCHED=yes" >> $GITHUB_ENV ;;
+          *)	echo "IMGNAME=$ARCH-$REL-vultr" >> $GITHUB_ENV
+            echo "PATCHED=no" >> $GITHUB_ENV ;;
+          esac
+
+      - name: 当て物を当てたカーネルを受け取る (9.x のみ)
+        if: startsWith(matrix.release, '9.')
+        uses: actions/download-artifact@v4
+        with:
+          name: netbsd9-kernel-${{ matrix.arch }}
+          path: patched
+
+      - name: 組ませる側を起こす
+        run: |
+          set -e
+          gh release download images --repo "$GITHUB_REPOSITORY" \
+            -p "$BUILDER.qcow2" -p "$BUILDER.qemu"
+          KEEP=1 sh runvm.sh "$BUILDER" 2222
+
+      # mkimg.sh は鍵を要求するので、置き場だけ作って空でない一行を渡す。
+      # 焼いた鍵はこの後で消すので、何であってもよい。
+      - name: ゲストの中で組む
+        run: |
+          set -e
+          SSH=$(cat "$BUILDER.ssh")
+          ssh-keygen -q -t ed25519 -f throwaway -N '' -C throwaway
+          $SSH 'cat > /root/authorized_keys' < throwaway.pub
+          $SSH 'cat > /root/mkimg.sh' < mkimg.sh
+          $SSH "PATH=/sbin:/usr/sbin:/bin:/usr/bin \
+                PROFILE=vultr BASE=/root sh /root/mkimg.sh $ARCH $REL"
+
+      # 焼いた鍵と host key を外し、metadata から取る仕掛けを入れる。
+      # 9.x はここでカーネルも差し替える。
+      # 焼いた鍵と host key を外し、metadata から取る仕掛けを入れる。
+      # 9.x はここでカーネルも差し替える。中身は vultr/vps-finish.sh。
+      - name: 鍵を外して metadata 取得を入れる
+        run: |
+          set -e
+          SSH=$(cat "$BUILDER.ssh")
+          $SSH 'cat > /root/vultrkey' < vultr/vultrkey-ftp
+          if [ "$PATCHED" = yes ]; then
+            $SSH 'cat > /root/netbsd-virtio1' < patched/netbsd
+          fi
+          $SSH 'sh -s' < vultr/vps-finish.sh
+
+      - name: 持ち帰る
+        run: |
+          set -e
+          SSH=$(cat "$BUILDER.ssh")
+          $SSH "cat /root/$ARCH-$REL-vultr.img" > "$IMGNAME.img"
+          ls -l "$IMGNAME.img"
+          # release の asset は一つ 2GiB まで。超えていたら上げる前に気づく。
+          [ "$(stat -c %s "$IMGNAME.img")" -lt 2147483648 ] || {
+            echo "!! 2GiB を超えた"; exit 1; }
+
+      - name: 組ませた側を止める
+        if: always()
+        run: sh stopvm.sh "$BUILDER" || true
+
+      # **当て物が効いているかは、virtio 1.0 専用のデバイスでしか分からない。**
+      # qemu の既定は transitional で、素のカーネルでも動いてしまう。
+      # disable-legacy=on を付けて、root を掴んで上がるところまで見る。
+      - name: virtio 1.0 だけで起動するか確かめる
+        run: |
+          set -e
+          cp "$IMGNAME.img" boot-test.img
+          truncate -s 10240M boot-test.img
+          qemu-system-x86_64 -enable-kvm -m 1024 -smp 2 \
+            -drive file=boot-test.img,format=raw,if=none,id=d0 \
+            -device virtio-blk-pci,drive=d0,bootindex=0,disable-legacy=on \
+            -netdev user,id=n0 \
+            -device virtio-net-pci,netdev=n0,disable-legacy=on \
+            -display none -serial none \
+            -monitor unix:/tmp/vps.mon,server,nowait &
+          sleep 240
+          python3 screendump.py /tmp/vps.mon "$IMGNAME.screen.ppm"
+          pnmtopng "$IMGNAME.screen.ppm" > "$IMGNAME.screen.png" || true
+
+      - name: 画面を artifact に
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-${{ matrix.arch }}-${{ matrix.release }}
+          path: '*.png'
+          if-no-files-found: warn
+
+      - name: release に上げる
+        if: inputs.publish
+        run: |
+          set -e
+          gh release view vps --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create vps --repo "$GITHUB_REPOSITORY" \
+              --title "VPS へ書く生イメージ (鍵を焼いていない版)" \
+              --notes "起動時に Vultr の metadata から公開鍵を取ります。"
+          gh release upload vps "$IMGNAME.img" --clobber --repo "$GITHUB_REPOSITORY"
