@@ -1,0 +1,143 @@
+name: build-vps-dragonfly
+
+# VPS へ書く DragonFly の生イメージを、当て物を当てたカーネルで組む。
+#
+# 配布されたままのカーネルは virtio が legacy (0.9.5) までしか喋らず、Vultr が
+# 見せる virtio 1.0 のディスクを掴めない。mountroot> で止まる。
+# patches/dragonfly-virtio1.diff がそれを直す。
+#
+# **試験は MSI-X を切って行う。** qemu の既定は MSI-X を出すので、割り込みの
+# 経路が二つあるうち片方しか通らない。実際それで vtpci_legacy_intr の NULL
+# 参照を見落とし、Vultr の実機で落ちた。vectors=0 を付けるとその道を通る。
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'DragonFly の版'
+        required: false
+        default: '6.4.2'
+      publish:
+        description: 'release に上げる'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-vps-dragonfly
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      REL: ${{ inputs.release }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 動かすものを入れる
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils netpbm
+          ls -l /dev/kvm || echo "!! KVM が無い。emulation で 10 倍以上遅い"
+
+      - name: 素のイメージを組む
+        run: |
+          ssh-keygen -q -t ed25519 -f build.key -N '' -C build
+          cp build.key.pub authorized_keys
+          sh build-vultr-dragonfly.sh "$REL"
+
+      # 木を取って当て物を当てる。当たらなくなったらここで止める。当たらない
+      # まま建てると素のカーネルが出来て、直っていないのに直ったつもりになる。
+      - name: 木を取って当て物を当てる
+        run: |
+          set -e
+          git clone --depth 1 -b DragonFly_RELEASE_6_4 \
+            https://github.com/DragonFlyBSD/DragonFlyBSD.git /tmp/dfsrc
+          cd /tmp/dfsrc
+          patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/dragonfly-virtio1.diff"
+          patch -p1 < "$GITHUB_WORKSPACE/patches/dragonfly-virtio1.diff"
+          grep -c VIRTIO_PCI_CAP_COMMON_CFG sys/dev/virtual/virtio/pci/virtio_pci.h
+
+      # 建てる場所。焼いたイメージを大きなディスクに置いて起こすと growdisk が
+      # 広げるので、そこに木と obj を置ける。二本目に焼いたイメージそのものを
+      # 繋いでおき、建て終わったらカーネルを差し替える。
+      - name: 建てる場所を起こす
+        run: |
+          set -e
+          cp "out/dragonfly-$REL-x86_64-vultr.img" build.img
+          truncate -s 24576M build.img
+          cp "out/dragonfly-$REL-x86_64-vultr.img" target.img
+          qemu-system-x86_64 -enable-kvm -m 4096 -smp $(nproc) \
+            -drive file=build.img,format=raw,if=none,id=b0 \
+            -device virtio-blk-pci,drive=b0,bootindex=0 \
+            -drive file=target.img,format=raw,if=none,id=t0 \
+            -device virtio-blk-pci,drive=t0 \
+            -nic user,hostfwd=tcp:127.0.0.1:2240-:22 \
+            -display none -serial none \
+            -monitor unix:/tmp/dfb.mon,server,nowait &
+          echo "SSH=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR -o IdentitiesOnly=yes -i $PWD/build.key -p 2240 root@127.0.0.1" >> $GITHUB_ENV
+          n=0
+          while [ $n -lt 60 ]; do
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
+              -o IdentitiesOnly=yes -i build.key -p 2240 root@127.0.0.1 true \
+              2>/dev/null && break
+            n=$((n + 1)); sleep 10
+          done
+          [ $n -lt 60 ] || { echo "!! 建てる場所が上がってこない"; exit 1; }
+
+      - name: 木を渡してカーネルを建てる
+        run: |
+          set -e
+          tar -C /tmp/dfsrc --exclude .git -cf - . | \
+            $SSH 'mkdir -p /usr/src && tar -C /usr/src -xpf -'
+          $SSH 'sh -s' < vultr/dragonfly-kernel.sh
+
+      - name: カーネルを差し替えて仕上げる
+        run: |
+          set -e
+          $SSH 'cat > /root/vultrkey' < vultr/vultrkey-fetch
+          $SSH 'sh -s' < vultr/dragonfly-swap-kernel.sh
+          $SSH 'sh -c "shutdown -p now"' || true
+          sleep 30
+
+      # **MSI-X を切って起こす。** ここを通さないと割り込みの片道しか試験
+      # できない。素のカーネルなら mountroot> で、直っていないカーネルなら
+      # vtpci_legacy_intr で落ちる。
+      - name: MSI-X 無しの virtio 1.0 だけで起動するか
+        run: |
+          set -e
+          cp target.img boot-test.img
+          truncate -s 10240M boot-test.img
+          qemu-system-x86_64 -enable-kvm -m 1024 -smp 2 \
+            -drive file=boot-test.img,format=raw,if=none,id=d0 \
+            -device virtio-blk-pci,drive=d0,bootindex=0,disable-legacy=on,vectors=0 \
+            -netdev user,id=n0 \
+            -device virtio-net-pci,netdev=n0,disable-legacy=on,vectors=0 \
+            -display none -serial none \
+            -monitor unix:/tmp/dft.mon,server,nowait &
+          sleep 300
+          python3 screendump.py /tmp/dft.mon nomsix.ppm
+          pnmtopng nomsix.ppm > nomsix.png
+          # 画面に panic が出ていないことは人が見る。ここでは残すだけ。
+
+      - name: 画面を artifact に
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dragonfly-boot-screen
+          path: '*.png'
+          if-no-files-found: warn
+
+      - name: release に上げる
+        if: inputs.publish
+        run: |
+          set -e
+          mv target.img "dragonfly-$REL-virtio1-vultr.img"
+          ls -l "dragonfly-$REL-virtio1-vultr.img"
+          gh release upload vps "dragonfly-$REL-virtio1-vultr.img" \
+            --clobber --repo "$GITHUB_REPOSITORY"
