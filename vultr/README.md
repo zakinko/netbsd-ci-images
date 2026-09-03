@@ -178,6 +178,35 @@ ansible-playbook down.yml -e drop_snapshot=true  # snapshot も落とす
 instance は時間割 ($0.003/時) なので、触り終えたら壊しておく。一時間で
 一円に届かない。snapshot の保管は $0.05/GB/月。
 
+## virtio 1.0 (Vultr で起動しない版があるのはこれ)
+
+**Vultr のディスクは virtio 1.0 でしか見えません。** virtio が legacy (0.9.5)
+までしか喋らない版は、ローダまでは進むのにカーネルがディスクを掴めず、
+`mountroot>` で止まります。`?` を打ってもディスクが一つも出てきません。
+
+	no disk named 'part-by-label/…'
+	setrootbyname failed
+	ffs_mountroot: can't find rootvp
+
+該当するのは NetBSD 9 以前と DragonFly です。NetBSD は 10.0 で対応したので
+10 と 11 はそのまま動きます。当て物は [`patches/`](../patches/) に置いてあり、
+CI の [`build-vps-images`](../.github/workflows/build-vps-images.yml) と
+[`build-vps-dragonfly`](../.github/workflows/build-vps-dragonfly.yml) が
+それを当てて組みます。
+
+### 試すときに踏んだ罠
+
+**qemu の既定は transitional です。** legacy も modern も喋るので、当て物が
+効いているかどうかが分かりません。`disable-legacy=on` を付けて初めて、素の
+カーネルが `mountroot>` で止まることを確かめられます。
+
+**qemu の既定は MSI-X を出します。** virtio の割り込みには MSI-X の道と
+legacy の道があり、既定のままだと前者しか通りません。DragonFly の移植で
+ISR の読み方を modern に直し忘れていたのに気づかず、実機で
+`vtpci_legacy_intr` の NULL 参照に当たりました。`vectors=0` を付けると
+その道を通ります。**Vultr は MSI-X を出しますが、デバイスによっては
+legacy へ落ちます** (NIC は取れてディスクは取れない、という出方をしました)。
+
 ## DragonFly BSD
 
 同じ口 (snapshot-from-URL) に、DragonFly の生イメージも流せる。
