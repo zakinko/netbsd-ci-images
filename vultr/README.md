@@ -124,7 +124,17 @@ https://github.com/.../amd64-10.1-vultr.img
 何が起きたか分からない。
 
 ```sh
-U=$(curl -s -o /dev/null -w '%{redirect_url}' \
+VULTR_API_KEY=... sh snapshot-from-url.sh \
+	https://github.com/<owner>/netbsd-ci-images/releases/download/vultr/amd64-11.0-vultr.img \
+	netbsd-11.0-amd64
+```
+
+[`snapshot-from-url.sh`](snapshot-from-url.sh) は解決から取り込みの見届けまで
+やる。消えたら消えたと言うので、`Invalid snapshot ID.` を自分で読み解かなくて
+済む。vultr-cli を使うなら解決は自分でやること。
+
+```sh
+U=$(curl -sIL -o /dev/null -w '%{url_effective}' \
 	https://github.com/<owner>/netbsd-ci-images/releases/download/vultr/amd64-11.0-vultr.img)
 vultr-cli snapshot create-url -u "$U" -d 'netbsd-11.0-amd64'
 ```
