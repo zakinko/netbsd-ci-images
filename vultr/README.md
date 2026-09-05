@@ -131,7 +131,27 @@ VULTR_API_KEY=... sh snapshot-from-url.sh \
 
 [`snapshot-from-url.sh`](snapshot-from-url.sh) は解決から取り込みの見届けまで
 やる。消えたら消えたと言うので、`Invalid snapshot ID.` を自分で読み解かなくて
-済む。vultr-cli を使うなら解決は自分でやること。
+済む。渡す前に [`image-ready.sh`](image-ready.sh) を通すので、下に並べた四つの
+罠はそこで止まる。
+
+```sh
+sh image-ready.sh <URL>
+```
+
+`image-ready.sh` は単体でも使える。Vultr が黙って落とす条件のうち、渡す前に
+分かるものだけを見る。
+
+| 見るもの | 落ちる理由 |
+| --- | --- |
+| リダイレクト | Vultr は 302 を追わない |
+| 2 GiB 超え | GitHub の release に上がらない |
+| gz / bz2 / zst | Vultr は展開しない |
+| 先頭が MBR でない | 書き戻しても起動しない |
+
+通っても起動するとは限らない。ここで見るのは渡す前に分かる分だけで、
+起動したかどうかは別に確かめること。
+
+vultr-cli を使うなら解決は自分でやること。
 
 ```sh
 U=$(curl -sIL -o /dev/null -w '%{url_effective}' \

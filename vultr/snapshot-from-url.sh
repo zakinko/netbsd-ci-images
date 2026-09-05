@@ -37,7 +37,7 @@ api() {
 }
 
 # 多段のこともあるので -L で最後まで追い、辿り着いた先を取る。curl の
-# %{redirect_url} は一段しか見ない。
+# %{redirect_url} は一段しか見ない。解決した URL は image-ready.sh に通す。
 echo "URL を解決する"
 final=$(curl -sIL -o /dev/null -w '%{url_effective}' "$url")
 case "$final" in
@@ -47,6 +47,13 @@ esac
 if [ "$final" != "$url" ]; then
 	# 署名がクエリに入るので、host だけ出す。
 	echo "  -> $(echo "$final" | sed 's|https://\([^/]*\)/.*|\1|') へ飛んでいた"
+fi
+
+# 渡す前に見る。ここを通らずに API を叩く道が残っているうちは、いつか誰かが
+# gz か 2 GiB 超えを渡して、また黙って消えるのを眺めることになる。
+if ! sh "$(dirname "$0")/image-ready.sh" "$final"; then
+	echo "$0: 渡す前の確認で止めた" >&2
+	exit 1
 fi
 
 body=$(printf '%s' "$final" | python3 -c 'import json,sys; print(json.dumps({"url": sys.stdin.read(), "description": sys.argv[1]}))' "$desc")
