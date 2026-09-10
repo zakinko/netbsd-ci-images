@@ -6,6 +6,12 @@ name: build-vps-dragonfly
 # 見せる virtio 1.0 のディスクを掴めない。mountroot> で止まる。
 # patches/dragonfly-virtio1.diff がそれを直す。
 #
+# もう一つ、sysctl(KERN_PROC_PATHNAME) が exit 中のプロセスを指すと、p_fd が
+# 既に NULL なのに cache_fullpath がそれを辿って panic する。JDK の test の
+# ように子プロセスを大量に起こして自分の path を引く物が、素のカーネルでは
+# 数秒で落とす。patches/dragonfly-procpath-panic.diff が、すぐ上の
+# sysctl_kern_proc_cwd と同じ p_fd != NULL のガードを足す。
+#
 # **試験は MSI-X を切って行う。** qemu の既定は MSI-X を出すので、割り込みの
 # 経路が二つあるうち片方しか通らない。実際それで vtpci_legacy_intr の NULL
 # 参照を見落とし、Vultr の実機で落ちた。vectors=0 を付けるとその道を通る。
@@ -67,9 +73,12 @@ jobs:
           git clone --depth 1 -b DragonFly_RELEASE_6_4 \
             https://github.com/DragonFlyBSD/DragonFlyBSD.git /tmp/dfsrc
           cd /tmp/dfsrc
-          patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/dragonfly-virtio1.diff"
-          patch -p1 < "$GITHUB_WORKSPACE/patches/dragonfly-virtio1.diff"
+          for d in dragonfly-virtio1 dragonfly-procpath-panic; do
+            patch -p1 --dry-run < "$GITHUB_WORKSPACE/patches/$d.diff"
+            patch -p1 < "$GITHUB_WORKSPACE/patches/$d.diff"
+          done
           grep -c VIRTIO_PCI_CAP_COMMON_CFG sys/dev/virtual/virtio/pci/virtio_pci.h
+          grep -c 'p->p_fd != NULL && p->p_textnch.ncp' sys/kern/kern_proc.c
 
       # 建てる場所。焼いたイメージを大きなディスクに置いて起こすと growdisk が
       # 広げるので、そこに木と obj を置ける。二本目に焼いたイメージそのものを
