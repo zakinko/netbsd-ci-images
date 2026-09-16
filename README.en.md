@@ -12,6 +12,39 @@ i386, nothing before 9.x, and nothing at all for the other ports. Running an
 install on every CI job is not practical, so the images are built once here
 and published as a release.
 
+## How this differs from vmactions
+
+[vmactions](https://github.com/vmactions) boots BSDs in CI. For NetBSD that is
+`vmactions/netbsd-vm`, defaulting to 11.0 as of 2026-09; the image lives in the
+`anyvm-org/netbsd-builder` release (v2.2.6, 2026-09-08) as
+`netbsd-11.0.qcow2.zst`. **If you only need amd64, you do not need the images
+here** — that one will do.
+
+What these images are for is **i386**. vmactions has no NetBSD/i386 image.
+Neither the builder nor the action carries an i386 conf, and no release asset
+is one (checked 2026-09-17). What is built is amd64, aarch64, riscv64, sparc64,
+and the 11.0 microvm. For 9.x and earlier there is only amd64 and aarch64.
+
+### "vmactions is slow because it runs under TCG" is wrong
+
+Correct it wherever it is written; it led to a wrong call once. What is
+actually true:
+
+- `/dev/kvm` **is** present on GitHub's Linux runners. `netbsd-vm` itself runs
+  `chmod 666 /dev/kvm` before starting
+- **amd64 guests run under KVM.** TCG is for guests whose arch differs from the
+  host (aarch64, riscv64, sparc64, s390x, ppc64le, ...)
+- `isSlowEmulatedArch()` in `netbsd-vm` does not pick the accelerator. It is
+  used in three places, all of which tune rsync's `--timeout` and the ssh
+  options
+
+An i386 guest also runs under KVM on an x86_64 host. That is why the images
+here are fast for i386 — not because vmactions is slow. **vmactions simply has
+no i386 image.**
+
+Beyond that, this repo carries systems other than NetBSD, and ports that only
+run under gxemul or simh. Those are outside what vmactions covers.
+
 ## What is in them
 
 Nothing is tailored to a particular use. The distribution is unpacked, `sshd`

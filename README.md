@@ -11,6 +11,39 @@ NetBSD が中心ですが、emulator の上で動いて ssh で入れるもの�
 ません。CI で毎回インストールを走らせるのも現実的ではないので、ここで一度
 作って release に置いています。
 
+## vmactions との違い
+
+CI で BSD を起こす道具に [vmactions](https://github.com/vmactions) があります。
+NetBSD なら `vmactions/netbsd-vm` で、2026-09 時点の既定は 11.0。イメージは
+`anyvm-org/netbsd-builder` の release (v2.2.6、2026-09-08) に
+`netbsd-11.0.qcow2.zst` として置かれています。**amd64 が要るだけなら、ここの
+イメージは要りません。**あちらで足ります。
+
+ここが要るのは **i386** です。vmactions には NetBSD/i386 のイメージがありま
+せん。builder にも action にも i386 の conf が無く、release の asset にも一つ
+も無い (2026-09-17 に確認)。作られているのは amd64 と aarch64、riscv64、
+sparc64、それに 11.0 の microvm だけです。9.x 以前の版も、amd64 と aarch64
+しかありません。
+
+### 「vmactions は TCG だから遅い」は誤り
+
+そう書いてある所を見つけたら直してください。一度これで判断を誤りました。
+正しくは次のとおりです。
+
+- GitHub の Linux runner に `/dev/kvm` は**在ります**。`netbsd-vm` 自身が
+  起動前に `chmod 666 /dev/kvm` しています
+- **amd64 のゲストは KVM で走ります。**TCG になるのは、ホストと arch が違う
+  ゲスト (aarch64、riscv64、sparc64、s390x、ppc64le など) です
+- `netbsd-vm` の `isSlowEmulatedArch()` は accel を選んでいません。rsync の
+  `--timeout` と ssh の option を調整する三箇所でしか使われていません
+
+i386 のゲストも、x86_64 のホストなら KVM で走ります。ここのイメージが i386
+で速いのはそのためで、vmactions が遅いからではありません。**vmactions には
+i386 のイメージが無い、というだけの話です。**
+
+それに加えて、ここには NetBSD 以外と、gxemul や simh でしか動かない port も
+あります。そちらは vmactions の範囲外です。
+
 ## 中身
 
 特定の用途に寄せた細工はしていません。配布物を展開して `sshd` を上げ、
