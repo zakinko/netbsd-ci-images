@@ -172,9 +172,13 @@ qemu-system-i386|qemu-system-x86_64)
 	if [ -w /dev/kvm ]; then ACCEL="-enable-kvm"; fi ;;
 esac
 
-# 古いイメージには DISKARGS が無いので DISKIF から組み立てて補う。
+# 古いイメージと、build.sh が組む NetBSD 以外の OS (freebsd-*、omnios-* など)
+# には DISKARGS が無いので DISKIF から組み立てて補う。format は .qemu の
+# FORMAT= から取る。raw に固定していたので、release に置いた qcow2 を raw
+# として読み、boot0 が数バイト出た所で止まっていた。FORMAT= も無い古い
+# .qemu だけが raw。
 [ -n "${DISKARGS:-}" ] || \
-	DISKARGS="-drive file=@IMG@,if=${DISKIF:-ide},format=raw,cache=unsafe"
+	DISKARGS="-drive file=@IMG@,if=${DISKIF:-ide},format=${FORMAT:-raw},cache=unsafe"
 DISK=$(subst "$DISKARGS")
 EXTRA=$(subst "$EXTRAARGS")
 

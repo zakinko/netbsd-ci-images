@@ -119,6 +119,12 @@ jobs:
           qemu-img convert -O qcow2 -c "$src" "out/$T.pub.qcow2"
           mv "out/$T.pub.qcow2" "out/$T.qcow2"
           ls -lh out/$T.qcow2
+          # 上げるのは qcow2 なので、添える .qemu もそう言わなければならない。
+          # IMGFMT=raw の target (dragonfly) は FORMAT=raw のまま上がっていて、
+          # runvm.sh がそれを信じて qcow2 を raw として開いていた。
+          sed -i -e 's/^FORMAT=raw$/FORMAT=qcow2/' \
+                 -e 's/file=@IMG@,format=raw/file=@IMG@,format=qcow2/' out/$T.qemu
+          grep -q '^FORMAT=qcow2$' out/$T.qemu
           gh release view images > /dev/null 2>&1 || \
             gh release create images --title "images for CI" --notes "CI 用のイメージ"
           gh release upload images out/$T.qcow2 out/$T.qemu --clobber
