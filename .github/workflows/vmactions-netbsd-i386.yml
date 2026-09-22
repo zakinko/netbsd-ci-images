@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       releases:
-        description: '焼く版 (空なら 11.0 と 10.1 だけ)'
+        description: 'JSON の配列で焼く版を指定する。空なら十版すべて'
         type: string
         default: ''
   push:
@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ['11.0', '10.2', '10.1', '10.0', '9.5', '9.4', '9.3', '9.2', '9.1', '9.0']
+        release: ${{ fromJSON(inputs.releases != '' && inputs.releases || '["11.0","10.2","10.1","10.0","9.5","9.4","9.3","9.2","9.1","9.0"]') }}
     steps:
       - uses: actions/checkout@v4
 
