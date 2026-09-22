@@ -48,6 +48,16 @@ if [ -z "${SMP:-}" ]; then
 	[ "$SMP" -gt 4 ] && SMP=4
 fi
 KEY=${KEY:-$DIR/$NAME.id}
+# モニタの unix socket。既定は他の控えと同じ場所だが、差し替えられるように
+# してある -- sockaddr_un の sun_path は 104 バイトしか無く、深い所に置くと
+# qemu が "Path must be less than 104 bytes" で起動しない。macOS の
+# /private/tmp/claude-.../scratchpad/ がちょうどそれで、そこを作業場に
+# すると起動そのものが出来なかった。
+#
+#	MON=/tmp/foo.mon sh runvm.sh ...
+#
+# 止めるときは stopvm.sh にも同じものを渡すこと。
+MON=${MON:-$DIR/$NAME.mon}
 SEED=$DIR/$NAME.seed
 BASE=${BASE:-$(cd "$(dirname "$0")" && pwd)}
 
@@ -213,7 +223,7 @@ $QEMU $ACCEL $SNAP -m $MEM -smp $SMP \
 	$NET \
 	-display none \
 	$SERIAL \
-	-monitor "unix:$DIR/$NAME.mon,server,nowait" \
+	-monitor "unix:$MON,server,nowait" \
 	-pidfile "$DIR/$NAME.pid" \
 	-daemonize
 

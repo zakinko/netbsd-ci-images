@@ -16,7 +16,8 @@ NAME=$1
 [ -n "$NAME" ] || { echo "usage: $0 <arch>-<release>"; exit 1; }
 
 DIR=${DIR:-.}
-MON=$DIR/$NAME.mon
+# 起動時に MON を渡したなら、ここにも同じものを渡すこと (runvm.sh 参照)。
+MON=${MON:-$DIR/$NAME.mon}
 PIDF=$DIR/$NAME.pid
 
 [ -s "$PIDF" ] || { echo "$0: $PIDF が無い。動いていない?"; exit 0; }
