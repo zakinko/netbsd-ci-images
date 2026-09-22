@@ -92,6 +92,15 @@ jobs:
           c=vmactions/${{ steps.b.outputs.dir }}/conf/${{ matrix.conf }}.conf
           test -f "$c" || { echo "!! $c が無い"; exit 1; }
           cp "$c" builder/conf/
+          # 上流に無い files/ と hooks/ を持っている conf のために、
+          # 同じ名前の物が repo に在れば一緒に置く。sparc64 が既にやって
+          # いる「pinned QEMU を先に組む」仕掛けを ppc64 に写すのに要る。
+          for d in files hooks; do
+            if [ -d "vmactions/${{ steps.b.outputs.dir }}/$d" ]; then
+              mkdir -p "builder/$d"
+              cp -v "vmactions/${{ steps.b.outputs.dir }}/$d"/* "builder/$d/" || true
+            fi
+          done
           echo "--- 置いた conf"
           cat "builder/conf/$(basename "$c")"
 
