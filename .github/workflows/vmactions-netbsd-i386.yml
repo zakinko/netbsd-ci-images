@@ -1,0 +1,98 @@
+name: vmactions 向け NetBSD/i386 イメージ
+
+# vmactions には NetBSD/i386 のイメージが一つも無い。action にも builder にも
+# i386 の conf が無く、release の asset にも無い (2026-09-23 に確認)。
+#
+# ここでは上流に足す conf をそのまま使って、anyvm-org/netbsd-builder の
+# build.py で焼けるかを測る。焼けたという実績を添えて上流へ出すのが狙いで、
+# このリポジトリで image を配るためのものではない。
+#
+# 上流の build.yml は `python3 build.py conf/netbsd-<os>.conf` 一行で、
+# cf-tunnel の step は人が VNC を覗くためだけのもの (build.py はそれを
+# 参照しない) なので、ここでは省いている。
+
+on:
+  workflow_dispatch:
+    inputs:
+      releases:
+        description: '焼く版 (空なら 11.0 と 10.1 だけ)'
+        type: string
+        default: ''
+  push:
+    branches: [main, netbsd-i386]
+    paths:
+      - 'vmactions/netbsd-builder/conf/*-i386.conf'
+      - '.github/workflows/vmactions-netbsd-i386.yml'
+
+concurrency:
+  group: vmactions-netbsd-i386-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: NetBSD ${{ matrix.release }} i386
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ['11.0', '10.2', '10.1', '10.0', '9.5', '9.4', '9.3', '9.2', '9.1', '9.0']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ディスクを空ける
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+
+      - name: KVM が在るか
+        run: |
+          set -x
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86
+          ls -l /dev/kvm
+          sudo chmod 666 /dev/kvm
+          # i386 の guest が KVM に載るかを、当てずっぽうではなく二つに分けて
+          # 見る。binary が kvm を知っているか、device が使えるか。走る速さ
+          # そのものは下の build が示す。
+          qemu-system-i386 -accel help
+          qemu-system-i386 -accel help | grep -qx '  *kvm' ||
+            qemu-system-i386 -accel help | grep -q kvm ||
+            { echo "!! qemu-system-i386 が kvm を知らない"; exit 1; }
+          test -w /dev/kvm || { echo "!! /dev/kvm に書けない"; exit 1; }
+          echo "i386 の guest は KVM で走る"
+
+      - name: builder を持ってくる
+        uses: actions/checkout@v4
+        with:
+          repository: anyvm-org/netbsd-builder
+          ref: v2.2.6
+          path: builder
+
+      - name: conf を置く
+        run: |
+          c=vmactions/netbsd-builder/conf/netbsd-${{ matrix.release }}-i386.conf
+          test -f "$c" || { echo "!! $c が無い"; exit 1; }
+          cp "$c" builder/conf/
+          echo "--- 置いた conf"
+          cat "builder/conf/$(basename "$c")"
+
+      - name: 焼く
+        working-directory: builder
+        run: python3 build.py conf/netbsd-${{ matrix.release }}-i386.conf
+
+      - name: 出来たもの
+        if: always()
+        run: ls -l builder/build/ 2>/dev/null || echo "build/ が無い"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netbsd-${{ matrix.release }}-i386
+          path: |
+            builder/build/netbsd-${{ matrix.release }}-i386.qcow2.zst*
+            builder/build/netbsd-${{ matrix.release }}-i386.qemu
+            builder/build/netbsd-${{ matrix.release }}-i386.profile.json
+            builder/build/netbsd-${{ matrix.release }}-i386-id_rsa.pub
+            builder/build/netbsd-${{ matrix.release }}-i386-host.id_rsa
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 3
