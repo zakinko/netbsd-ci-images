@@ -60,17 +60,36 @@ jobs:
             { echo "!! qemu-system-i386 が kvm を知らない"; exit 1; }
           test -w /dev/kvm || { echo "!! /dev/kvm に書けない"; exit 1; }
           echo "i386 の guest は KVM で走る"
+          # ppc64le の件で効く。上流の「TCG で建たない」は QEMU 8.2.2 での
+          # 測定なので、この箱が何を積んでいるかを毎回残す。
+          sudo apt-get install -y -qq qemu-system-ppc qemu-system-misc || true
+          for q in qemu-system-x86_64 qemu-system-i386 qemu-system-ppc64; do
+            command -v $q >/dev/null && $q --version | head -1
+          done
+
+      - name: どの builder か決める
+        id: b
+        run: |
+          case "${{ matrix.conf }}" in
+          netbsd-*)  echo "repo=anyvm-org/netbsd-builder"  >> $GITHUB_OUTPUT
+                     echo "ref=v2.2.6"  >> $GITHUB_OUTPUT
+                     echo "dir=netbsd-builder"  >> $GITHUB_OUTPUT ;;
+          freebsd-*) echo "repo=anyvm-org/freebsd-builder" >> $GITHUB_OUTPUT
+                     echo "ref=v2.2.8" >> $GITHUB_OUTPUT
+                     echo "dir=freebsd-builder" >> $GITHUB_OUTPUT ;;
+          *) echo "!! conf の頭から builder を決められない: ${{ matrix.conf }}"; exit 1 ;;
+          esac
 
       - name: builder を持ってくる
         uses: actions/checkout@v4
         with:
-          repository: anyvm-org/netbsd-builder
-          ref: v2.2.6
+          repository: ${{ steps.b.outputs.repo }}
+          ref: ${{ steps.b.outputs.ref }}
           path: builder
 
       - name: conf を置く
         run: |
-          c=vmactions/netbsd-builder/conf/${{ matrix.conf }}.conf
+          c=vmactions/${{ steps.b.outputs.dir }}/conf/${{ matrix.conf }}.conf
           test -f "$c" || { echo "!! $c が無い"; exit 1; }
           cp "$c" builder/conf/
           echo "--- 置いた conf"
