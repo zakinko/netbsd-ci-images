@@ -1,4 +1,4 @@
-name: vmactions 向け NetBSD/i386 イメージ
+name: vmactions 向け NetBSD イメージ
 
 # vmactions には NetBSD/i386 のイメージが一つも無い。action にも builder にも
 # i386 の conf が無く、release の asset にも無い (2026-09-23 に確認)。
@@ -14,14 +14,14 @@ name: vmactions 向け NetBSD/i386 イメージ
 on:
   workflow_dispatch:
     inputs:
-      releases:
-        description: 'JSON の配列で焼く版を指定する。空なら十版すべて'
+      confs:
+        description: 'JSON の配列で conf の名前を指定する。空なら i386 の十版'
         type: string
         default: ''
   push:
     branches: [main, netbsd-i386]
     paths:
-      - 'vmactions/netbsd-builder/conf/*-i386.conf'
+      - 'vmactions/netbsd-builder/conf/netbsd-*.conf'
       - '.github/workflows/vmactions-netbsd-i386.yml'
 
 concurrency:
@@ -30,13 +30,13 @@ concurrency:
 
 jobs:
   build:
-    name: NetBSD ${{ matrix.release }} i386
+    name: ${{ matrix.conf }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        release: ${{ fromJSON(inputs.releases != '' && inputs.releases || '["11.0","10.2","10.1","10.0","9.5","9.4","9.3","9.2","9.1","9.0"]') }}
+        conf: ${{ fromJSON(inputs.confs != '' && inputs.confs || '["netbsd-11.0-i386","netbsd-10.2-i386","netbsd-10.1-i386","netbsd-10.0-i386","netbsd-9.5-i386","netbsd-9.4-i386","netbsd-9.3-i386","netbsd-9.2-i386","netbsd-9.1-i386","netbsd-9.0-i386"]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,7 +69,7 @@ jobs:
 
       - name: conf を置く
         run: |
-          c=vmactions/netbsd-builder/conf/netbsd-${{ matrix.release }}-i386.conf
+          c=vmactions/netbsd-builder/conf/${{ matrix.conf }}.conf
           test -f "$c" || { echo "!! $c が無い"; exit 1; }
           cp "$c" builder/conf/
           echo "--- 置いた conf"
@@ -77,7 +77,7 @@ jobs:
 
       - name: 焼く
         working-directory: builder
-        run: python3 build.py conf/netbsd-${{ matrix.release }}-i386.conf
+        run: python3 build.py conf/${{ matrix.conf }}.conf
 
       - name: 出来たもの
         if: always()
@@ -86,13 +86,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: netbsd-${{ matrix.release }}-i386
+          name: ${{ matrix.conf }}
           path: |
-            builder/build/netbsd-${{ matrix.release }}-i386.qcow2.zst*
-            builder/build/netbsd-${{ matrix.release }}-i386.qemu
-            builder/build/netbsd-${{ matrix.release }}-i386.profile.json
-            builder/build/netbsd-${{ matrix.release }}-i386-id_rsa.pub
-            builder/build/netbsd-${{ matrix.release }}-i386-host.id_rsa
+            builder/build/${{ matrix.conf }}.qcow2.zst*
+            builder/build/${{ matrix.conf }}.qemu
+            builder/build/${{ matrix.conf }}.profile.json
+            builder/build/${{ matrix.conf }}-id_rsa.pub
+            builder/build/${{ matrix.conf }}-host.id_rsa
           if-no-files-found: warn
           compression-level: 0
           retention-days: 3
