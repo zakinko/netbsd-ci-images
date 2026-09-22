@@ -57,7 +57,12 @@ KEY=${KEY:-$DIR/$NAME.id}
 #	MON=/tmp/foo.mon sh runvm.sh ...
 #
 # 止めるときは stopvm.sh にも同じものを渡すこと。
+#
+# ANSWERS を使うときのシリアルも同じ事情で socket になるので、そちらは
+# TTYSOCK で逃がす。名前を TTY にしないのは、zsh が $TTY を端末の名前で
+# 埋めていて、渡していないのに拾ってしまうため。
 MON=${MON:-$DIR/$NAME.mon}
+TTYSOCK=${TTYSOCK:-$DIR/$NAME.tty}
 SEED=$DIR/$NAME.seed
 BASE=${BASE:-$(cd "$(dirname "$0")" && pwd)}
 
@@ -208,9 +213,9 @@ if [ "${KEEP:-0}" = 1 ]; then SNAP=; fi
 
 # コンソール。答える必要のある port だけ socket にして console.py を挟む。
 # 普段はファイルに落とすだけで足りるし、挟むものが少ないほうが壊れにくい。
-rm -f "$DIR/$NAME.console.log" "$DIR/$NAME.tty"
+rm -f "$DIR/$NAME.console.log" "$TTYSOCK"
 if [ -n "$ANSWERS" ]; then
-	SERIAL="-serial unix:$DIR/$NAME.tty,server,nowait"
+	SERIAL="-serial unix:$TTYSOCK,server,nowait"
 else
 	SERIAL="-serial file:$DIR/$NAME.console.log"
 fi
@@ -236,7 +241,7 @@ if [ -n "$ANSWERS" ]; then
 	done
 	IFS=$OIFS
 	# shellcheck disable=SC2086
-	$NOHUP python3 "$BASE/console.py" --socket "$DIR/$NAME.tty" \
+	$NOHUP python3 "$BASE/console.py" --socket "$TTYSOCK" \
 		--log "$DIR/$NAME.console.log" "$@" \
 		>> "$DIR/$NAME.seed.log" 2>&1 &
 	echo $! > "$DIR/$NAME.consolepid"
