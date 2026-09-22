@@ -42,12 +42,34 @@ cd "qemu-${QEMU_VER}"
 
 # Same feature trim as the sparc64 build: no GUI, no docs, no storage or
 # remote backends the runtime never uses; slirp + VNC + system fdt kept.
-./configure --target-list=ppc64-softmmu --prefix="$WORK/install" \
-  --disable-docs --disable-gtk --disable-sdl --disable-opengl \
-  --disable-virglrenderer --disable-spice --disable-smartcard \
-  --disable-usb-redir --disable-libiscsi --disable-rbd --disable-glusterfs \
-  --disable-libnfs --disable-seccomp --disable-linux-aio --disable-libusb \
-  --disable-tpm --enable-slirp --enable-vnc --enable-fdt=system \
+#
+# The option list is filtered against this QEMU's own --configure help before
+# use.  QEMU drops options between releases -- 11.1.1 no longer knows
+# --disable-glusterfs, which the sparc64 script (pinned to 10.2.3) still
+# passes, and configure treats an unknown option as a hard error:
+#
+#   ERROR: unknown option --disable-glusterfs
+#
+# Filtering means bumping QEMU_VER does not silently break the build again.
+WANT="--disable-docs --disable-gtk --disable-sdl --disable-opengl
+--disable-virglrenderer --disable-spice --disable-smartcard
+--disable-usb-redir --disable-libiscsi --disable-rbd --disable-glusterfs
+--disable-libnfs --disable-seccomp --disable-linux-aio --disable-libusb
+--disable-tpm --enable-slirp --enable-vnc --enable-fdt=system"
+
+./configure --help > "$WORK/help.txt" 2>&1 || true
+OPTS=
+for o in $WANT; do
+	base=${o%%=*}
+	if grep -q -- "$base" "$WORK/help.txt"; then
+		OPTS="$OPTS $o"
+	else
+		echo "  この QEMU は $base を知らないので落とす"
+	fi
+done
+echo "  configure の option: $OPTS"
+
+./configure --target-list=ppc64-softmmu --prefix="$WORK/install" $OPTS \
   > "$WORK/configure.log" 2>&1 || { tail -40 "$WORK/configure.log"; exit 1; }
 make -j"$(nproc)" > "$WORK/make.log" 2>&1 || { tail -40 "$WORK/make.log"; exit 1; }
 make install > /dev/null
