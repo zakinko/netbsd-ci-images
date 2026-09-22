@@ -12,21 +12,22 @@ name: vmactions 向け NetBSD イメージ
 # 参照しない) なので、ここでは省いている。
 
 on:
+  # dispatch だけにしてある。conf を一本足すたびに既定の十版が走るのは無駄で、
+  # しかも push と dispatch が同時に発火して、concurrency が互いを殺していた
+  # (run 35766036570 と 35766036761 が相打ちになり、走っていた 10.1 まで
+  # 巻き添えで cancelled になった)。
   workflow_dispatch:
     inputs:
       confs:
         description: 'JSON の配列で conf の名前を指定する。空なら i386 の十版'
         type: string
         default: ''
-  push:
-    branches: [main, netbsd-i386]
-    paths:
-      - 'vmactions/netbsd-builder/conf/netbsd-*.conf'
-      - '.github/workflows/vmactions-netbsd-i386.yml'
 
+# 版の組ごとに別の run を投げるので、後から投げたものが前のものを殺しては
+# 困る。待たせるのも困る (別の版なので競合しない) ので、run ごとに分ける。
 concurrency:
-  group: vmactions-netbsd-i386-${{ github.ref }}
-  cancel-in-progress: true
+  group: vmactions-netbsd-image-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   build:
