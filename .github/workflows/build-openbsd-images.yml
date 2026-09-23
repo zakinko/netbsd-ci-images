@@ -93,6 +93,17 @@ jobs:
         run: |
           tail -60 /tmp/obimg-*/console.log 2>/dev/null || true
           tail -20 /tmp/obimg-*/httpd.log 2>/dev/null || true
+          ls -l /tmp/obimg-*/*.ppm 2>/dev/null || true
+
+      # シリアルが空のまま転けたときの画面。build-openbsd-image.sh が
+      # 打鍵の窓を外したときと導入が終わらなかったときに VGA を写している。
+      - name: 転けたら画面を artifact に
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-${{ matrix.target }}
+          path: /tmp/obimg-*/*.ppm
+          if-no-files-found: ignore
 
       - name: release に上げる
         if: success() && inputs.publish

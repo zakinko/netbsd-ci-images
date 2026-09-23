@@ -217,6 +217,9 @@ if [ -s "$WORK/console.log" ]; then
 	echo "    $i 秒でシリアルに出た"
 else
 	echo "    !! ${BOOTWAIT:-180} 秒打ち続けてもシリアルに出ない"
+	# シリアルに何も出ないときは VGA を写す以外に様子を知る手が無い。
+	# 打鍵が届いていないのか、boot> に来ていないのかは画面で分かる。
+	python3 "$BASE/screendump.py" "$SOCK/qmon.sock" "$WORK/boot.ppm" || true
 fi
 
 # ------------------------------------------------------------------
@@ -243,6 +246,7 @@ tail -40 "$WORK/console.log" | tr -d '\r'
 
 grep -q 'CONGRATULATIONS' "$WORK/console.log" 2>/dev/null || {
 	echo "=== 導入が終わっていない ($i 秒待った) ==="
+	python3 "$BASE/screendump.py" "$SOCK/qmon.sock" "$WORK/install.ppm" || true
 	exit 1
 }
 
