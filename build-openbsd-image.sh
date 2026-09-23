@@ -152,6 +152,31 @@ $QEMU -machine accel=$ACCEL -cpu max -m "$MEM" -smp 2 \
 	-monitor unix:"$SOCK/qmon.sock",server,nowait \
 	-display none -daemonize -pidfile "$SOCK/qemu.pid"
 
+# socket へ流し込んで戻ってくるための道具。nc は使わない。Ubuntu の
+# netcat-openbsd は stdin が尽きても書き込み側を閉じず (閉じるのは -N を
+# 付けたときだけ)、QEMU は client の EOF を見るまで繋ぎを切らないので、
+# 双方が相手を待って nc が戻らず、そこで script 全体が止まる。macOS の nc は
+# stdin の EOF で書き込み側を閉じるので手元では通り、CI に持って行って初めて
+# 「イメージを作る」が job の上限 (120 分) まで黙って固まった。python3 は
+# 応答ファイルを配るのに既に要るので、同じもので送って、送り終えたら
+# 書き込み側を閉じ、相手が切るのを 2 秒だけ待つ。script は -c で渡す。
+# heredoc で渡すと stdin がそれに置き換わり、送る中身が読めない。
+tosock() {
+	python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall(sys.stdin.buffer.read())
+s.shutdown(socket.SHUT_WR)
+s.settimeout(2)
+try:
+    while s.recv(4096):
+        pass
+except OSError:
+    pass
+' "$1"
+}
+
 # 一行だけ打ち込むための道具。boot> に届かせるのが目的なので、要る文字
 # しか用意していない。
 sendline() {
@@ -168,7 +193,7 @@ sendline() {
 			esac
 		done
 		echo "sendkey ret"
-	} | nc -U "$SOCK/qmon.sock" > /dev/null 2>&1
+	} | tosock "$SOCK/qmon.sock" > /dev/null 2>&1
 }
 
 # boot> は 5 秒で流れる。BIOS のぶんを見て少し置いてから打つ。打ち損ねて
@@ -187,10 +212,10 @@ answered=no
 while [ $i -lt "$WAIT" ]; do
 	kill -0 "$(cat "$SOCK/qemu.pid")" 2>/dev/null || break
 	if [ "$answered" = no ] && grep -q '(A)utoinstall' "$WORK/console.log" 2>/dev/null; then
-		printf 'a\n' | nc -U "$SOCK/con.sock" > /dev/null 2>&1 || true
+		printf 'a\n' | tosock "$SOCK/con.sock" > /dev/null 2>&1 || true
 		sleep 3
 		printf 'http://10.0.2.2:%s/install.conf\n' "$INST_PORT" \
-			| nc -U "$SOCK/con.sock" > /dev/null 2>&1 || true
+			| tosock "$SOCK/con.sock" > /dev/null 2>&1 || true
 		answered=yes
 		echo "--- 応答ファイルの場所を渡した ---"
 	fi
@@ -207,7 +232,7 @@ grep -q 'CONGRATULATIONS' "$WORK/console.log" 2>/dev/null || {
 }
 
 echo "=== 止める ==="
-printf 'halt -p\n' | nc -U "$SOCK/con.sock" > /dev/null 2>&1 || true
+printf 'halt -p\n' | tosock "$SOCK/con.sock" > /dev/null 2>&1 || true
 sleep 20
 kill "$(cat "$SOCK/qemu.pid")" 2>/dev/null || true
 sleep 2
