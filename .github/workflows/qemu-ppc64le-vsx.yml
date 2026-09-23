@@ -108,13 +108,32 @@ jobs:
           echo "== VSX unavailable (0xf40) の記録"
           grep -n -i -B2 -A6 'vsx\|0xf40\|excp: 0x00000f40' qemu-int.log | head -60
           echo
-          echo "== 例外の種類ごとの件数"
-          grep -oE 'Raise exception at [0-9a-fx]+ => 0x[0-9a-f]+' qemu-int.log |
-            awk '{print $NF}' | sort | uniq -c | sort -rn | head -10
+          # 0 を信じる前に、必ず当たるはずの pattern で 1 以上が出ることを
+          # 確かめる。ここは一度それで外した: 書式を見ずに
+          #     Raise exception at [0-9a-fx]+ => 0x[0-9a-f]+
+          # と組んだが、qemu は "=> VSXU (94)" と名前で出すので一行も当たらず、
+          # step はそこで落ちていた。件数が取れないまま「VSXU が最初の例外か」
+          # を言えない状態で先へ進んでいた。
+          echo "== Raise exception の書式を先に見る (組む前に目で見る)"
+          grep -m3 -a 'Raise exception' qemu-int.log || echo "(一行も無い)"
           echo
-          echo "== 最初の f40 の直前 20 行"
-          n=$(grep -n '=> 0x00000f40\|=> 0xf40' qemu-int.log | head -1 | cut -d: -f1)
-          [ -n "$n" ] && sed -n "$((n>20 ? n-20 : 1)),$((n+5))p" qemu-int.log
+          echo "== 当たることを確かめる"
+          nraise=$(grep -c -a 'Raise exception' qemu-int.log || echo 0)
+          echo "   Raise exception の総数: $nraise"
+          if [ "$nraise" -eq 0 ]; then
+            echo "!! 一行も当たらない。trace が取れていないか書式が違う。"
+            echo "   ここから下の 0 は全部意味が無いので数えない。"
+          else
+            echo
+            echo "== 例外の種類ごとの件数"
+            # 名前でも 0x 番号でも拾えるように、=> の右側をそのまま取る。
+            sed -n 's/.*Raise exception at [^ ]* => \([^ ]*\).*/\1/p' qemu-int.log |
+              sort | uniq -c | sort -rn | head -20
+            echo
+            echo "== 最初の例外の直前 20 行 (種類を問わず)"
+            n=$(grep -n -a -m1 'Raise exception' qemu-int.log | cut -d: -f1)
+            [ -n "$n" ] && sed -n "$((n>20 ? n-20 : 1)),$((n+5))p" qemu-int.log
+          fi
 
       - name: 番地を loader の逆アセンブルに当てる
         if: always()
@@ -123,6 +142,18 @@ jobs:
           powerpc64le-linux-gnu-objdump -d boot/loader > loader.dis 2>&1 || \
             powerpc64le-linux-gnu-objdump -b elf32-powerpcle -m powerpc -D boot/loader > loader.dis 2>&1 || true
           wc -l loader.dis
+          # ここも 0 を出す検査なので、先に「当たるはずの物が当たる」を見る。
+          # objdump は上で || true で二段に落としてあるため、失敗すると
+          # loader.dis が error の文字列になり、VSX の数は当然 0 になる。
+          # その 0 は「VSX が無い」ではなく「逆アセンブルできていない」。
+          echo "== 逆アセンブルが成立しているか (必ず在る命令で確かめる)"
+          nsane=$(grep -cE '\b(mflr|stwu|blr|lwz)\b' loader.dis || echo 0)
+          echo "   mflr/stwu/blr/lwz の行: $nsane"
+          if [ "$nsane" -lt 100 ]; then
+            echo "!! 逆アセンブルが成立していない。下の 0 は意味が無い。"
+            head -5 loader.dis
+            exit 1
+          fi
           echo "== VSX の load/store を loader の中で数える (網羅的に)"
           grep -cE '\b(lxv|stxv|lxs|stxs|xx[a-z]+|xv[a-z]+|xs[a-z]+|mtvsr|mfvsr)' loader.dis || echo 0
           grep -nE '\b(lxv|stxv|lxs|stxs|xx[a-z]+|xv[a-z]+|xs[a-z]+|mtvsr|mfvsr)' loader.dis | head -20
