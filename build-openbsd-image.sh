@@ -107,7 +107,20 @@ rcctl disable smtpd || true
 SITE
 chmod 755 "$WORK/site/install.site"
 
-(cd "$WORK/site" && tar czf "$WORK/serve/site$RELNO.tgz" install.site etc)
+# 置く場所は installer が既定で見る pub/OpenBSD/<版>/<arch>。応答ファイルの
+# "Server directory =" は空で、空は既定の意味になる。serve/ の直下に置いて
+# いたときは installer が /pub/OpenBSD/7.9/i386/index.txt を取りに来て 404
+# になり、「sets が無い」で止まった。index.txt は set の一覧で、installer は
+# これを読んで何が在るかを知る。無いと set 名を直接は試さない。
+SETDIR="$WORK/serve/pub/OpenBSD/$REL/$ARCH"
+mkdir -p "$SETDIR"
+(cd "$WORK/site" && tar czf "$SETDIR/site$RELNO.tgz" install.site etc)
+(cd "$SETDIR" && ls -l site$RELNO.tgz > index.txt)
+# index.txt を読んだ後、installer は INSTALL.<arch> が在るかで「本物の set の
+# 置き場か」を判じ、無ければ "Use sets found here anyway?" と訊いて既定は
+# no。site set しか置かないここでは無いのが当然なので、応答ファイルで
+# yes と答える。答えないと set を一つも取らずに http の段を抜け、鍵を
+# 取りに行く仕掛けの無いイメージが出来る。
 
 # autoinstall(8) は質問文の頭で照合し、書いていない質問は既定を使う。
 # だから要るものだけ書く。同じ質問が二度出るものは、出る順に二行書く。
@@ -129,7 +142,9 @@ Directory does not contain SHA256.sig. Continue without verification = yes
 Location of sets = http
 HTTP Server = 10.0.2.2:$INST_PORT
 Server directory =
+INSTALL.$ARCH not found. Use sets found here anyway = yes
 Set name(s) = site$RELNO.tgz
+Directory does not contain SHA256.sig. Continue without verification = yes
 Location of sets = done
 CONF
 cat "$WORK/serve/install.conf"
@@ -168,7 +183,7 @@ s = socket.socket(socket.AF_UNIX)
 s.connect(sys.argv[1])
 s.sendall(sys.stdin.buffer.read())
 s.shutdown(socket.SHUT_WR)
-s.settimeout(2)
+s.settimeout(0.5)
 try:
     while s.recv(4096):
         pass
@@ -201,20 +216,28 @@ sendline() {
 # 進んでしまうので、console.log が空のまま何も起きない形になる。実際
 # macOS/arm64 の TCG で sleep 8 では届かず、90 分待って何も出なかった。
 #
-# 当たるまで打ち直す。3 秒ごとなら 5 秒の窓はまず拾える。シリアルに一文字
-# でも出た時点で当たったと分かるので、そこで止める。BIOS がまだ動いている
-# 間の打鍵はどこにも行かないので害は無い。
+# 当たるまで打ち直す。シリアルに一文字でも出た時点で当たったと分かるので、
+# そこで止める。BIOS がまだ動いている間の打鍵はどこにも行かないので害は
+# 無い。間隔は 1 秒。KVM だと窓は起動から 1 秒ほどで開いて 6 秒で閉じ、
+# 3 秒おきでは一度目が窓の前、二度目が窓の後に落ちて外した (CI で 180 秒
+# 打ち続けて一文字も出なかった)。
+#
+# 打つのは set tty com0 だけ。boot はここでは打たない。tty を com0 に
+# 回した後の loader はキーボードを見ておらず、sendkey で打った boot は
+# どこにも届かない。手元の TCG で boot> がシリアルに出たまま止まったのが
+# それ。boot はシリアルの側から送る。
 echo "=== コンソールをシリアルへ回す ==="
 i=0
 while [ $i -lt "${BOOTWAIT:-180}" ]; do
 	sendline 'set tty com0' 2>/dev/null
-	sendline boot 2>/dev/null
-	sleep 3
-	i=$((i + 3))
+	sleep 1
+	i=$((i + 1))
 	[ -s "$WORK/console.log" ] && break
 done
 if [ -s "$WORK/console.log" ]; then
 	echo "    $i 秒でシリアルに出た"
+	sleep 2
+	printf 'boot\n' | tosock "$SOCK/con.sock" > /dev/null 2>&1 || true
 else
 	echo "    !! ${BOOTWAIT:-180} 秒打ち続けてもシリアルに出ない"
 	# シリアルに何も出ないときは VGA を写す以外に様子を知る手が無い。
