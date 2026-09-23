@@ -51,23 +51,30 @@ cd "qemu-${QEMU_VER}"
 #   ERROR: unknown option --disable-glusterfs
 #
 # Filtering means bumping QEMU_VER does not silently break the build again.
-WANT="--disable-docs --disable-gtk --disable-sdl --disable-opengl
+# Only the --disable-* trims get filtered.  They are build-time economy and
+# nothing depends on them, so dropping one that this QEMU no longer knows is
+# harmless.  The --enable-* ones are NOT filtered: they name features the
+# runtime actually uses (user networking, VNC), and if one cannot be had we
+# want configure to say so rather than hand back a QEMU that fails later at
+# "network backend 'user' is not compiled into this binary".
+TRIM="--disable-docs --disable-gtk --disable-sdl --disable-opengl
 --disable-virglrenderer --disable-spice --disable-smartcard
 --disable-usb-redir --disable-libiscsi --disable-rbd --disable-glusterfs
 --disable-libnfs --disable-seccomp --disable-linux-aio --disable-libusb
---disable-tpm --enable-slirp --enable-vnc --enable-fdt=system"
+--disable-tpm"
+NEED="--enable-slirp --enable-vnc --enable-fdt=system"
 
 ./configure --help > "$WORK/help.txt" 2>&1 || true
 OPTS=
-for o in $WANT; do
-	base=${o%%=*}
-	if grep -q -- "$base" "$WORK/help.txt"; then
+for o in $TRIM; do
+	if grep -q -- "$o" "$WORK/help.txt"; then
 		OPTS="$OPTS $o"
 	else
-		echo "  この QEMU は $base を知らないので落とす"
+		echo "  この QEMU は $o を知らないので落とす (build 時の節約のみ)"
 	fi
 done
-echo "  configure の option: $OPTS"
+OPTS="$OPTS $NEED"
+echo "  configure の option:$OPTS"
 
 ./configure --target-list=ppc64-softmmu --prefix="$WORK/install" $OPTS \
   > "$WORK/configure.log" 2>&1 || { tail -40 "$WORK/configure.log"; exit 1; }
@@ -75,15 +82,18 @@ make -j"$(nproc)" > "$WORK/make.log" 2>&1 || { tail -40 "$WORK/make.log"; exit 1
 make install > /dev/null
 
 pkg="$WORK/pkg"
-mkdir -p "$pkg/qemu11-ppc64/bin" "$pkg/qemu11-ppc64/share/qemu"
+mkdir -p "$pkg/qemu11-ppc64/bin" "$pkg/qemu11-ppc64/share"
 cp "$WORK/install/bin/qemu-system-ppc64" "$pkg/qemu11-ppc64/bin/"
-# pseries loads SLOF from the share dir with no -bios; the NIC rom is needed
-# because build.py puts an e1000 or virtio device on the machine.
-for f in slof.bin efi-e1000.rom efi-virtio.rom; do
-  [ -f "$WORK/install/share/qemu/$f" ] &&
-    cp "$WORK/install/share/qemu/$f" "$pkg/qemu11-ppc64/share/qemu/"
-done
-cp -r "$WORK/install/share/qemu/keymaps" "$pkg/qemu11-ppc64/share/qemu/keymaps"
+# Take the whole share/qemu rather than naming the blobs.  Naming them is how
+# this broke once already: the list had slof.bin and the NIC roms, and the
+# machine then asked for one that was not on it --
+#
+#   qemu-system-ppc64: failed to find romfile "vgabios-stdvga.bin"
+#
+# Which roms a machine loads depends on the devices build.py puts on the
+# command line, so an enumerated list is wrong again the moment that changes.
+# The directory is a few MB; copying it whole removes the class of error.
+cp -r "$WORK/install/share/qemu" "$pkg/qemu11-ppc64/share/qemu"
 
 "$pkg/qemu11-ppc64/bin/qemu-system-ppc64" --version | head -1
 out="$OUT/qemu-${QEMU_VER}-ppc64-noble.tar.zst"
