@@ -77,6 +77,12 @@ jobs:
           freebsd-*) echo "repo=anyvm-org/freebsd-builder" >> $GITHUB_OUTPUT
                      echo "ref=v2.2.8" >> $GITHUB_OUTPUT
                      echo "dir=freebsd-builder" >> $GITHUB_OUTPUT ;;
+          # pfSense には builder が無い。OPNsense がここで一番近く (同じく
+          # FreeBSD 由来の appliance で、serial console で全部を駆動する)
+          # ので、その checkout の中で測る。
+          pfsense-*) echo "repo=anyvm-org/opnsense-builder" >> $GITHUB_OUTPUT
+                     echo "ref=main" >> $GITHUB_OUTPUT
+                     echo "dir=opnsense-builder" >> $GITHUB_OUTPUT ;;
           *) echo "!! conf の頭から builder を決められない: ${{ matrix.conf }}"; exit 1 ;;
           esac
 
