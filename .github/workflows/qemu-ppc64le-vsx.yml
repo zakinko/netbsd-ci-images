@@ -1,0 +1,70 @@
+name: ppc64le の VSX の件を両側から測る
+
+# noble の qemu 8.2.2 が lxvx/stxvx で偽の VSX Unavailable を上げる件を、
+# 送る報告に貼る再現手順そのもので測る。
+#
+# 上流の修正は
+#   master      8bded2e73e80  target/ppc: Fix lxvx/stxvx facility check (2024-09-11)
+#   stable-8.2  40a3cb921391  v8.2.8 で入った (v8.2.7 には反転した判定が残る)
+# noble は 8.2.2 なのでどちらより前。
+#
+# 手元 (brew の 11.1.1、arm64 の Mac) では同じ命令行が導入器の促しまで届く
+# ことを確かめてある。ここで測るのは 8.2.2 の側。
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: qemu-ppc64le-vsx-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  stock:
+    name: noble 同梱の qemu で撃つ
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: 道具
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-ppc
+          qemu-system-ppc64 --version | head -1
+
+      - name: 媒体
+        run: |
+          curl -sSL -o bootonly.iso \
+            https://download.freebsd.org/releases/powerpc/powerpc64le/ISO-IMAGES/15.0/FreeBSD-15.0-RELEASE-powerpc-powerpc64le-bootonly.iso
+          ls -l bootonly.iso
+
+      - name: 撃つ
+        run: |
+          set +e
+          timeout 600 qemu-system-ppc64 \
+            -machine pseries,accel=tcg,usb=off,cap-cfpc=broken,cap-sbbc=broken,cap-ibs=broken,cap-ccf-assist=off \
+            -cpu power9 -m 4096 -smp 1 -nographic \
+            -drive file=bootonly.iso,format=raw,if=none,id=inst0,media=cdrom \
+            -device virtio-scsi-pci,id=scsi0 \
+            -device scsi-cd,bus=scsi0.0,drive=inst0,bootindex=0 \
+            > boot.log 2>&1 < /dev/null
+          echo "== 出力の要点"
+          grep -E 'Open Firmware loader|FreeBSD 15|cpu0:|Console type|Program Exception|SRR0' boot.log | head -12
+          echo
+          if grep -q 'Program Exception' boot.log; then
+            echo "== 8.2.2 で Program Exception を再現した (期待どおり)"
+            grep -n -A12 'Program Exception' boot.log | head -20
+            exit 0
+          fi
+          if grep -q 'Console type' boot.log; then
+            echo "!! 8.2.2 でも導入器まで届いた。前提が崩れているので報告を書き直す"
+            exit 1
+          fi
+          echo "!! どちらでもない。log の末尾:"
+          tail -30 boot.log
+          exit 1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boot-log-stock-qemu
+          path: boot.log
+          retention-days: 7
