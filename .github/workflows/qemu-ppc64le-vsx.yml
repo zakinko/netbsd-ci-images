@@ -68,3 +68,71 @@ jobs:
           name: boot-log-stock-qemu
           path: boot.log
           retention-days: 7
+
+  faulting:
+    name: 落ちている命令を特定する
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: 道具
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-ppc binutils-powerpc64le-linux-gnu xz-utils
+          qemu-system-ppc64 --version | head -1
+
+      - name: 媒体と loader
+        run: |
+          curl -sSL -o bootonly.iso \
+            https://download.freebsd.org/releases/powerpc/powerpc64le/ISO-IMAGES/15.0/FreeBSD-15.0-RELEASE-powerpc-powerpc64le-bootonly.iso
+          curl -sSL -o base.txz \
+            https://download.freebsd.org/releases/powerpc/powerpc64le/15.0-RELEASE/base.txz
+          tar -xJf base.txz ./boot/loader
+          file boot/loader
+
+      - name: 例外を吐かせる
+        run: |
+          # -d int は例外のたびに番地を出す。SRR0 が二度目の例外で上書き
+          # される前の、最初の VSX Unavailable の NIP が要る。
+          set +e
+          timeout 420 qemu-system-ppc64 \
+            -machine pseries,accel=tcg,usb=off,cap-cfpc=broken,cap-sbbc=broken,cap-ibs=broken,cap-ccf-assist=off \
+            -cpu power9 -m 4096 -smp 1 -nographic \
+            -d int -D qemu-int.log \
+            -drive file=bootonly.iso,format=raw,if=none,id=inst0,media=cdrom \
+            -device virtio-scsi-pci,id=scsi0 \
+            -device scsi-cd,bus=scsi0.0,drive=inst0,bootindex=0 \
+            > boot.log 2>&1 < /dev/null
+          echo "== qemu-int.log の大きさ: $(wc -c < qemu-int.log)"
+          echo
+          echo "== VSX unavailable (0xf40) の記録"
+          grep -n -i -B2 -A6 'vsx\|0xf40\|excp: 0x00000f40' qemu-int.log | head -60
+          echo
+          echo "== 例外の種類ごとの件数"
+          grep -oE 'Raise exception at [0-9a-fx]+ => 0x[0-9a-f]+' qemu-int.log |
+            awk '{print $NF}' | sort | uniq -c | sort -rn | head -10
+          echo
+          echo "== 最初の f40 の直前 20 行"
+          n=$(grep -n '=> 0x00000f40\|=> 0xf40' qemu-int.log | head -1 | cut -d: -f1)
+          [ -n "$n" ] && sed -n "$((n>20 ? n-20 : 1)),$((n+5))p" qemu-int.log
+
+      - name: 番地を loader の逆アセンブルに当てる
+        if: always()
+        run: |
+          # -d int が出す NIP を loader の section に当てて、命令そのものを見る。
+          powerpc64le-linux-gnu-objdump -d boot/loader > loader.dis 2>&1 || \
+            powerpc64le-linux-gnu-objdump -b elf32-powerpcle -m powerpc -D boot/loader > loader.dis 2>&1 || true
+          wc -l loader.dis
+          echo "== VSX の load/store を loader の中で数える (網羅的に)"
+          grep -cE '\b(lxv|stxv|lxs|stxs|xx[a-z]+|xv[a-z]+|xs[a-z]+|mtvsr|mfvsr)' loader.dis || echo 0
+          grep -nE '\b(lxv|stxv|lxs|stxs|xx[a-z]+|xv[a-z]+|xs[a-z]+|mtvsr|mfvsr)' loader.dis | head -20
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-int-log
+          path: |
+            qemu-int.log
+            boot.log
+            loader.dis
+          retention-days: 7
