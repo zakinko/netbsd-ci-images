@@ -196,13 +196,28 @@ sendline() {
 	} | tosock "$SOCK/qmon.sock" > /dev/null 2>&1
 }
 
-# boot> は 5 秒で流れる。BIOS のぶんを見て少し置いてから打つ。打ち損ねて
-# も、そのまま画面側で進んでしまい serial に何も出てこないので分かる。
+# boot> は 5 秒で流れる。何秒後に出るかは箱の速さ次第で、加速の無い TCG では
+# 一分以上かかることもある。固定で待つと外す -- 外しても画面側で普通に
+# 進んでしまうので、console.log が空のまま何も起きない形になる。実際
+# macOS/arm64 の TCG で sleep 8 では届かず、90 分待って何も出なかった。
+#
+# 当たるまで打ち直す。3 秒ごとなら 5 秒の窓はまず拾える。シリアルに一文字
+# でも出た時点で当たったと分かるので、そこで止める。BIOS がまだ動いている
+# 間の打鍵はどこにも行かないので害は無い。
 echo "=== コンソールをシリアルへ回す ==="
-sleep 8
-sendline 'set tty com0'
-sleep 2
-sendline boot
+i=0
+while [ $i -lt "${BOOTWAIT:-180}" ]; do
+	sendline 'set tty com0' 2>/dev/null
+	sendline boot 2>/dev/null
+	sleep 3
+	i=$((i + 3))
+	[ -s "$WORK/console.log" ] && break
+done
+if [ -s "$WORK/console.log" ]; then
+	echo "    $i 秒でシリアルに出た"
+else
+	echo "    !! ${BOOTWAIT:-180} 秒打ち続けてもシリアルに出ない"
+fi
 
 # ------------------------------------------------------------------
 echo "=== autoinstall を待つ ==="
