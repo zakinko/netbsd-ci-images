@@ -1,0 +1,127 @@
+name: AlmaLinux 10 から NTFS と UFS/FFS をどこまで使えるか
+
+# RHEL 10 系のカーネルは CONFIG_NTFS3_FS も CONFIG_UFS_FS も立てていない
+# (kernel-core-6.12.0-211.7.4.el10_2 の config で 2026-09-26 に確認)。
+# 足せるのは EPEL の ntfs-3g と、カーネルソースから自分で建てる fs/ufs。
+# その二つの出来を、本物の相手で測る。
+#
+#   1. NetBSD / FreeBSD / Windows が自分の newfs / format でイメージを作る
+#   2. Alma 10 がそれを読み、書き足す
+#   3. 書き足したものを、作った OS 自身の fsck_ffs / chkdsk にかける
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: fs-probe-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  mk-netbsd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/netbsd-vm@v1
+        with:
+          release: "11.0"
+          run: sh fs-probe/bsd-make.sh fsp/netbsd
+      - uses: actions/upload-artifact@v4
+        with: { name: src-netbsd, path: fsp/netbsd, compression-level: 1 }
+
+  mk-freebsd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: sh fs-probe/bsd-make.sh fsp/freebsd
+      - uses: actions/upload-artifact@v4
+        with: { name: src-freebsd, path: fsp/freebsd, compression-level: 1 }
+
+  mk-windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - shell: pwsh
+        run: ./fs-probe/win-make.ps1 fsp/windows
+      - uses: actions/upload-artifact@v4
+        with: { name: src-windows, path: fsp/windows, compression-level: 1 }
+
+  alma:
+    needs: [mk-netbsd, mk-freebsd, mk-windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: ディスクを空ける
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+      - uses: actions/download-artifact@v4
+        with: { pattern: src-*, path: fsp/in, merge-multiple: true }
+      - run: ls -ls fsp/in
+      - uses: vmactions/almalinux-vm@v1
+        with:
+          release: "10"
+          mem: 8192
+          run: sh fs-probe/alma.sh fsp/in fsp/alma
+      - run: cat fsp/alma/summary.txt >> $GITHUB_STEP_SUMMARY
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: alma, path: fsp/alma, compression-level: 1 }
+
+  check-netbsd:
+    needs: alma
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: alma, path: fsp/alma }
+      - uses: vmactions/netbsd-vm@v1
+        with:
+          release: "11.0"
+          run: sh fs-probe/bsd-check.sh fsp/alma fsp/check-netbsd
+      - run: cat fsp/check-netbsd/*.check >> $GITHUB_STEP_SUMMARY
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: check-netbsd, path: fsp/check-netbsd }
+
+  check-freebsd:
+    needs: alma
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: alma, path: fsp/alma }
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: sh fs-probe/bsd-check.sh fsp/alma fsp/check-freebsd
+      - run: cat fsp/check-freebsd/*.check >> $GITHUB_STEP_SUMMARY
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: check-freebsd, path: fsp/check-freebsd }
+
+  check-windows:
+    needs: alma
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: alma, path: fsp/alma }
+      - shell: pwsh
+        run: ./fs-probe/win-check.ps1 fsp/alma fsp/check-windows
+      - shell: pwsh
+        if: always()
+        run: Get-Content fsp/check-windows/*.check | Add-Content $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: check-windows, path: fsp/check-windows }
