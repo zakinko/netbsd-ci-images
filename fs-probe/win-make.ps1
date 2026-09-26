@@ -23,10 +23,11 @@ $s = 'T:\src'
 New-Item -ItemType Directory $s | Out-Null
 Set-Location $s
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+function W($p, $v) { [IO.File]::WriteAllText([IO.Path]::Combine((Get-Location).Path, $p), $v) }
 function RandFile($p, $n) {
 	$b = New-Object byte[] $n; $rng.GetBytes($b); [IO.File]::WriteAllBytes($p, $b)
 }
-Set-Content -NoNewline small "hello`n"
+W small "hello`n"
 New-Item empty -ItemType File | Out-Null
 foreach ($n in 1,511,512,513,700,1023,1024,4095,4096,4097,32767,32768,32769,65536,1048575,1048577) {
 	RandFile "$s\sz$n" $n
@@ -45,7 +46,7 @@ New-Item -ItemType HardLink hl2 -Target "$s\small" | Out-Null
 New-Item -ItemType SymbolicLink sym_file -Target "$s\small" | Out-Null
 New-Item -ItemType SymbolicLink sym_rel -Target 'small' | Out-Null
 New-Item -ItemType Directory target_dir | Out-Null
-Set-Content target_dir\in 'in'
+W target_dir\in "in`n"
 New-Item -ItemType SymbolicLink sym_dir -Target "$s\target_dir" | Out-Null
 New-Item -ItemType Junction junction -Target "$s\target_dir" | Out-Null
 
@@ -54,7 +55,7 @@ New-Item -ItemType File ([string][char]0x3042 * 85) | Out-Null
 # UTF-16 で 255 単位、UTF-8 では 765 byte。Linux の NAME_MAX (255) を越える。
 New-Item -ItemType File ([string][char]0x3042 * 255) | Out-Null
 New-Item -ItemType File ([char]::ConvertFromUtf32(0x1F600) + '.txt') | Out-Null
-Set-Content -NoNewline ([string][char]0x65E5 + [char]0x672C + [char]0x8A9E + '.txt') "ja`n"
+W ([string][char]0x65E5 + [char]0x672C + [char]0x8A9E + '.txt') "ja`n"
 New-Item -ItemType File 'with space' | Out-Null
 
 New-Item -ItemType Directory many | Out-Null
@@ -62,21 +63,21 @@ New-Item -ItemType Directory many | Out-Null
 $p = "$s\deep"
 1..64 | ForEach-Object { $p = "$p\d" }
 New-Item -ItemType Directory $p | Out-Null
-Set-Content -NoNewline "$p\leaf" "bottom`n"
+W "$p\leaf" "bottom`n"
 
 # 代替データストリーム
-Set-Content -NoNewline ads.txt "main`n"
-Set-Content -NoNewline -Stream secret ads.txt "hidden`n"
+W ads.txt "main`n"
+Set-Content -LiteralPath "$s\ads.txt" -Stream secret -NoNewline -Value "hidden`n"
 # NTFS 圧縮 (LZNT1) と、WOF の system compression (LZX)。後者は ntfs-3g
 # では plugin (ntfs-3g-system-compression) が無いと読めない。
 $txt = (1..40000 | ForEach-Object { "line $_ of a compressible file" }) -join "`n"
-Set-Content -NoNewline lznt1.txt $txt
+W lznt1.txt $txt
 compact /c /q "$s\lznt1.txt" | Out-Null
-Set-Content -NoNewline lzx.txt $txt
+W lzx.txt $txt
 compact /c /exe:lzx /q "$s\lzx.txt" | Out-Null
-Set-Content -NoNewline ro.txt "ro`n"; (Get-Item ro.txt).Attributes += 'ReadOnly'
-Set-Content -NoNewline hidden.txt "h`n"; (Get-Item hidden.txt).Attributes += 'Hidden'
-Set-Content -NoNewline t2040 "new`n"; (Get-Item t2040).LastWriteTimeUtc = [datetime]'2040-01-01T00:00:00Z'
+W ro.txt "ro`n"; $i = Get-Item ro.txt; $i.Attributes = $i.Attributes -bor [IO.FileAttributes]::ReadOnly
+W hidden.txt "h`n"; $i = Get-Item hidden.txt; $i.Attributes = $i.Attributes -bor [IO.FileAttributes]::Hidden
+W t2040 "new`n"; (Get-Item t2040).LastWriteTimeUtc = [datetime]'2040-01-01T00:00:00Z'
 
 compact /q "$s\lznt1.txt" "$s\lzx.txt" | Set-Content -Encoding utf8 (Join-Path $Out 'win-ntfs.compact')
 fsutil sparse queryrange "$s\sparse5g" | Set-Content -Encoding utf8 (Join-Path $Out 'win-ntfs.sparse')

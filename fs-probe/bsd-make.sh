@@ -19,9 +19,11 @@ NetBSD)
 	raw=$(printf "\\$(printf %03o $((97 + $(sysctl -n kern.rawpartition))))")
 	one() {	# name newfs-args mount-args
 		f=$out/$1.img
+		# vnd の raw partition は種別が 4.2BSD でないので newfs が断る。
+		# ファイルへ直に作ってから vnd に付ける。
 		dd if=/dev/zero of="$f" bs=1m count=0 seek=$SIZE_MB 2>/dev/null
+		newfs -F -s ${SIZE_MB}m $2 "$f" > "$out/$1.newfs"
 		vndconfig vnd0 "$f"
-		newfs $2 /dev/rvnd0$raw > "$out/$1.newfs"
 		mount $3 /dev/vnd0$raw /mnt/p
 		fill "$1"
 		umount /mnt/p
