@@ -11,6 +11,11 @@ name: AlmaLinux 10 から NTFS と UFS/FFS をどこまで使えるか
 
 on:
   workflow_dispatch:
+    inputs:
+      kernels:
+        description: 'JSON の配列。ml は ELRepo の kernel-ml、rhel は Alma 10 のまま'
+        type: string
+        default: '["ml","rhel"]'
 
 concurrency:
   group: fs-probe-${{ github.run_id }}
@@ -59,7 +64,7 @@ jobs:
       fail-fast: false
       matrix:
         # ml は ELRepo の kernel-ml (kernel.org の最新 stable)、rhel は Alma 10 のまま
-        kernel: [ml, rhel]
+        kernel: ${{ fromJSON(inputs.kernels) }}
     steps:
       - uses: actions/checkout@v4
       - name: ディスクを空ける
@@ -71,13 +76,26 @@ jobs:
         if: matrix.kernel == 'ml'
         run: |
           set -e
-          b=https://elrepo.org/linux/kernel/el10/x86_64/RPMS
-          v=$(curl -fsSL $b/ | grep -oE 'kernel-ml-core-[0-9][^"<>]*\.rpm' | sed 's/kernel-ml-core-//; s/\.x86_64\.rpm//' | sort -V | tail -1)
-          echo "kernel-ml $v"
-          mkdir -p fsp/rpms
-          for p in kernel-ml kernel-ml-core kernel-ml-modules kernel-ml-modules-extra kernel-ml-devel; do
-            curl -fsSL -o fsp/rpms/$p-$v.x86_64.rpm $b/$p-$v.x86_64.rpm
+          # elrepo.org の DNS は落ちることがある (2026-09-27、runner からも
+          # 手元からも NS が時間切れ)。同じ中身のミラーへ順に回す。
+          got=
+          for m in https://elrepo.org/linux https://mirrors.coreix.net/elrepo \
+                   https://mirror.rackspace.com/elrepo https://mirrors.tuna.tsinghua.edu.cn/elrepo; do
+            b=$m/kernel/el10/x86_64/RPMS
+            v=$(curl -fsSL -m 30 $b/ | grep -oE 'kernel-ml-core-[0-9][^"<>]*\.rpm' | sed 's/kernel-ml-core-//; s/\.x86_64\.rpm//' | sort -V | tail -1) || continue
+            [ -n "$v" ] || continue
+            r=$(curl -fsSL -m 30 $m/elrepo/el10/x86_64/RPMS/ | grep -oE 'elrepo-release-[0-9][^"<>]*\.rpm' | sort -V | tail -1) || continue
+            mkdir -p fsp/rpms
+            curl -fsSL -o fsp/rpms/$r $m/elrepo/el10/x86_64/RPMS/$r || continue
+            ok=1
+            for p in kernel-ml kernel-ml-core kernel-ml-modules kernel-ml-modules-extra kernel-ml-devel; do
+              curl -fsSL -o fsp/rpms/$p-$v.x86_64.rpm $b/$p-$v.x86_64.rpm || { ok=; break; }
+            done
+            [ -n "$ok" ] && { got=$m; break; }
+            rm -rf fsp/rpms
           done
+          [ -n "$got" ] || { echo "!! kernel-ml を取れる所が無い"; exit 1; }
+          echo "kernel-ml $v from $got"
           ls -l fsp/rpms
       - uses: vmactions/almalinux-vm@v1
         with:
@@ -114,7 +132,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kernel: [ml, rhel]
+        kernel: ${{ fromJSON(inputs.kernels) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -166,7 +184,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kernel: [ml, rhel]
+        kernel: ${{ fromJSON(inputs.kernels) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -193,7 +211,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kernel: [ml, rhel]
+        kernel: ${{ fromJSON(inputs.kernels) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -220,7 +238,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kernel: [ml, rhel]
+        kernel: ${{ fromJSON(inputs.kernels) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
