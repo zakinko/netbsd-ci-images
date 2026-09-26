@@ -108,7 +108,7 @@ blank $work/x.raw; mkfs.ext4 -q $loop && mount $loop /mnt/b && run ext4; done_lo
 blank $work/x.raw; mkfs.xfs -q $loop && mount $loop /mnt/b && run xfs; done_loop
 for m in ntfs3 ntfs; do
 	grep -qw $m /proc/filesystems || continue
-	blank $work/x.raw; mkntfs -Q -q $loop && mount -t $m $loop /mnt/b && run $m; done_loop
+	blank $work/x.raw; mkntfs -Q -q $loop && mount -i -t $m $loop /mnt/b && [ "$(findmnt -no FSTYPE /mnt/b)" = $m ] && run $m; done_loop
 done
 blank $work/x.raw; mkntfs -Q -q $loop && ntfs-3g $loop /mnt/b && run ntfs-3g; done_loop
 blank $work/x.raw; mkntfs -Q -q $loop && ntfs-3g -o big_writes $loop /mnt/b && run 'ntfs-3g big_writes'; done_loop
@@ -131,7 +131,7 @@ blank $work/x.raw; mkfs.ext4 -q $loop && mount $loop /mnt/b && prof ext4; done_l
 blank $work/x.raw; mkntfs -Q -q $loop && ntfs-3g $loop /mnt/b && prof ntfs-3g; done_loop
 for m in ntfs3 ntfs; do
 	grep -qw $m /proc/filesystems || continue
-	blank $work/x.raw; mkntfs -Q -q $loop && mount -t $m $loop /mnt/b && prof $m; done_loop
+	blank $work/x.raw; mkntfs -Q -q $loop && mount -i -t $m $loop /mnt/b && [ "$(findmnt -no FSTYPE /mnt/b)" = $m ] && prof $m; done_loop
 done
 
 dmesg > $out/dmesg-end.txt

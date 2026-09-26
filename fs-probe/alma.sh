@@ -35,6 +35,8 @@ drivers=ntfs-3g
 for m in ntfs3 ntfs; do
 	modprobe $m 2>/dev/null && drivers="$drivers $m"
 done
+# ntfs3 は既定では新しいファイルを sparse にしない (ntfs3.rst の sparse)。
+grep -qw ntfs3 /proc/filesystems && drivers="$drivers ntfs3-sparse"
 note "ntfs drivers: $drivers"
 for m in ntfs3 ntfs; do
 	modinfo $m 2>/dev/null | grep -E '^(filename|version|description):' | sed "s/^/    $m /" | tee -a $sum
@@ -93,7 +95,7 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 		note "rw: mount says $mo"
 		if [ "$mo" = rw ]; then
 			sh $here/mktree.sh /mnt/p/linux > $out/$n.mktree 2>&1
-			note "rw: mktree exit $? $(head -3 $out/$n.mktree | tr '\n' ' ')"
+			note "rw: mktree exit $? $(grep -c FAIL $out/$n.mktree) FAIL $(grep FAIL $out/$n.mktree | head -6 | tr "\n" ";")"
 			mani /mnt/p/linux > $out/$n.linux.manifest 2>>$out/$n.err
 			bench "ufs:$n" /mnt/p
 			df -k /mnt/p | tail -1 >> $sum
@@ -124,11 +126,22 @@ done
 # ドライバごとに同じことをする: Windows が作ったものを ro で読み、そこへ
 # 書き足し、自分で mkntfs したものへも書く。出来たイメージは Windows の
 # chkdsk にかける (win-check.ps1)。
+# カーネルのドライバは mount -i で呼ぶ。付けないと mount(8) が ntfs-3g の
+# 置いた /sbin/mount.ntfs を呼び、"ntfs" のつもりで ntfs-3g を測っていた
+# (run 36254316116、/proc/mounts が fuseblk だった)。mount した後に
+# /proc/mounts の種別を見て、違えば失敗として扱う。
 nmount() {	# driver dev [ro]
 	case $1 in
-	ntfs-3g) ntfs-3g ${3:+-o ro} $2 /mnt/p ;;
-	*)       mount -t $1 ${3:+-o ro} $2 /mnt/p ;;
-	esac
+	ntfs-3g)      ntfs-3g ${3:+-o ro} $2 /mnt/p; want=fuseblk ;;
+	ntfs3-sparse) mount -i -t ntfs3 -o sparse${3:+,ro} $2 /mnt/p; want=ntfs3 ;;
+	*)            mount -i -t $1 ${3:+-o ro} $2 /mnt/p; want=$1 ;;
+	esac || return 1
+	got=$(awk '$2 == "/mnt/p" { print $3 }' /proc/mounts)
+	if [ "$got" != "$want" ]; then
+		echo "!! /mnt/p is $got, not $want" >&2
+		umount /mnt/p
+		return 1
+	fi
 }
 note ""
 note "## NTFS (ntfs-3g $(rpm -q --qf '%{VERSION}' ntfs-3g))"
@@ -160,7 +173,7 @@ for drv in $drivers; do
 		if nmount $drv ${loop}p1 2>>$out/$w.err; then
 			note "rw: $(awk '$2 == "/mnt/p" { print $3, $4 }' /proc/mounts)"
 			sh $here/mktree.sh /mnt/p/linux > $out/$w.mktree 2>&1
-			note "rw: mktree exit $? $(head -3 $out/$w.mktree | tr '\n' ' ')"
+			note "rw: mktree exit $? $(grep -c FAIL $out/$w.mktree) FAIL $(grep FAIL $out/$w.mktree | head -6 | tr "\n" ";")"
 			mani /mnt/p/linux > $out/$w.linux.manifest 2>>$out/$w.err
 			umount /mnt/p
 			ntfsfix -n ${loop}p1 > $out/$w.ntfsfix 2>&1
@@ -184,7 +197,7 @@ for drv in $drivers; do
 	if nmount $drv ${loop}p1 2>>$out/$a.err; then
 		note "rw: $(awk '$2 == "/mnt/p" { print $3, $4 }' /proc/mounts)"
 		sh $here/mktree.sh /mnt/p/linux > $out/$a.mktree 2>&1
-		note "mktree exit $? $(head -3 $out/$a.mktree | tr '\n' ' ')"
+		note "mktree exit $? $(grep -c FAIL $out/$a.mktree) FAIL $(grep FAIL $out/$a.mktree | head -6 | tr "\n" ";")"
 		mani /mnt/p/linux > $out/$a.linux.manifest
 		umount /mnt/p
 		drop
