@@ -6,18 +6,11 @@ concurrency:
   group: ufs2-probe
   cancel-in-progress: true
 jobs:
-  mkimg:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: vmactions/freebsd-vm@v1
         with:
           usesh: true
-          run: sh ufs2-probe/mkimg.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ufs2
-          path: |
-            out/*.img.xz
-            out/*.dumpfs
-            out/*.expect
+          run: sh ufs2-probe/verify.sh
