@@ -9,18 +9,10 @@ rhel)
 	uname -r
 	;;
 ml)
-	# www.elrepo.org が VM の中で引けなかったことがある (run 36250762248)。
-	# 同じものを elrepo.org の直の path から取り、何度かやり直す。
-	r=https://elrepo.org/linux/elrepo/el10/x86_64/RPMS/elrepo-release-10.0-1.el10.elrepo.noarch.rpm
-	for i in 1 2 3 4 5; do
-		rpm -q elrepo-release > /dev/null && break
-		dnf -y -q install $r || sleep 10
-	done
-	for i in 1 2 3; do
-		dnf -y -q --enablerepo=elrepo-kernel install kernel-ml kernel-ml-core \
-			kernel-ml-modules kernel-ml-modules-extra kernel-ml-devel && break
-		sleep 10
-	done
+	# elrepo.org は VM の中の resolver から引けない (run 36250762248 と
+	# 36251789374 で、EPEL や vault は引けるのにこの名前だけ落ちた)。
+	# rpm は host で fsp/rpms に落としてあるので、それを入れる。
+	dnf -y -q install fsp/rpms/kernel-ml*.rpm
 	k=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-ml-core | sort -V | tail -1)
 	grubby --set-default /boot/vmlinuz-$k
 	grubby --default-kernel

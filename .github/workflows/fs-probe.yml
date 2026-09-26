@@ -67,6 +67,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { pattern: src-*, path: fsp/in, merge-multiple: true }
       - run: ls -ls fsp/in
+      - name: kernel-ml の rpm を host で落とす
+        if: matrix.kernel == 'ml'
+        run: |
+          set -e
+          b=https://elrepo.org/linux/kernel/el10/x86_64/RPMS
+          v=$(curl -fsSL $b/ | grep -oE 'kernel-ml-core-[0-9][^"<>]*\.rpm' | sed 's/kernel-ml-core-//; s/\.x86_64\.rpm//' | sort -V | tail -1)
+          echo "kernel-ml $v"
+          mkdir -p fsp/rpms
+          for p in kernel-ml kernel-ml-core kernel-ml-modules kernel-ml-modules-extra kernel-ml-devel; do
+            curl -fsSL -o fsp/rpms/$p-$v.x86_64.rpm $b/$p-$v.x86_64.rpm
+          done
+          ls -l fsp/rpms
       - uses: vmactions/almalinux-vm@v1
         with:
           release: "10"
@@ -107,6 +119,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { pattern: src-*bsd, path: fsp/in, merge-multiple: true }
+      - name: kernel-ml の rpm を host で落とす
+        if: matrix.kernel == 'ml'
+        run: |
+          set -e
+          b=https://elrepo.org/linux/kernel/el10/x86_64/RPMS
+          v=$(curl -fsSL $b/ | grep -oE 'kernel-ml-core-[0-9][^"<>]*\.rpm' | sed 's/kernel-ml-core-//; s/\.x86_64\.rpm//' | sort -V | tail -1)
+          echo "kernel-ml $v"
+          mkdir -p fsp/rpms
+          for p in kernel-ml kernel-ml-core kernel-ml-modules kernel-ml-modules-extra kernel-ml-devel; do
+            curl -fsSL -o fsp/rpms/$p-$v.x86_64.rpm $b/$p-$v.x86_64.rpm
+          done
+          ls -l fsp/rpms
       - uses: vmactions/almalinux-vm@v1
         with:
           release: "10"
