@@ -72,6 +72,16 @@ run() {	# label
 	note "$(printf '%-22s seqwrite %5s MB/s  seqread %5s MB/s  rand4k %6s IOPS  cp-include %6ss' "$l" \
 		"$(echo $sw | tr ' ' '\n' | med)" "$(echo $sr | tr ' ' '\n' | med)" \
 		"$(echo $rw | tr ' ' '\n' | med)" "$(echo $cp | tr ' ' '\n' | med)")"
+	# 書き込み一回あたりの I/O の大きさ。loop の stat の 5 番目が書き込み
+	# 回数、7 番目が書いた sector 数 (Documentation/block/stat.rst)。
+	dev=$(basename $(findmnt -no SOURCE /mnt/b))
+	drop
+	set -- $(cat /sys/block/$dev/stat); w0=$5; s0=$7
+	fio --name=sw --directory=/mnt/b --rw=write --bs=1M --size=256M \
+	    --end_fsync=1 > /dev/null 2>>$out/fio.err
+	set -- $(cat /sys/block/$dev/stat); w1=$5; s1=$7
+	rm -f /mnt/b/sw.*
+	note "$(printf '%-22s   seqwrite I/O: %s writes, avg %s KiB' '' $((w1 - w0)) $(( (s1 - s0) / 2 / ((w1 - w0) > 0 ? (w1 - w0) : 1) )))"
 	note "$(printf '%-22s   runs: sw[%s ] sr[%s ] rw[%s ] cp[%s ]' '' "$sw" "$sr" "$rw" "$cp")"
 }
 # perf で書き込みの中身を見る。

@@ -71,12 +71,11 @@ jobs:
         with:
           release: "10"
           mem: 8192
-          copyback: false
           run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
       - name: 再起動から戻るのを待ち、走っている kernel を確かめる
         run: |
           printf 'uname -r\n' > $RUNNER_TEMP/u.sh
-          [ ${{ matrix.kernel }} = ml ] && sleep 20
+          if [ ${{ matrix.kernel }} = ml ]; then sleep 45; fi
           for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
       - shell: almalinux {0}
         run: |
@@ -112,12 +111,11 @@ jobs:
         with:
           release: "10"
           mem: 8192
-          copyback: false
           run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
       - name: 再起動から戻るのを待ち、走っている kernel を確かめる
         run: |
           printf 'uname -r\n' > $RUNNER_TEMP/u.sh
-          [ ${{ matrix.kernel }} = ml ] && sleep 20
+          if [ ${{ matrix.kernel }} = ml ]; then sleep 45; fi
           for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
       - shell: almalinux {0}
         run: |
