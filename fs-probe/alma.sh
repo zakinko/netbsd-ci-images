@@ -213,7 +213,7 @@ losetup -d $loop
 norm() {
 	awk -F'|' 'BEGIN{OFS="|"}
 		$1 == "M" { if ($8 !~ /t20[04]0$/) $5 = "*"; print }
-		$1 == "L" { print }' "$1" | grep -v '/many/'
+		$1 == "L" { print }' "$1" | grep -v '/many/' | LC_ALL=C sort
 }
 note ""
 note "## Linux が書いた metadata の xfs との差"
@@ -224,7 +224,8 @@ for m in $out/*.linux.manifest; do
 	norm $m > $work/$n.norm
 	diff $work/xfs.norm $work/$n.norm | grep '^[<>]' > $out/$n.vs-xfs
 	note "$n: $(wc -l < $out/$n.vs-xfs) differing lines vs xfs"
-	sed -n '1,24p' $out/$n.vs-xfs | sed 's/^/    /' | tee -a $sum
+	grep '^<' $out/$n.vs-xfs | sed -n '1,12p' | sed 's/^/    /' | tee -a $sum
+	grep '^>' $out/$n.vs-xfs | sed -n '1,12p' | sed 's/^/    /' | tee -a $sum
 done
 dmesg > $out/dmesg-end.txt
 ls -ls $out

@@ -9,7 +9,7 @@ $In = (Resolve-Path $In).Path; $Out = (Resolve-Path $Out).Path
 foreach ($name in 'alma-ntfs', 'win-ntfs') {
 	$vhd = Join-Path $In "$name.vhd"
 	$r = Join-Path $Out "$name.check"
-	if (!(Test-Path $vhd)) { "== $name: no image" | Tee-Object $r; continue }
+	if (!(Test-Path $vhd)) { "== ${name}: no image" | Tee-Object $r; continue }
 	$log = @("== $name")
 	Mount-DiskImage -ImagePath $vhd | Out-Null
 	$part = Get-DiskImage -ImagePath $vhd | Get-Disk | Get-Partition | Where-Object Type -ne 'Reserved' | Select-Object -First 1

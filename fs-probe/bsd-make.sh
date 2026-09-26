@@ -46,6 +46,7 @@ FreeBSD)
 		umount /mnt/p
 		fsck_ffs -n -f /dev/$md > "$out/$1.fsck" 2>&1
 		dumpfs -m /dev/$md > "$out/$1.dumpfs" 2>&1 || true
+		dumpfs /dev/$md 2>&1 | sed -n "1,40p" | grep -iE "flags|hash|magic" | sed "s/^/$1: /"
 		mdconfig -d -u $md
 	}
 	one freebsd-ufs1      '-O 1'
