@@ -119,7 +119,14 @@ for n in netbsd-ffs2 netbsd-ffs1 freebsd-ufs2 freebsd-ufs1; do
 	case $n in *ffs1|*ufs1) t=44bsd ;; *) t=ufs2 ;; esac
 	cp --sparse=always $in/$n.img $work/u.img
 	rm -rf /mnt/b/src 2>/dev/null
+	# 7.x の loop は direct-io のとき論理 sector を下の fs の block (4096)
+	# に揃える。ufs は superblock を 1024 で読むので、そこで
+	# "failed to set blocksize" になり mount できない (run 36257259132)。
+	# 4K sector で断られることを一度記録してから、512 で測る。
 	loop=$(losetup -f --show --direct-io=on $work/u.img)
+	note "ufs $n on $(cat /sys/block/$(basename $loop)/queue/logical_block_size)-byte sectors: $(mount -t ufs -o ro,ufstype=$t $loop /mnt/b 2>&1 && { umount /mnt/b; echo mounts; } || echo 'does not mount')"
+	losetup -d $loop
+	loop=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
 	mount -t ufs -o rw,ufstype=$t $loop /mnt/b && rm -rf /mnt/b/src && sync && {
 		df -k /mnt/b | tail -1 | sed 's/^/    /' | tee -a $sum
 		run "ufs $n"
