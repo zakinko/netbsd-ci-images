@@ -6,10 +6,60 @@ concurrency:
   group: ufs2-probe
   cancel-in-progress: true
 jobs:
-  verify:
+  netbsd:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: qemu
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 netcat-openbsd
+          sudo chmod 666 /dev/kvm
+      - name: image
+        run: |
+          B=https://github.com/${{ github.repository }}/releases/download/images
+          curl -fsSL -O $B/amd64-11.0.qcow2
+          curl -fsSL -O $B/amd64-11.0.qemu
+      - name: boot
+        run: KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
+      - name: stock kernel, then patched kernel
+        run: |
+          set -x
+          SSH=$(cat ./amd64-11.0.ssh)
+          (cd ufs2-probe/kern && tar cf - .) | $SSH 'mkdir -p /root/p && cd /root/p && tar xf -'
+          $SSH sh /root/p/guest.sh stock | tee stock.txt
+          $SSH 'cd /root/p && xz -dc netbsd.xz > /netbsd.new && cp /netbsd /netbsd.stock && mv /netbsd.new /netbsd && sync && (sleep 2; /sbin/shutdown -r now) >/dev/null 2>&1 &'
+          sleep 20
+          n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 60 ] && exit 1; sleep 5; done
+          $SSH uname -v
+          $SSH sh /root/p/guest.sh patched | tee patched.txt
+          $SSH 'cd /root/p/patched && tar cf - plain.img eaonly.img' > after.tar
+          { echo '```'; cat stock.txt patched.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: after
+          path: after.tar
+      - name: stop
+        if: always()
+        run: DIR=. sh stopvm.sh amd64-11.0 || true
+      - name: console
+        if: failure()
+        run: tail -60 amd64-11.0.console.log || true
+  freebsd:
+    needs: netbsd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: after
+      - name: stage
+        run: |
+          rm -f ufs2-probe/back/*
+          tar xf after.tar
+          for n in plain eaonly; do xz -c $n.img > ufs2-probe/back/back-k$n.img.xz; done
+          : > ufs2-probe/back/kplain.expect
+          cp ufs2-probe/kern/eaonly.expect ufs2-probe/back/keaonly.expect
       - uses: vmactions/freebsd-vm@v1
         with:
           usesh: true
