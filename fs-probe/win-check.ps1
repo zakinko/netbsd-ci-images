@@ -6,8 +6,10 @@ $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $In = (Resolve-Path $In).Path; $Out = (Resolve-Path $Out).Path
 
-foreach ($name in 'alma-ntfs', 'win-ntfs') {
-	$vhd = Join-Path $In "$name.vhd"
+# ドライバごとに alma-ntfs-<drv>.vhd と win-ntfs-<drv>.vhd が在る。
+foreach ($f in Get-ChildItem -LiteralPath $In -Filter *.vhd) {
+	$name = $f.BaseName
+	$vhd = $f.FullName
 	$r = Join-Path $Out "$name.check"
 	if (!(Test-Path $vhd)) { "== ${name}: no image" | Tee-Object $r; continue }
 	$log = @("== $name")
@@ -51,3 +53,5 @@ foreach ($name in 'alma-ntfs', 'win-ntfs') {
 	$log | Set-Content -Encoding utf8 $r
 	Get-Content $r
 }
+# chkdsk の exit 3 は「見つけた」という報告で、この step の失敗ではない。
+exit 0

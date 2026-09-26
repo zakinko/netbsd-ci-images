@@ -54,7 +54,12 @@ jobs:
   alma:
     needs: [mk-netbsd, mk-freebsd, mk-windows]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # ml は ELRepo の kernel-ml (kernel.org の最新 stable)、rhel は Alma 10 のまま
+        kernel: [ml, rhel]
     steps:
       - uses: actions/checkout@v4
       - name: ディスクを空ける
@@ -66,62 +71,147 @@ jobs:
         with:
           release: "10"
           mem: 8192
-          run: sh fs-probe/alma.sh fsp/in fsp/alma
-      - run: cat fsp/alma/summary.txt >> $GITHUB_STEP_SUMMARY
+          copyback: false
+          run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
+      - name: 再起動から戻るのを待ち、走っている kernel を確かめる
+        run: |
+          printf 'uname -r\n' > $RUNNER_TEMP/u.sh
+          [ ${{ matrix.kernel }} = ml ] && sleep 20
+          for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+      - shell: almalinux {0}
+        run: |
+          uname -r
+          # 差し替えたつもりの kernel で本当に走っているか。違えば測らない。
+          if [ ${{ matrix.kernel }} = ml ]; then
+            test "$(uname -r)" = "$(cat /var/tmp/want-kernel)"
+          fi
+      - shell: almalinux {0}
+        run: sh fs-probe/alma.sh fsp/in fsp/alma-${{ matrix.kernel }}
+      - run: cat fsp/alma-${{ matrix.kernel }}/summary.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: alma, path: fsp/alma, compression-level: 1 }
+        with:
+          name: alma-${{ matrix.kernel }}
+          path: fsp/alma-${{ matrix.kernel }}
+          compression-level: 1
+
+  bench:
+    needs: [mk-netbsd, mk-freebsd]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [ml, rhel]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: src-*bsd, path: fsp/in, merge-multiple: true }
+      - uses: vmactions/almalinux-vm@v1
+        with:
+          release: "10"
+          mem: 8192
+          copyback: false
+          run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
+      - name: 再起動から戻るのを待ち、走っている kernel を確かめる
+        run: |
+          printf 'uname -r\n' > $RUNNER_TEMP/u.sh
+          [ ${{ matrix.kernel }} = ml ] && sleep 20
+          for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+      - shell: almalinux {0}
+        run: |
+          uname -r
+          # 差し替えたつもりの kernel で本当に走っているか。違えば測らない。
+          if [ ${{ matrix.kernel }} = ml ]; then
+            test "$(uname -r)" = "$(cat /var/tmp/want-kernel)"
+          fi
+      - shell: almalinux {0}
+        run: sh fs-probe/bench.sh fsp/in fsp/bench-${{ matrix.kernel }}
+      - run: cat fsp/bench-${{ matrix.kernel }}/bench.txt >> $GITHUB_STEP_SUMMARY
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.kernel }}
+          path: fsp/bench-${{ matrix.kernel }}
 
   check-netbsd:
     needs: alma
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [ml, rhel]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: alma, path: fsp/alma }
+        with:
+          name: alma-${{ matrix.kernel }}
+          path: fsp/alma
       - uses: vmactions/netbsd-vm@v1
         with:
           release: "11.0"
-          run: sh fs-probe/bsd-check.sh fsp/alma fsp/check-netbsd
-      - run: cat fsp/check-netbsd/*.check >> $GITHUB_STEP_SUMMARY
+          run: sh fs-probe/bsd-check.sh fsp/alma fsp/check-netbsd-${{ matrix.kernel }}
+      - run: cat fsp/check-netbsd-${{ matrix.kernel }}/*.check >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: check-netbsd, path: fsp/check-netbsd }
+        with:
+          name: check-netbsd-${{ matrix.kernel }}
+          path: fsp/check-netbsd-${{ matrix.kernel }}
 
   check-freebsd:
     needs: alma
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [ml, rhel]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: alma, path: fsp/alma }
+        with:
+          name: alma-${{ matrix.kernel }}
+          path: fsp/alma
       - uses: vmactions/freebsd-vm@v1
         with:
           release: "15.0"
-          run: sh fs-probe/bsd-check.sh fsp/alma fsp/check-freebsd
-      - run: cat fsp/check-freebsd/*.check >> $GITHUB_STEP_SUMMARY
+          run: sh fs-probe/bsd-check.sh fsp/alma fsp/check-freebsd-${{ matrix.kernel }}
+      - run: cat fsp/check-freebsd-${{ matrix.kernel }}/*.check >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: check-freebsd, path: fsp/check-freebsd }
+        with:
+          name: check-freebsd-${{ matrix.kernel }}
+          path: fsp/check-freebsd-${{ matrix.kernel }}
 
   check-windows:
     needs: alma
+    if: always()
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [ml, rhel]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: alma, path: fsp/alma }
+        with:
+          name: alma-${{ matrix.kernel }}
+          path: fsp/alma
       - shell: pwsh
-        run: ./fs-probe/win-check.ps1 fsp/alma fsp/check-windows
+        run: ./fs-probe/win-check.ps1 fsp/alma fsp/check-windows-${{ matrix.kernel }}
       - shell: pwsh
         if: always()
-        run: Get-Content fsp/check-windows/*.check | Add-Content $env:GITHUB_STEP_SUMMARY
+        run: Get-Content fsp/check-windows-${{ matrix.kernel }}/*.check | Add-Content $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: check-windows, path: fsp/check-windows }
+        with:
+          name: check-windows-${{ matrix.kernel }}
+          path: fsp/check-windows-${{ matrix.kernel }}

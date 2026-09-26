@@ -26,28 +26,19 @@ dnf -y -q install ntfs-3g ntfsprogs ntfs-3g-system-compression openssl gcc make 
 	xfsprogs bison flex
 rpm -q ntfs-3g ntfs-3g-system-compression | tee -a $sum
 
-rel=$(echo $KV | sed -n 's/.*\.el10_\([0-9]*\)\..*/10.\1/p')
-v=${KV%.x86_64}
-if ! dnf -y -q install kernel-devel-$KV; then
-	for u in https://vault.almalinux.org/$rel/AppStream/x86_64/os/Packages \
-	         https://repo.almalinux.org/almalinux/$rel/AppStream/x86_64/os/Packages; do
-		rpm -ivh --nodeps $u/kernel-devel-$v.x86_64.rpm && break
-	done
-fi
-cd $work
-for u in https://vault.almalinux.org/$rel/BaseOS/Source/Packages \
-         https://repo.almalinux.org/almalinux/$rel/BaseOS/Source/Packages; do
-	curl -fsSL -o k.src.rpm $u/kernel-$v.src.rpm && break
+. $here/ksrc.sh
+note "fs source: $ksrc"
+ufs_build $out/ufs-build.log
+note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings)"
+# NTFS はカーネルに在るものを全部試す。7.1 で戻った新しい ntfs と ntfs3。
+drivers=ntfs-3g
+for m in ntfs3 ntfs; do
+	modprobe $m 2>/dev/null && drivers="$drivers $m"
 done
-rpm2cpio k.src.rpm | cpio -idm --quiet 'linux-*.tar.xz'
-tar -xJf linux-*.tar.xz --wildcards '*/fs/ufs/*' '*/Documentation/admin-guide/ufs.rst'
-ufsdir=$(echo $work/linux-*/fs/ufs)
-note "ufs source: $ufsdir"
-# UFS_FS_WRITE は C の #ifdef で見られるだけなので、-D で渡せば足りる。
-make -C /lib/modules/$KV/build M=$ufsdir CONFIG_UFS_FS=m \
-	KCFLAGS=-DCONFIG_UFS_FS_WRITE=1 modules > $out/ufs-build.log 2>&1
-note "ufs build exit $? ($(grep -c warning: $out/ufs-build.log) warnings)"
-insmod $ufsdir/ufs.ko && note "ufs.ko loaded" || note "!! insmod ufs.ko failed"
+note "ntfs drivers: $drivers"
+for m in ntfs3 ntfs; do
+	modinfo $m 2>/dev/null | grep -E '^(filename|version|description):' | sed "s/^/    $m /" | tee -a $sum
+done
 dmesg -c > $out/dmesg-setup.txt
 
 # --- 共通 -------------------------------------------------------------------
@@ -130,70 +121,90 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 done
 
 # --- NTFS -------------------------------------------------------------------
+# ドライバごとに同じことをする: Windows が作ったものを ro で読み、そこへ
+# 書き足し、自分で mkntfs したものへも書く。出来たイメージは Windows の
+# chkdsk にかける (win-check.ps1)。
+nmount() {	# driver dev [ro]
+	case $1 in
+	ntfs-3g) ntfs-3g ${3:+-o ro} $2 /mnt/p ;;
+	*)       mount -t $1 ${3:+-o ro} $2 /mnt/p ;;
+	esac
+}
 note ""
 note "## NTFS (ntfs-3g $(rpm -q --qf '%{VERSION}' ntfs-3g))"
+for drv in $drivers; do
+	w=win-ntfs-$drv
+	a=alma-ntfs-$drv
+	if [ -e $in/win-ntfs.vhd ]; then
+		note ""
+		note "### $w (made by Windows, driver $drv)"
+		cp --sparse=always $in/win-ntfs.vhd $work/$w.vhd
+		loop=$(losetup -f -P --show $work/$w.vhd)
+		if nmount $drv ${loop}p1 ro 2>>$out/$w.err; then
+			mani /mnt/p/src 2>$out/$w.mani.err | grep '^H|' > $out/$w.alma-ro.H
+			LC_ALL=C sort $in/win-ntfs.manifest | tr -d '\r' > $work/w.H
+			diff $work/w.H $out/$w.alma-ro.H > $out/$w.ro.diff
+			note "ro: H lines Windows $(wc -l < $work/w.H), Linux $(wc -l < $out/$w.alma-ro.H), differing $(grep -c '^[<>]' $out/$w.ro.diff)"
+			sed -n '1,12p' $out/$w.ro.diff | tee -a $sum
+			note "ro: manifest errors: $(wc -l < $out/$w.mani.err)"
+			sed -n '1,6p' $out/$w.mani.err | tee -a $sum
+			ls -la /mnt/p/src > $out/$w.ls 2>&1
+			grep -E 'sym_|junction|ads|lz|sparse' $out/$w.ls | tee -a $sum
+			getfattr -d -m - /mnt/p/src/ads.txt 2>&1 | tee -a $sum
+			note "sparse: apparent $(du -k --apparent-size /mnt/p/src/sparse5g | cut -f1)k, allocated $(du -k /mnt/p/src/sparse5g | cut -f1)k"
+			umount /mnt/p
+		else
+			note "!! ro mount failed: $(tail -1 $out/$w.err)"
+		fi
+		dmesg -c > $out/$w.ro.dmesg
+		if nmount $drv ${loop}p1 2>>$out/$w.err; then
+			note "rw: $(awk '$2 == "/mnt/p" { print $3, $4 }' /proc/mounts)"
+			sh $here/mktree.sh /mnt/p/linux > $out/$w.mktree 2>&1
+			note "rw: mktree exit $? $(head -3 $out/$w.mktree | tr '\n' ' ')"
+			mani /mnt/p/linux > $out/$w.linux.manifest 2>>$out/$w.err
+			umount /mnt/p
+			ntfsfix -n ${loop}p1 > $out/$w.ntfsfix 2>&1
+			note "rw: ntfsfix -n exit $?"
+		else
+			note "!! rw mount failed: $(tail -1 $out/$w.err)"
+		fi
+		dmesg -c > $out/$w.rw.dmesg
+		[ -s $out/$w.rw.dmesg ] && grep -v drop_caches $out/$w.rw.dmesg | sed -n '1,8p' | sed 's/^/    dmesg: /' | tee -a $sum
+		losetup -d $loop
+		cp --sparse=always $work/$w.vhd $out/$w.vhd
+		rm -f $work/$w.vhd
+	fi
 
-# Windows が作ったもの
-if [ -e $in/win-ntfs.vhd ]; then
 	note ""
-	note "### win-ntfs (made by Windows)"
-	cp --sparse=always $in/win-ntfs.vhd $work/win-ntfs.vhd
-	loop=$(losetup -f -P --show $work/win-ntfs.vhd)
-	if ntfs-3g -o ro ${loop}p1 /mnt/p 2>>$out/win-ntfs.err; then
-		mani /mnt/p/src 2>$out/win-ntfs.mani.err | grep '^H|' > $out/win-ntfs.alma-ro.H
-		LC_ALL=C sort $in/win-ntfs.manifest | tr -d '\r' > $work/w.H
-		diff $work/w.H $out/win-ntfs.alma-ro.H > $out/win-ntfs.ro.diff
-		note "ro: H lines Windows $(wc -l < $work/w.H), Linux $(wc -l < $out/win-ntfs.alma-ro.H), differing $(grep -c '^[<>]' $out/win-ntfs.ro.diff)"
-		sed -n '1,12p' $out/win-ntfs.ro.diff | tee -a $sum
-		note "ro: manifest errors: $(wc -l < $out/win-ntfs.mani.err)"
-		sed -n '1,6p' $out/win-ntfs.mani.err | tee -a $sum
-		ls -la /mnt/p/src > $out/win-ntfs.ls 2>&1
-		grep -E 'sym_|junction|ads|lz|sparse' $out/win-ntfs.ls | tee -a $sum
-		getfattr -d -m - /mnt/p/src/ads.txt 2>&1 | tee -a $sum
-		note "ads stream: $(cat /mnt/p/src/ads.txt:secret 2>&1 || true)"
-		du -k --apparent-size /mnt/p/src/sparse5g | tee -a $sum
-		du -k /mnt/p/src/sparse5g | tee -a $sum
-		umount /mnt/p
-	else
-		note "!! ro mount failed: $(tail -1 $out/win-ntfs.err)"
-	fi
-	if ntfs-3g ${loop}p1 /mnt/p 2>>$out/win-ntfs.err; then
+	note "### $a (mkntfs on Alma, driver $drv)"
+	truncate -s 512M $work/$a.raw
+	echo 'type=7' | sfdisk -q $work/$a.raw
+	loop=$(losetup -f -P --show $work/$a.raw)
+	mkntfs -Q -L ALMA ${loop}p1 > $out/$a.mkntfs 2>&1
+	if nmount $drv ${loop}p1 2>>$out/$a.err; then
 		note "rw: $(awk '$2 == "/mnt/p" { print $3, $4 }' /proc/mounts)"
-		sh $here/mktree.sh /mnt/p/linux > $out/win-ntfs.mktree 2>&1
-		note "rw: mktree exit $? $(head -3 $out/win-ntfs.mktree | tr '\n' ' ')"
-		mani /mnt/p/linux > $out/win-ntfs.linux.manifest 2>>$out/win-ntfs.err
+		sh $here/mktree.sh /mnt/p/linux > $out/$a.mktree 2>&1
+		note "mktree exit $? $(head -3 $out/$a.mktree | tr '\n' ' ')"
+		mani /mnt/p/linux > $out/$a.linux.manifest
 		umount /mnt/p
-		ntfsfix -n ${loop}p1 > $out/win-ntfs.ntfsfix 2>&1
-		note "rw: ntfsfix -n exit $?"
+		drop
+		nmount $drv ${loop}p1 ro
+		mani /mnt/p/linux > $out/$a.linux.reread
+		note "after remount, differing lines $(ndiff $out/$a.linux.manifest $out/$a.linux.reread)"
+		umount /mnt/p
+		ntfsfix -n ${loop}p1 > $out/$a.ntfsfix 2>&1
+		note "ntfsfix -n exit $?"
+	else
+		note "!! rw mount failed: $(tail -1 $out/$a.err)"
 	fi
+	dmesg -c > $out/$a.dmesg
+	[ -s $out/$a.dmesg ] && grep -v drop_caches $out/$a.dmesg | sed -n '1,8p' | sed 's/^/    dmesg: /' | tee -a $sum
 	losetup -d $loop
-	cp --sparse=always $work/win-ntfs.vhd $out/win-ntfs.vhd
-	cp $in/win-ntfs.manifest $out/win-ntfs.manifest
-fi
-
-# Linux が作ったもの
-note ""
-note "### alma-ntfs (mkntfs on Alma)"
-truncate -s 512M $work/alma-ntfs.raw
-echo 'type=7' | sfdisk -q $work/alma-ntfs.raw
-loop=$(losetup -f -P --show $work/alma-ntfs.raw)
-mkntfs -Q -L ALMA ${loop}p1 > $out/alma-ntfs.mkntfs 2>&1
-ntfs-3g ${loop}p1 /mnt/p
-sh $here/mktree.sh /mnt/p/linux > $out/alma-ntfs.mktree 2>&1
-note "mktree exit $? $(head -3 $out/alma-ntfs.mktree | tr '\n' ' ')"
-mani /mnt/p/linux > $out/alma-ntfs.linux.manifest
-bench "ntfs-3g" /mnt/p
-umount /mnt/p
-drop
-ntfs-3g -o ro ${loop}p1 /mnt/p
-mani /mnt/p/linux > $out/alma-ntfs.linux.reread
-note "after remount, differing lines $(ndiff $out/alma-ntfs.linux.manifest $out/alma-ntfs.linux.reread)"
-umount /mnt/p
-ntfsfix -n ${loop}p1 > $out/alma-ntfs.ntfsfix 2>&1
-note "ntfsfix -n exit $?"
-losetup -d $loop
-qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on \
-	$work/alma-ntfs.raw $out/alma-ntfs.vhd
+	qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on \
+		$work/$a.raw $out/$a.vhd
+	rm -f $work/$a.raw
+done
+cp $in/win-ntfs.manifest $out/win-ntfs.manifest 2>/dev/null
 
 # 物差し: 同じ VM、同じ loop で xfs
 note ""
