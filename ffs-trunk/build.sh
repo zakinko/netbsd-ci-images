@@ -33,7 +33,7 @@ cp $K $W/out/netbsd.patched
 M=$W/tools/bin/nbmake-amd64
 $M -C sys/rump/fs/lib/libffs dependall
 $M -C sbin/fsck_ffs dependall
-L=$(find $W/obj/sys/rump/fs/lib/libffs -name 'librumpfs_ffs.so.*.*' -type f)
+L=$(find $W/obj/sys/rump/fs/lib/libffs -name 'librumpfs_ffs.so.[0-9]*.[0-9]*' -type f)
 cp $L $W/out/$(basename $L)
 cp $W/obj/sbin/fsck_ffs/fsck_ffs $W/out/fsck_ffs
 NM=$(ls $W/tools/bin/*-nm | head -1)

@@ -17,12 +17,18 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h .
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: tools
         with:
           path: tools
           key: netbsd-tools-amd64-${{ env.REV }}
       - name: build
         run: sh ffs-trunk/build.sh
+      - uses: actions/cache/save@v4
+        if: always() && steps.tools.outputs.cache-hit != 'true'
+        with:
+          path: tools
+          key: netbsd-tools-amd64-${{ env.REV }}
       - uses: actions/upload-artifact@v4
         with:
           name: trunk

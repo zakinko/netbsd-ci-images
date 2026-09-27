@@ -15,7 +15,7 @@ if [ ! -x $T/bin/sh ]; then
 	done
 	mount -t null /dev $T/dev || exit 1
 fi
-lib=$(cd $S && ls librumpfs_ffs.so.*.*)
+lib=$(cd $S && ls librumpfs_ffs.so.[0-9]*.[0-9]*)
 if [ "$L" = patched ]; then
 	cp $S/$lib $T/usr/lib/$lib && cp $S/fsck_ffs $T/sbin/fsck_ffs || exit 1
 fi
