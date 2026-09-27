@@ -1,23 +1,11 @@
 #!/bin/sh
-# Runs inside NetBSD as root: atf.sh <label>
-# Unpacks /root/trunk/<label>/{base,etc,tests}.tar.xz into a tmpfs
-# chroot at /t and runs the ffs-related ATF tests there.  The chroot is
-# left mounted for ck.sh.
+# Runs inside NetBSD as root after chroot.sh: atf.sh <label>
+# Runs the ffs-related ATF tests in the chroot at /t.
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
 L=$1
-S=/root/trunk/$L
 T=/t
 TESTS="fs/ffs sbin/fsck_ffs sbin/newfs sbin/resize_ffs"
-mkdir -p $T
-if [ ! -x $T/bin/sh ]; then
-	mount -t tmpfs -o -s6g tmpfs $T || exit 1
-	for s in base etc tests; do
-		xz -dc $S/$s.tar.xz | tar -xpf - -C $T || exit 1
-	done
-	mount -t null /dev $T/dev || exit 1
-fi
 echo "=== atf $L: $(uname -v)"
-echo "sets: $(cat $S/rev)"
 mkdir -p /root/atf-$L
 for d in $TESTS; do
 	n=$(echo $d | tr / _)

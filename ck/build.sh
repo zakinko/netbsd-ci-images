@@ -1,21 +1,24 @@
 #!/bin/sh
 # Runs on the Ubuntu runner: build NetBSD amd64 twice.
 #   stock:   trunk $REV
-#   patched: $PREV, the check-hash branch (trunk $REV + two commits)
+#   patched: $PREV, the head of the check-hash branch
 # Each gives a GENERIC kernel and the base/etc/tests sets, in
-# $W/out/{stock,patched}/.  The patched build is an update build on top
+# $W/out/{stock,patched}/.  The commits of the branch named in $STEPS
+# also give a kernel each, in $W/out/<commit>/, to measure what each
+# step of the branch costs.  The patched build is an update build on top
 # of the stock one, so everything that the changed sources and headers
 # reach is rebuilt, and only that.
 set -eux
 W=$(pwd)
 REV=${REV:?}
 PREV=${PREV:?}
+STEPS=${STEPS:-}
 nj=$(nproc)
 mkdir -p out/stock out/patched
 if [ ! -d src/.git ]; then
 	git init -q src
 	git -C src fetch -q --depth 1 https://github.com/zakinko/NetBSD-src $REV
-	git -C src fetch -q --depth 20 https://github.com/zakinko/NetBSD-src $PREV
+	git -C src fetch -q --depth 30 https://github.com/zakinko/NetBSD-src $PREV
 	git -C src checkout -q $REV
 fi
 V="-V MKX11=no -V MKDEBUG=no -V MKCOMPAT=no -V MKMAN=no -V MKHTML=no
@@ -37,5 +40,12 @@ git checkout -q $PREV
 git diff --stat $REV $PREV | tail -1
 time $B -u kernel=GENERIC distribution sets
 save patched
+for c in $STEPS; do
+	git checkout -q $c
+	time $B -u kernel=GENERIC
+	mkdir -p $W/out/$c
+	git -C $W/src log -1 --format='%H %cd' > $W/out/$c/rev
+	xz -T0 -c $K > $W/out/$c/netbsd.xz
+done
 cd $W/out
 ls -lR; find . -type f | sort | xargs sha256sum | tee SHA256

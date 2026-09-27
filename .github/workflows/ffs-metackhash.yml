@@ -7,7 +7,9 @@ concurrency:
   cancel-in-progress: true
 env:
   REV: 70d98372668cd062baca23959e1dc587c370607a
-  PREV: 7e50f26c908fd5819ed42f36aa0fa2a866b27667
+  PREV: 138626c05fd5a1efb1985197d484342c9db07e57
+  # per-change hashing with tables, then with the crc32 instruction
+  STEPS: 7e50f26c908fd5819ed42f36aa0fa2a866b27667 06fe12c0d981ea5a10c189f80476138d06424dac
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -65,6 +67,7 @@ jobs:
             ck-out.tar
             atf.tar
             ck.txt
+            bench-*.txt
       - name: stop
         if: always()
         run: DIR=. sh stopvm.sh amd64-11.0 || true
