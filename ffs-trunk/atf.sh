@@ -31,3 +31,6 @@ for d in fs/ffs sbin/fsck_ffs; do
 	    < /root/atf-$L/$n.raw | sed -n '/^Summary/,$p'
 	cp $T/tmp/$n.csv /root/atf-$L/
 done
+cp /root/fsck.sh /root/p/eaonly.img.xz $T/tmp/
+echo "--- fsck.sh"
+chroot $T sh /tmp/fsck.sh /tmp/eaonly.img.xz 2>&1 | tee /root/atf-$L/fsck.txt

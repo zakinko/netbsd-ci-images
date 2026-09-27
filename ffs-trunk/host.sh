@@ -17,6 +17,7 @@ boot() {	# kernel.xz
 (cd out && tar cf - base.tar.xz etc.tar.xz tests.tar.xz librumpfs_ffs.so.* fsck_ffs) |
     $SSH 'mkdir -p /root/trunk && cd /root/trunk && tar xf -'
 $SSH 'cat > /root/atf.sh' < ffs-trunk/atf.sh
+$SSH 'cat > /root/fsck.sh' < ffs-trunk/fsck.sh
 for k in stock patched; do
 	boot out/netbsd.$k.xz || exit 1
 	$SSH sh /root/p/guest.sh $k | tee kern-$k.txt
