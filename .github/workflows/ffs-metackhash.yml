@@ -7,7 +7,7 @@ concurrency:
   cancel-in-progress: true
 env:
   REV: 70d98372668cd062baca23959e1dc587c370607a
-  PREV: 9c2a847bf74ee8531709e695bfe80d68894d89fc
+  PREV: 7e50f26c908fd5819ed42f36aa0fa2a866b27667
 jobs:
   build:
     runs-on: ubuntu-latest

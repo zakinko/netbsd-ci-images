@@ -167,8 +167,8 @@ if on nb.img; then echo before > $M/before; mkdir $M/d; off; fi
 put32 nb.img $((SB + 1308)) 7
 put32 nb.img $((SB + 1312)) $(($(get32 nb.img $((SB + 1312))) | 512))
 sbinfo nb.img
-fsck_ffs -f -n nb.img 2>&1 | grep -c 'CHECK-HASH' | sed 's/^/  fsck -n: check-hash complaints: /'
-fsck_ffs -f -y nb.img 2>&1 | grep -E 'CHECK-HASH|MODIFIED|files,' |
+fsck_ffs -f -n nb.img 2>&1 | grep -c 'CHECK HASH' | sed 's/^/  fsck -n: check-hash complaints: /'
+fsck_ffs -f -y nb.img 2>&1 | grep -E 'CHECK HASH|MODIFIED|files,' |
     sort | uniq -c | sed 's/^/  fsck -y: /'
 fsckn nb.img
 if on nb.img; then work; sums nb.img; off; fi

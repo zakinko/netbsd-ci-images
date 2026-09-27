@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs on the Ubuntu runner: build NetBSD amd64 twice.
 #   stock:   trunk $REV
-#   patched: $PREV, the check-hash branch (trunk $REV + commits)
+#   patched: $PREV, the check-hash branch (trunk $REV + two commits)
 # Each gives a GENERIC kernel and the base/etc/tests sets, in
 # $W/out/{stock,patched}/.  The patched build is an update build on top
 # of the stock one, so everything that the changed sources and headers
