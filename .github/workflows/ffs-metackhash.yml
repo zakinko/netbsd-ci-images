@@ -1,0 +1,87 @@
+name: ffs-metackhash
+on:
+  push:
+    branches: [ffs-metackhash]
+concurrency:
+  group: ffs-metackhash
+  cancel-in-progress: true
+env:
+  REV: 70d98372668cd062baca23959e1dc587c370607a
+  PREV: 9c2a847bf74ee8531709e695bfe80d68894d89fc
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: room
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h .
+      - uses: actions/cache/restore@v4
+        id: tools
+        with:
+          path: tools
+          key: netbsd-tools-amd64-${{ env.REV }}
+      - name: build
+        run: sh ck/build.sh
+      - uses: actions/cache/save@v4
+        if: always() && steps.tools.outputs.cache-hit != 'true'
+        with:
+          path: tools
+          key: netbsd-tools-amd64-${{ env.REV }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trunk
+          path: out/
+  netbsd:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: trunk
+          path: out
+      - name: qemu
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 netcat-openbsd
+          sudo chmod 666 /dev/kvm
+      - name: image
+        run: |
+          B=https://github.com/${{ github.repository }}/releases/download/images
+          curl -fsSL -O $B/amd64-11.0.qcow2
+          curl -fsSL -O $B/amd64-11.0.qemu
+      - name: boot
+        run: MEM=10240 KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
+      - name: stock, then check-hash
+        run: sh ck/host.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: after
+          path: |
+            ck-out.tar
+            atf.tar
+            ck.txt
+      - name: stop
+        if: always()
+        run: DIR=. sh stopvm.sh amd64-11.0 || true
+      - name: console
+        if: failure()
+        run: tail -80 amd64-11.0.console.log || true
+  freebsd:
+    needs: netbsd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: after
+      - name: stage
+        run: mkdir -p ck/out && tar xf ck-out.tar -C ck/out && ls -l ck/out
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          run: sh ck/verify.sh
