@@ -15,7 +15,7 @@ boot() {	# kernel.xz
 	$SSH uname -v
 }
 bench() {	# label
-	$SSH "cp /root/bench.sh /t/tmp/ && chroot /t sh /tmp/bench.sh $1 /tmp/tests.tar" 2>&1 |
+	$SSH "cp /root/bench.sh /t/tmp/ && /usr/sbin/chroot /t sh /tmp/bench.sh $1 /tmp/tests.tar" 2>&1 |
 	    tee bench-$1.txt
 }
 (cd ufs2-probe/kern && tar cf - plain.img.xz eaonly.img.xz eaonly.expect) |
@@ -38,7 +38,7 @@ done
 boot out/patched/netbsd.xz || exit 1
 $SSH sh /root/chroot.sh patched
 $SSH sh /root/atf.sh patched | tee atf-patched.txt
-$SSH 'mkdir -p /t/tmp/p && cp /root/p/* /t/tmp/p/ && cp /root/ck.sh /t/tmp/ && chroot /t sh /tmp/ck.sh /tmp/p' 2>&1 | tee ck.txt
+$SSH 'mkdir -p /t/tmp/p && cp /root/p/* /t/tmp/p/ && cp /root/ck.sh /t/tmp/ && /usr/sbin/chroot /t sh /tmp/ck.sh /tmp/p' 2>&1 | tee ck.txt
 $SSH 'cd /t/tmp/ck/out && tar cf - .' > ck-out.tar
 bench patched
 $SSH 'cd /root && tar cf - atf-stock atf-patched' > atf.tar
@@ -53,3 +53,12 @@ for n in fs_ffs sbin_fsck_ffs sbin_newfs sbin_resize_ffs; do
 	diff res/$n.stock.r res/$n.patched.r && echo identical
 done | tee cmp.txt
 { echo '```'; cat atf-stock.txt atf-patched.txt cmp.txt ck.txt bench-*.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
+
+# Fail if a step gave nothing, rather than pass on empty results.
+ok=0
+grep -q '^=== ck:' ck.txt || { echo "ck.sh did not run"; ok=1; }
+tar tf ck-out.tar >/dev/null 2>&1 || { echo "no ck images"; ok=1; }
+for f in bench-stock.txt bench-patched.txt; do
+	grep -q 'fsck -f -n' $f || { echo "$f incomplete"; ok=1; }
+done
+exit $ok

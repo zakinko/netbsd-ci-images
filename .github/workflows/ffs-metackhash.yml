@@ -10,8 +10,12 @@ env:
   PREV: 138626c05fd5a1efb1985197d484342c9db07e57
   # per-change hashing with tables, then with the crc32 instruction
   STEPS: 7e50f26c908fd5819ed42f36aa0fa2a866b27667 06fe12c0d981ea5a10c189f80476138d06424dac
+  # a run whose build to reuse, when the sources above have not changed
+  REUSE_RUN: 36302371024
 jobs:
   build:
+    # Off while REUSE_RUN has the build of the sources above.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -38,13 +42,25 @@ jobs:
           path: out/
   netbsd:
     needs: build
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
+        if: ${{ needs.build.result == 'success' }}
         with:
           name: trunk
           path: out
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.build.result == 'skipped' }}
+        with:
+          name: trunk
+          path: out
+          run-id: ${{ env.REUSE_RUN }}
+          github-token: ${{ github.token }}
       - name: qemu
         run: |
           sudo apt-get update -qq
