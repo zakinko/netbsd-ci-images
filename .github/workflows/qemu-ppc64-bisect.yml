@@ -1,0 +1,121 @@
+name: ppc64 の偽 VSX Unavailable を qemu の版で二分する
+
+# noble の qemu 8.2.2 で、pseries/power9 の guest が VSX でない命令
+# (FreeBSD 15.0 の loader の stwu) に VSX Unavailable を上げて落ちる。
+# 11.1.1 では落ちない。どの変更が直したかを、qemu を版ごとに組んで
+# 同じ命令行で撃ち、落ちる / 通るを並べて決める。
+#
+# 以前は 8bded2e73e80 (lxvx/stxvx の facility check) を原因と書いたが、
+# loader にその命令は一つも無く、撤回した。今度は推測で当てず測る。
+#
+# refs に tag か commit を空白区切りで渡す。一段目は release の tag で
+# 範囲を狭め、二段目で commit を二分する。
+#
+# 判定は起動の出力だけで行う。
+#   FAIL     Program Exception が出た (8.2.2 の症状)
+#   PASS     導入器の Console type の促しまで届いた
+#   UNKNOWN  どちらも出ないまま時間切れ
+# 対照として 8.2.2 が FAIL、11.1.1 が PASS になることを同じ run で見る。
+# ならなければ、この仕掛けは何も測っていない。
+
+on:
+  workflow_dispatch:
+    inputs:
+      refs:
+        description: 'qemu の tag か commit (空白区切り)'
+        required: true
+        default: 'v8.2.2 v8.2.7 v8.2.8 v8.2.10 v9.0.0 v9.1.0 v9.2.0 v10.0.0 v10.1.0 v10.2.0 v11.0.0 v11.1.1'
+
+concurrency:
+  group: qemu-ppc64-bisect-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      refs: ${{ steps.m.outputs.refs }}
+    steps:
+      - id: m
+        env:
+          REFS: ${{ inputs.refs }}
+        run: |
+          printf 'refs=%s\n' "$(printf '%s\n' $REFS | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  shoot:
+    needs: matrix
+    name: qemu ${{ matrix.ref }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(needs.matrix.outputs.refs) }}
+    steps:
+      - name: 道具
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git ninja-build libglib2.0-dev libpixman-1-dev \
+            python3-venv python3-pip flex bison pkg-config zlib1g-dev > /dev/null
+
+      - name: qemu を組む
+        env:
+          REF: ${{ matrix.ref }}
+        run: |
+          git clone -q --filter=blob:none https://gitlab.com/qemu-project/qemu.git q
+          cd q
+          git checkout -q "$REF"
+          echo "commit: $(git rev-parse HEAD)  $(git log -1 --format=%cs)"
+          mkdir b && cd b
+          ../configure --target-list=ppc64-softmmu --disable-docs --disable-werror \
+            --disable-user --disable-tools --disable-guest-agent > ../../configure.log 2>&1 ||
+            { tail -40 ../../configure.log; exit 1; }
+          ninja > ../../build.log 2>&1 || { tail -40 ../../build.log; exit 1; }
+          ./qemu-system-ppc64 --version | head -1
+
+      - name: 媒体
+        run: |
+          curl -sSL -o bootonly.iso \
+            https://download.freebsd.org/releases/powerpc/powerpc64le/ISO-IMAGES/15.0/FreeBSD-15.0-RELEASE-powerpc-powerpc64le-bootonly.iso
+          ls -l bootonly.iso
+
+      - name: 撃つ
+        env:
+          REF: ${{ matrix.ref }}
+        run: |
+          set +e
+          # 新しい qemu は SLOF の firmware を build dir の pc-bios から引く。
+          timeout 900 q/b/qemu-system-ppc64 -L q/pc-bios \
+            -machine pseries,accel=tcg,usb=off,cap-cfpc=broken,cap-sbbc=broken,cap-ibs=broken,cap-ccf-assist=off \
+            -cpu power9 -m 4096 -smp 1 -nographic \
+            -drive file=bootonly.iso,format=raw,if=none,id=inst0,media=cdrom \
+            -device virtio-scsi-pci,id=scsi0 \
+            -device scsi-cd,bus=scsi0.0,drive=inst0,bootindex=0 \
+            > boot.log 2>&1 < /dev/null &
+          qp=$!
+          # 判定の文言が出たら待たずに止める。
+          i=0
+          while [ $i -lt 180 ] && kill -0 $qp 2>/dev/null; do
+            if grep -q -a -e 'Program Exception' -e 'Console type' boot.log; then break; fi
+            sleep 5; i=$((i+1))
+          done
+          kill $qp 2>/dev/null; wait $qp 2>/dev/null
+          if grep -q -a 'Program Exception' boot.log; then v=FAIL
+          elif grep -q -a 'Console type' boot.log; then v=PASS
+          else v=UNKNOWN; fi
+          c=$(git -C q rev-parse --short=12 HEAD)
+          echo "RESULT $REF $c $v"
+          echo "| $REF | $c | $v |" >> "$GITHUB_STEP_SUMMARY"
+          grep -a -E 'Open Firmware loader|Booting|Console type|Program Exception|SRR0' boot.log | head -8
+          [ "$v" = UNKNOWN ] && tail -20 boot.log
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boot-${{ matrix.ref }}
+          path: |
+            boot.log
+            configure.log
+            build.log
+          retention-days: 7
