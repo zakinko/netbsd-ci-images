@@ -104,10 +104,12 @@ bioprof() {	# label
 		fio --name=sw --directory=/mnt/b --rw=write --bs=1M --size=64M \
 		--end_fsync=1 > /dev/null 2>&1
 	perf script -i $work/bio.data 2>/dev/null |
-	awk '/block:block_bio_queue/ { if (n) print src; n = 1; src = "other"; next }
-	     n && src == "other" && /ufs_clear_frags|ufs_change_blocknr|sync_dirty_buffer|mpage_|__block_write_full_folio|write_dirty_buffer|ufs_sync|ubh_|iomap_|ext4_|xfs_/ {
-		src = $2; sub(/\+0x.*/, "", src) }
-	     END { if (n) print src }' |
+	awk 'function flush() { if (n) print (ufs != "" ? ufs " <- " gen : gen) }
+	     /block:block_bio_queue/ { flush(); n = 1; gen = "other"; ufs = ""; next }
+	     n { f = $2; sub(/\+0x.*/, "", f)
+		 if (ufs == "" && f ~ /^ufs_/) ufs = f
+		 if (gen == "other" && f ~ /sync_dirty_buffer|write_dirty_buffer|mpage_|__block_write_full_folio|iomap_|ext4_|xfs_/) gen = f }
+	     END { flush() }' |
 	sort | uniq -c | sort -rn > $out/bio-$1.txt
 	rm -f /mnt/b/sw.* $work/bio.data
 	note "bio sources $1 (64MiB write):"
