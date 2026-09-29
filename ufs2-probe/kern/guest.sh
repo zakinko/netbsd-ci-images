@@ -6,10 +6,13 @@ L=$1
 P=/root/p
 cd $P || exit 1
 echo "=== $L: $(uname -v)"
-[ -x q2 ] || cc -o q2 q2.c || exit 1
+rm -f q2; cc -o q2 q2.c || exit 1
 rm -rf $L && mkdir $L && cd $L
 xz -dc ../plain.img.xz > plain.img
 xz -dc ../eaonly.img.xz > eaonly.img
+cp eaonly.img fsck-eaonly.img
+echo "[fsck] fsck_ffs -f -n on FreeBSD eaonly: $(fsck_ffs -f -n fsck-eaonly.img 2>&1 | grep -c 'EXTATTR') EXTATTR lines"
+fsck_ffs -f -n fsck-eaonly.img 2>&1 | grep -vE '^\*\* Phase|^$|DIOCGDINFO|character device|^CONTINUE'
 for n in q2ok q2bad; do
 	dd if=/dev/zero of=$n.img bs=1m count=32 2>/dev/null
 	newfs -F -s 32m -O2 -q user -q group $n.img >/dev/null
