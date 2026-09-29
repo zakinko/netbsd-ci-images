@@ -5,80 +5,18 @@ on:
 concurrency:
   group: ufs2-probe
   cancel-in-progress: true
-env:
-  SNAP: 20260928204101Z
 jobs:
-  netbsd:
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@v4
-      - name: qemu
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-system-x86 netcat-openbsd
-          sudo chmod 666 /dev/kvm
-      - name: image
-        run: |
-          B=https://github.com/${{ github.repository }}/releases/download/images
-          curl -fsSL -O $B/amd64-11.0.qcow2
-          curl -fsSL -O $B/amd64-11.0.qemu
-      - name: boot 11.0
-        run: KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
-      - name: upgrade to -current, stock
-        run: |
-          set -x
-          SSH=$(cat ./amd64-11.0.ssh)
-          reboot_wait() {
-            $SSH '(sleep 2; /sbin/shutdown -r now) >/dev/null 2>&1 &'
-            sleep 30
-            n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && exit 1; sleep 5; done
-          }
-          (cd ufs2-probe/kern && tar cf - .) | $SSH 'mkdir -p /root/p && cd /root/p && tar xf -'
-          $SSH sh /root/p/upgrade.sh $SNAP
-          reboot_wait
-          $SSH uname -a
-          $SSH sh /root/p/guest.sh stock | tee stock.txt
-          $SSH sh /root/p/atf.sh stock | tee stock-atf.txt
-          $SSH sh /root/p/swap.sh
-          reboot_wait
-          $SSH uname -a
-          $SSH sh /root/p/guest.sh patched | tee patched.txt
-          $SSH sh /root/p/atf.sh patched | tee patched-atf.txt
-          $SSH 'cd /root/p/patched && tar cf - plain.img eaonly.img' > after.tar
-          $SSH 'cd /root/p && tar cf - atf-stock atf-patched' > atf.tar
-          { echo '```'; cat stock.txt stock-atf.txt patched.txt patched-atf.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: after
-          path: |
-            after.tar
-            atf.tar
-            stock*.txt
-            patched*.txt
-      - name: stop
-        if: always()
-        run: DIR=. sh stopvm.sh amd64-11.0 || true
-      - name: console
-        if: failure()
-        run: tail -80 amd64-11.0.console.log || true
   freebsd:
-    needs: netbsd
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: after
-      - name: stage
-        run: |
-          rm -f ufs2-probe/back/*
-          tar xf after.tar
-          for n in plain eaonly; do xz -c $n.img > ufs2-probe/back/back-k$n.img.xz; done
-          : > ufs2-probe/back/kplain.expect
-          cp ufs2-probe/kern/eaonly.expect ufs2-probe/back/keaonly.expect
       - uses: vmactions/freebsd-vm@v1
         with:
           usesh: true
-          run: sh ufs2-probe/verify.sh
+          run: |
+            sh ufs2-probe/verify.sh
+            sh ufs2-probe/repro.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repro
+          path: out/ufs2.img.xz
