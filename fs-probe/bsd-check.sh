@@ -33,10 +33,11 @@ for f in $in/$pat; do
 	{
 		echo "== $n"
 		attach "$f"
-		if [ $(uname -s) = FreeBSD ]; then
-			echo "-- dumpfs"
-			dumpfs $rdev 2>&1 | sed -n "1,40p" | grep -iE "flags|hash|magic"
-		fi
+		echo "-- dumpfs"
+		case $(uname -s) in
+		FreeBSD) dumpfs $rdev 2>&1 | sed -n "1,40p" | grep -iE "flags|hash|magic" ;;
+		NetBSD)  dumpfs -s $rdev 2>&1 | grep -iE "^flags|quota|magic" ;;
+		esac
 		echo "-- fsck_ffs -n -f"
 		fsck_ffs -n -f $rdev 2>&1 && echo "fsck exit 0" || echo "fsck exit $?"
 		if mount -r $dev /mnt/p; then

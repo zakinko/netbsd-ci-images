@@ -1,0 +1,89 @@
+--- a/fs/ufs/ufs_fs.h	2026-09-29 17:46:45
++++ b/fs/ufs/ufs_fs.h	2026-09-29 17:46:45
+@@ -334,6 +334,12 @@
+ #define UFS_ACLS         0x10    /* file system has ACLs enabled */
+ #define UFS_MULTILABEL   0x20    /* file system is MAC multi-label */
+ #define UFS_FLAGS_UPDATED 0x80   /* flags have been moved to new location */
++/*
++ * Bit 0x200 of the 32-bit fs_flags means different things: FreeBSD's
++ * FS_METACKHASH (check-hashes are maintained, see fs_metackhash) and
++ * NetBSD's FS_DOQUOTA2 (in-filesystem quotas).
++ */
++#define UFS_METACKHASH	0x200
+ 
+ #if 0
+ /*
+@@ -937,7 +943,10 @@
+ 			__fs32	fs_qfmask[2];	/* ~usb_fmask */
+ 		} fs_sunx86;
+ 		struct {
+-			__fs32	fs_sparecon[50];/* reserved for future constants */
++			__fs32	fs_sparecon[47];/* reserved for future constants */
++			__fs32	fs_ckhash;	/* FreeBSD: superblock check-hash */
++			__fs32	fs_metackhash;	/* FreeBSD: which check-hashes */
++			__fs32	fs_flags;	/* FS_ flags, 32-bit copy */
+ 			__fs32	fs_contigsumsize;/* size of cluster summary array */
+ 			__fs32	fs_maxsymlinklen;/* max length of an internal symlink */
+ 			__fs32	fs_inodefmt;	/* format of on-disk inodes */
+--- a/fs/ufs/super.c	2026-09-29 17:46:45
++++ b/fs/ufs/super.c	2026-09-29 17:46:45
+@@ -449,6 +449,38 @@
+ }
+ 
+ /*
++ * FreeBSD keeps CRC32C check-hashes of the superblock, the cylinder
++ * groups and the inodes when FS_METACKHASH is set in fs_flags, and
++ * names which of them in fs_metackhash.  This driver does not update
++ * them, so after it has written, FreeBSD finds them stale and refuses
++ * to mount the filesystem.  FreeBSD's fs.h asks a kernel that does not
++ * maintain check-hashes to clear FS_METACKHASH; FreeBSD then stops
++ * verifying them on its next mount, and fsck rebuilds them.
++ *
++ * NetBSD uses the same bit for FS_DOQUOTA2 and keeps fs_metackhash as
++ * spare space, which is zero, so the bit is only cleared when
++ * fs_metackhash names a check-hash.
++ */
++static void ufs_clear_metackhash(struct super_block *sb)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct ufs_super_block_third *usb3 = ubh_get_usb_third(uspi);
++	u32 flags;
++
++	if ((UFS_SB(sb)->s_flags & UFS_ST_MASK) != UFS_ST_44BSD)
++		return;
++	if (!usb3->fs_un2.fs_44.fs_metackhash)
++		return;
++	flags = fs32_to_cpu(sb, usb3->fs_un2.fs_44.fs_flags);
++	if (!(flags & UFS_METACKHASH))
++		return;
++	usb3->fs_un2.fs_44.fs_flags = cpu_to_fs32(sb, flags & ~UFS_METACKHASH);
++	ubh_mark_buffer_dirty(USPI_UBH(uspi));
++	pr_info("%s: clearing FreeBSD metadata check-hashes; fsck_ffs on FreeBSD rebuilds them\n",
++		sb->s_id);
++}
++
++/*
+  * Read on-disk structures associated with cylinder groups
+  */
+ static int ufs_read_cylinder_structures(struct super_block *sb)
+@@ -1203,9 +1235,11 @@
+ 	/*
+ 	 * Read cylinder group structures
+ 	 */
+-	if (!sb_rdonly(sb))
++	if (!sb_rdonly(sb)) {
+ 		if (!ufs_read_cylinder_structures(sb))
+ 			goto failed;
++		ufs_clear_metackhash(sb);
++	}
+ 
+ 	/* create the root dentry last, once UFS_SB(sb) is fully set up */
+ 	inode = ufs_iget(sb, UFS_ROOTINO);
+@@ -1297,6 +1331,7 @@
+ 			mutex_unlock(&UFS_SB(sb)->s_lock);
+ 			return -EPERM;
+ 		}
++		ufs_clear_metackhash(sb);
+ 		sb->s_flags &= ~SB_RDONLY;
+ #endif
+ 	}

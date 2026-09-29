@@ -29,11 +29,15 @@ NetBSD)
 		umount /mnt/p
 		fsck_ffs -n -f /dev/rvnd0$raw > "$out/$1.fsck" 2>&1
 		dumpfs -s /dev/rvnd0$raw > "$out/$1.dumpfs" 2>&1 || true
+		dumpfs -s /dev/rvnd0$raw 2>&1 | grep -iE "^flags|quota" | sed "s/^/$1: /"
 		vndconfig -u vnd0
 	}
 	one netbsd-ffs1       '-O 1' ''
 	one netbsd-ffs2       '-O 2' ''
 	one netbsd-ffs2-wapbl '-O 2' '-o log'
+	# 0x200 は NetBSD では FS_DOQUOTA2、FreeBSD では FS_METACKHASH。
+	# Linux がこれを取り違えて落とさないかを見るための一枚。
+	one netbsd-ffs2-quota2 '-O 2 -q user -q group' ''
 	;;
 FreeBSD)
 	one() {	# name newfs-args

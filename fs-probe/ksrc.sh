@@ -36,8 +36,19 @@ esac
 # 出荷の ufs は UFS_FS_WRITE が無い (kernel-ml) か、そもそも無い (RHEL)。
 # 書き込みを有効にしたものを建てて差し替える。UFS_FS_WRITE は C の
 # #ifdef で見られるだけなので、-D で渡せば足りる。
+# UFS_PATCH=1 なら fs-probe/patches/ufs-*.patch を当ててから建てる。
+# 当たらなければ建てない (当たらないまま測ると、直した物を測った
+# ことにならない)。
 ufs_build() {	# logfile
 	modprobe -r ufs 2>/dev/null
+	if [ "${UFS_PATCH:-0}" = 1 ]; then
+		for p in $here/patches/ufs-*.patch; do
+			(cd $(dirname $ksrc) && patch -p1 -f -i $p < /dev/null) > $1.patch 2>&1 ||
+				{ cat $1.patch; return 1; }
+			grep -qi 'fuzz\|offset' $1.patch && cat $1.patch
+			echo "patched: $(basename $p)"
+		done
+	fi
 	make -C /lib/modules/$KV/build M=$ksrc/ufs CONFIG_UFS_FS=m \
 		KCFLAGS=-DCONFIG_UFS_FS_WRITE=1 modules > $1 2>&1 &&
 	insmod $ksrc/ufs/ufs.ko

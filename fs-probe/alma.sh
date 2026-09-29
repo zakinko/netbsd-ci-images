@@ -29,7 +29,7 @@ rpm -q ntfs-3g ntfs-3g-system-compression | tee -a $sum
 . $here/ksrc.sh
 note "fs source: $ksrc"
 ufs_build $out/ufs-build.log
-note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings)"
+note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings, UFS_PATCH=${UFS_PATCH:-0})"
 # NTFS はカーネルに在るものを全部試す。7.1 で戻った新しい ntfs と ntfs3。
 drivers=ntfs-3g
 for m in ntfs3 ntfs; do
@@ -115,7 +115,7 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 		note "!! rw mount failed: $(tail -1 $out/$n.err)"
 	fi
 	dmesg -c > $out/$n.rw.dmesg
-	[ -s $out/$n.rw.dmesg ] && sed -n '1,8p' $out/$n.rw.dmesg | sed 's/^/    dmesg: /' | tee -a $sum
+	[ -s $out/$n.rw.dmesg ] && grep -v drop_caches $out/$n.rw.dmesg | sed -n '1,8p' | sed 's/^/    dmesg: /' | tee -a $sum
 	losetup -d $loop
 	cp --sparse=always $work/$n.img $out/$n.img
 	cp $in/$n.manifest $out/$n.manifest
@@ -218,6 +218,34 @@ for drv in $drivers; do
 	rm -f $work/$a.raw
 done
 cp $in/win-ntfs.manifest $out/win-ntfs.manifest 2>/dev/null
+
+# windows_names を付けると、Windows で使えない名前を本当に拒むか。
+# ntfs-3g と ntfs3 は旗、新しい ntfs は windows_names=<BOOL> (ntfs.rst)。
+note ""
+note "## windows_names"
+for drv in $drivers; do
+	case $drv in
+	ntfs-3g)       opt=windows_names ;;
+	ntfs3*)        opt=windows_names ;;
+	ntfs)          opt=windows_names=1 ;;
+	esac
+	truncate -s 64M $work/wn.raw
+	loop=$(losetup -f --show $work/wn.raw)
+	mkntfs -Q -q -F $loop > /dev/null 2>&1
+	case $drv in
+	ntfs-3g)      ntfs-3g -o $opt $loop /mnt/p ;;
+	ntfs3-sparse) mount -i -t ntfs3 -o sparse,$opt $loop /mnt/p ;;
+	*)            mount -i -t $drv -o $opt $loop /mnt/p ;;
+	esac 2> $work/wn.err || { note "$drv: mount -o $opt failed: $(tail -1 $work/wn.err)"; losetup -d $loop; continue; }
+	r=
+	for nm in 'colon:name' 'back\slash' 'q?mark' 'lt<gt>' 'pipe|x' 'star*x' 'quote"x' 'CON' 'nul.txt' 'trail.' 'trail ' 'ok-name'; do
+		if : > "/mnt/p/$nm" 2>/dev/null; then r="$r [$nm]=made"; else r="$r [$nm]=refused"; fi
+	done
+	note "$drv ($(awk '$2 == "/mnt/p" { print $3 }' /proc/mounts), -o $opt):$r"
+	umount /mnt/p
+	losetup -d $loop
+done
+rm -f $work/wn.raw
 
 # 物差し: 同じ VM、同じ loop で xfs
 note ""
