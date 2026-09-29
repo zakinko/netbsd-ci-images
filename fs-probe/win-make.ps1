@@ -83,9 +83,11 @@ compact /q "$s\lznt1.txt" "$s\lzx.txt" | Set-Content -Encoding utf8 (Join-Path $
 fsutil sparse queryrange "$s\sparse5g" | Set-Content -Encoding utf8 (Join-Path $Out 'win-ntfs.sparse')
 # reparse point の生のバイト列。junction の PrintName が空かどうか、
 # SubstituteName に \??\ とドライブ名が入るかを、推測でなく見るため。
-foreach ($r in 'junction', 'sym_dir', 'sym_file', 'sym_rel') {
-	"== $r"
-	fsutil reparsepoint query "$s\$r"
+& {
+	foreach ($r in 'junction', 'sym_dir', 'sym_file', 'sym_rel') {
+		"== $r"
+		fsutil reparsepoint query "$s\$r"
+	}
 } | Set-Content -Encoding utf8 (Join-Path $Out 'win-ntfs.reparse')
 
 # H 行だけを manifest.sh と同じ形で書く。reparse point は辿らない。
