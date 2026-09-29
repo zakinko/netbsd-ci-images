@@ -96,6 +96,23 @@ prof() {	# label
 	note "perf $1 (self, top):"
 	sed -n '1,12p' $out/perf-$1.txt | sed 's/^/    /' | tee -a $sum
 }
+# 書き込みの bio が、どの関数から出たかを数える。block_bio_queue の
+# 呼び出し履歴を取り、既知の出所の名前が最初に現れた所で分ける。
+bioprof() {	# label
+	drop
+	perf record -q -a -g -e block:block_bio_queue -o $work/bio.data -- \
+		fio --name=sw --directory=/mnt/b --rw=write --bs=1M --size=64M \
+		--end_fsync=1 > /dev/null 2>&1
+	perf script -i $work/bio.data 2>/dev/null |
+	awk '/block:block_bio_queue/ { if (n) print src; n = 1; src = "other"; next }
+	     n && src == "other" && /ufs_clear_frags|ufs_change_blocknr|sync_dirty_buffer|mpage_|__block_write_full_folio|write_dirty_buffer|ufs_sync|ubh_|iomap_|ext4_|xfs_/ {
+		src = $2; sub(/\+0x.*/, "", src) }
+	     END { if (n) print src }' |
+	sort | uniq -c | sort -rn > $out/bio-$1.txt
+	rm -f /mnt/b/sw.* $work/bio.data
+	note "bio sources $1 (64MiB write):"
+	sed -n '1,8p' $out/bio-$1.txt | sed 's/^/    /' | tee -a $sum
+}
 blank() {	# file
 	rm -f $1; truncate -s 1G $1
 	loop=$(losetup -f --show --direct-io=on $1)
@@ -131,10 +148,12 @@ for n in netbsd-ffs2 netbsd-ffs1 freebsd-ufs2 freebsd-ufs1; do
 		df -k /mnt/b | tail -1 | sed 's/^/    /' | tee -a $sum
 		run "ufs $n"
 		prof "ufs-$n"
+		bioprof "ufs-$n"
 	}
 	umount /mnt/b; losetup -d $loop; rm -f $work/u.img
 done
 blank $work/x.raw; mkfs.ext4 -q $loop && mount $loop /mnt/b && prof ext4; done_loop
+blank $work/x.raw; mkfs.ext4 -q $loop && mount $loop /mnt/b && bioprof ext4; done_loop
 blank $work/x.raw; mkntfs -Q -q $loop && ntfs-3g $loop /mnt/b && prof ntfs-3g; done_loop
 for m in ntfs3 ntfs; do
 	grep -qw $m /proc/filesystems || continue
