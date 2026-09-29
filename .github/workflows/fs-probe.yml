@@ -16,8 +16,8 @@ on:
         description: 'JSON の配列。ml は ELRepo の kernel-ml、rhel は Alma 10 のまま'
         type: string
         default: '["ml","rhel"]'
-      ufs_patch:
-        description: 'fs-probe/patches/ufs-*.patch を当てた ufs で測る'
+      patches:
+        description: 'fs-probe/patches の当て物を当てた ufs と ntfs3 で測る'
         type: boolean
         default: false
 
@@ -119,7 +119,7 @@ jobs:
             test "$(uname -r)" = "$(cat /var/tmp/want-kernel)"
           fi
       - shell: almalinux {0}
-        run: UFS_PATCH=${{ inputs.ufs_patch && '1' || '0' }} sh fs-probe/alma.sh fsp/in fsp/alma-${{ matrix.kernel }}
+        run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/alma.sh fsp/in fsp/alma-${{ matrix.kernel }}
       - run: cat fsp/alma-${{ matrix.kernel }}/summary.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
@@ -184,7 +184,7 @@ jobs:
             test "$(uname -r)" = "$(cat /var/tmp/want-kernel)"
           fi
       - shell: almalinux {0}
-        run: UFS_PATCH=${{ inputs.ufs_patch && '1' || '0' }} sh fs-probe/bench.sh fsp/in fsp/bench-${{ matrix.kernel }}
+        run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/bench.sh fsp/in fsp/bench-${{ matrix.kernel }}
       - run: cat fsp/bench-${{ matrix.kernel }}/bench.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4

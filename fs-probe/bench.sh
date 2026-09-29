@@ -27,7 +27,7 @@ rpm -q ntfs-3g fio perf | tee -a $sum
 
 here=$(cd "$(dirname "$0")" && pwd)
 . $here/ksrc.sh
-ufs_build $out/ufs-build.log
+fs_build ufs $out/ufs-build.log
 note "ufs build+insmod exit $?"
 for m in ntfs3 ntfs; do
 	modprobe $m 2>/dev/null && note "$m: $(modinfo -F filename $m)" || note "$m: not available"

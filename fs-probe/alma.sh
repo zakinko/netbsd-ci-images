@@ -28,8 +28,14 @@ rpm -q ntfs-3g ntfs-3g-system-compression | tee -a $sum
 
 . $here/ksrc.sh
 note "fs source: $ksrc"
-ufs_build $out/ufs-build.log
-note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings, UFS_PATCH=${UFS_PATCH:-0})"
+fs_build ufs $out/ufs-build.log
+note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings, FS_PATCH=${FS_PATCH:-0})"
+# 当て物を試すときは、ntfs3 も当てたものをソースから建てて差し替える。
+# RHEL の kernel では ntfs3 は切られているので、これが唯一の ntfs3 になる。
+if [ "${FS_PATCH:-0}" = 1 ]; then
+	fs_build ntfs3 $out/ntfs3-build.log
+	note "ntfs3 build+insmod exit $?"
+fi
 # NTFS はカーネルに在るものを全部試す。7.1 で戻った新しい ntfs と ntfs3。
 drivers=ntfs-3g
 for m in ntfs3 ntfs; do

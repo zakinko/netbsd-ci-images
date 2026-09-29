@@ -36,40 +36,51 @@ esac
 # 出荷の ufs は UFS_FS_WRITE が無い (kernel-ml) か、そもそも無い (RHEL)。
 # 書き込みを有効にしたものを建てて差し替える。UFS_FS_WRITE は C の
 # #ifdef で見られるだけなので、-D で渡せば足りる。
+# fs ごとの Kconfig。C の #ifdef でしか見られないものは KCFLAGS で -D する。
+fs_config() {	# fs
+	case $1 in
+	ufs)	echo CONFIG_UFS_FS=m KCFLAGS=-DCONFIG_UFS_FS_WRITE=1 ;;
+	ntfs3)	echo CONFIG_NTFS3_FS=m CONFIG_NTFS3_LZX_XPRESS=y \
+		     KCFLAGS=-DCONFIG_NTFS3_LZX_XPRESS=1 ;;
+	esac
+}
+
 # 警告は一番厳しい W=123 で取る。既存のコードが元から出す警告は直さない
 # ので、当てる前と後で並べ、当てた後にだけ出るもの (行と桁を伏せて比べる)
 # を数える。それが 0 でなければ建てたことにしない。
-ufs_make() {	# logfile
-	make -C /lib/modules/$KV/build M=$ksrc/ufs CONFIG_UFS_FS=m W=123 \
-		KCFLAGS=-DCONFIG_UFS_FS_WRITE=1 modules > $1 2>&1
+fs_make() {	# fs logfile
+	make -C /lib/modules/$KV/build M=$ksrc/$1 $(fs_config $1) W=123 \
+		modules > $2 2>&1
 }
-ufs_warnings() {	# logfile
+fs_warnings() {	# logfile
 	grep -E 'warning:' $1 | sed -E 's/:[0-9]+:[0-9]+:/:/' | LC_ALL=C sort -u
 }
 
-# UFS_PATCH=1 なら fs-probe/patches/ufs-*.patch を当ててから建てる。
+# FS_PATCH=1 なら fs-probe/patches/<fs>-*.patch を当ててから建てる。
 # 当たらなければ建てない (当たらないまま測ると、直した物を測った
-# ことにならない)。
-ufs_build() {	# logfile
-	modprobe -r ufs 2>/dev/null
-	if [ "${UFS_PATCH:-0}" = 1 ]; then
-		ufs_make $1.base || { cat $1.base; return 1; }
-		make -C /lib/modules/$KV/build M=$ksrc/ufs clean > /dev/null 2>&1
-		for p in $here/patches/ufs-*.patch; do
-			(cd $(dirname $ksrc) && patch -p1 -f -i $p < /dev/null) > $1.patch 2>&1 ||
-				{ cat $1.patch; return 1; }
-			grep -qi 'fuzz\|offset' $1.patch && cat $1.patch
+# ことにならない)。建てたものは、同じ名前の出荷のモジュールと差し替える。
+fs_build() {	# fs logfile
+	fs=$1 log=$2
+	modprobe -r $fs 2>/dev/null
+	if [ "${FS_PATCH:-0}" = 1 ]; then
+		fs_make $fs $log.base || { cat $log.base; return 1; }
+		make -C /lib/modules/$KV/build M=$ksrc/$fs clean > /dev/null 2>&1
+		for p in $here/patches/$fs-*.patch; do
+			[ -e "$p" ] || continue
+			(cd $(dirname $ksrc) && patch -p1 -f -i $p < /dev/null) \
+				> $log.patch 2>&1 || { cat $log.patch; return 1; }
+			grep -qi 'fuzz\|offset' $log.patch && cat $log.patch
 			echo "patched: $(basename $p)"
 		done
 	fi
-	ufs_make $1 || { tail -20 $1; return 1; }
-	if [ "${UFS_PATCH:-0}" = 1 ]; then
-		ufs_warnings $1.base > $1.w-base
-		ufs_warnings $1 > $1.w-patched
-		comm -13 $1.w-base $1.w-patched > $1.w-new
-		echo "W=123 warnings: before $(wc -l < $1.w-base), after $(wc -l < $1.w-patched), new $(wc -l < $1.w-new)"
-		cat $1.w-new
-		[ -s $1.w-new ] && return 1
+	fs_make $fs $log || { tail -20 $log; return 1; }
+	if [ "${FS_PATCH:-0}" = 1 ]; then
+		fs_warnings $log.base > $log.w-base
+		fs_warnings $log > $log.w-patched
+		comm -13 $log.w-base $log.w-patched > $log.w-new
+		echo "$fs W=123 warnings: before $(wc -l < $log.w-base), after $(wc -l < $log.w-patched), new $(wc -l < $log.w-new)"
+		cat $log.w-new
+		[ -s $log.w-new ] && return 1
 	fi
-	insmod $ksrc/ufs/ufs.ko
+	insmod $ksrc/$fs/$fs.ko
 }
