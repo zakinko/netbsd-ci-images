@@ -9,7 +9,10 @@ mkdir -p "$out" /mnt/p
 SIZE_MB=512
 
 fill() {	# name
-	sh "$here/mktree.sh" /mnt/p/src
+	# mktree は作れなかった数を exit で返す。set -e で黙って落ちないよう、
+	# 何が作れなかったかを残して先へ進む。
+	sh "$here/mktree.sh" /mnt/p/src 2> "$out/$1.mktree" ||
+		echo "$1: mktree: $(grep -c FAIL "$out/$1.mktree") FAIL; $(grep FAIL "$out/$1.mktree" | head -3 | tr '\n' ';')"
 	sh "$here/manifest.sh" /mnt/p/src > "$out/$1.manifest"
 	df -k /mnt/p | tail -1 > "$out/$1.df"
 }
@@ -43,7 +46,8 @@ NetBSD)
 		mount $3 /dev/vnd0$raw /mnt/p
 		fill "$1"
 		umount /mnt/p
-		fsck_ffs -n -f /dev/rvnd0$raw > "$out/$1.fsck" 2>&1
+		fsck_ffs -n -f /dev/rvnd0$raw > "$out/$1.fsck" 2>&1 ||
+			echo "$1: fsck_ffs -n exit $?: $(grep -vE '^\*\*' "$out/$1.fsck" | head -3 | tr '\n' ';')"
 		dumpfs -s /dev/rvnd0$raw > "$out/$1.dumpfs" 2>&1 || true
 		dumpfs -s /dev/rvnd0$raw 2>&1 | grep -iE "^flags|quota" | sed "s/^/$1: /"
 		vndconfig -u vnd0
@@ -69,7 +73,8 @@ FreeBSD)
 		fill "$1"
 		case $1 in *-ea) ea_fill "$1" ;; esac
 		umount /mnt/p
-		fsck_ffs -n -f /dev/$md > "$out/$1.fsck" 2>&1
+		fsck_ffs -n -f /dev/$md > "$out/$1.fsck" 2>&1 ||
+			echo "$1: fsck_ffs -n exit $?: $(grep -vE '^\*\*' "$out/$1.fsck" | head -3 | tr '\n' ';')"
 		dumpfs -m /dev/$md > "$out/$1.dumpfs" 2>&1 || true
 		dumpfs /dev/$md 2>&1 | sed -n "1,40p" | grep -iE "flags|hash|magic" | sed "s/^/$1: /"
 		mdconfig -d -u $md
