@@ -35,7 +35,10 @@ jobs:
             n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && exit 1; sleep 5; done
           }
           (cd ufs2-probe/ck && tar cf - .) | $SSH 'mkdir -p /root/p/ck && cd /root/p/ck && tar xf -'
-          $SSH sh /root/p/ck/upgrade.sh $SNAP
+          $SSH sh /root/p/ck/upgrade.sh $SNAP kernel
+          reboot_wait
+          $SSH uname -a
+          $SSH sh /root/p/ck/upgrade.sh $SNAP userland
           reboot_wait
           $SSH uname -a
           $SSH sh /root/p/ck/ck.sh stock | tee stock.txt
