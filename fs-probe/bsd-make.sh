@@ -14,6 +14,22 @@ fill() {	# name
 	df -k /mnt/p | tail -1 > "$out/$1.df"
 }
 
+# 拡張属性つきのファイルを ea/ の下に置き、その値を ea-expect に書く。
+# f2 には 1 ブロックを越える属性、f1 には ACL。作り方は ci-images の
+# ufs2-quota-probe 枝の ufs2-probe/mkimg.sh に倣った。
+ea_fill() {	# name
+	mkdir /mnt/p/ea
+	for i in 1 2 3 4 5 6 7 8; do
+		dd if=/dev/random of=/mnt/p/ea/f$i bs=64k count=4 2>/dev/null
+		setextattr user probe "attr-$i-$(sha256 -q /mnt/p/ea/f$i)" /mnt/p/ea/f$i
+	done
+	setfacl -m u:nobody:rwx /mnt/p/ea/f1
+	dd if=/dev/random bs=1 count=3000 2>/dev/null | b64encode - | tail -n +2 > "$out/big.tmp"
+	setextattr -i user big /mnt/p/ea/f2 < "$out/big.tmp"
+	rm -f "$out/big.tmp"
+	sh "$here/ea-list.sh" /mnt/p/ea > "$out/$1.ea-expect"
+}
+
 case $(uname -s) in
 NetBSD)
 	raw=$(printf "\\$(printf %03o $((97 + $(sysctl -n kern.rawpartition))))")
@@ -38,6 +54,9 @@ NetBSD)
 	# 0x200 は NetBSD では FS_DOQUOTA2、FreeBSD では FS_METACKHASH。
 	# Linux がこれを取り違えて落とさないかを見るための一枚。
 	one netbsd-ffs2-quota2 '-O 2 -q user -q group' ''
+	# UFS2ea は拡張属性を知らない実装に mount させないための別の magic。
+	# Linux が rw で断ることを確かめる。
+	one netbsd-ffs2ea      '-O 2ea' ''
 	;;
 FreeBSD)
 	one() {	# name newfs-args
@@ -45,8 +64,10 @@ FreeBSD)
 		truncate -s ${SIZE_MB}m "$f"
 		md=$(mdconfig -a -t vnode -f "$f")
 		newfs $2 /dev/$md > "$out/$1.newfs"
+		case $1 in *-ea) tunefs -a enable /dev/$md > /dev/null ;; esac
 		mount /dev/$md /mnt/p
 		fill "$1"
+		case $1 in *-ea) ea_fill "$1" ;; esac
 		umount /mnt/p
 		fsck_ffs -n -f /dev/$md > "$out/$1.fsck" 2>&1
 		dumpfs -m /dev/$md > "$out/$1.dumpfs" 2>&1 || true
@@ -57,6 +78,9 @@ FreeBSD)
 	one freebsd-ufs2      '-O 2'
 	one freebsd-ufs2-su   '-O 2 -U'
 	one freebsd-ufs2-suj  '-O 2 -j'
+	# 拡張属性と ACL は普通の UFS2 の magic のまま di_extb[] に入る。Linux は
+	# di_extb を知らないので、消したときに解放するかを見るための一枚。
+	one freebsd-ufs2-ea   '-O 2'
 	;;
 esac
 uname -a > "$out/$(uname -s | tr A-Z a-z)-uname"

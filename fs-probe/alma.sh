@@ -103,6 +103,18 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 			sh $here/mktree.sh /mnt/p/linux > $out/$n.mktree 2>&1
 			note "rw: mktree exit $? $(grep -c FAIL $out/$n.mktree) FAIL $(grep FAIL $out/$n.mktree | head -6 | tr "\n" ";")"
 			mani /mnt/p/linux > $out/$n.linux.manifest 2>>$out/$n.err
+			case $n in
+			*-ea)
+				# 拡張属性つきのファイルを消し、空いた inode が使い回される
+				# よう新しく作る。解放漏れと取り違えは bsd-check.sh が見る。
+				rm -f /mnt/p/ea/f1 /mnt/p/ea/f2 /mnt/p/ea/f3
+				for i in 1 2 3 4 5 6 7 8; do
+					printf 'new %s\n' $i > /mnt/p/ea/n$i
+				done
+				ls -i /mnt/p/ea > $out/$n.ea-linux
+				note "ea: removed f1-f3, created n1-n8; inodes: $(tr '\n' ' ' < $out/$n.ea-linux)"
+				;;
+			esac
 			bench "ufs:$n" /mnt/p
 			df -k /mnt/p | tail -1 >> $sum
 		fi
@@ -125,6 +137,7 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	losetup -d $loop
 	cp --sparse=always $work/$n.img $out/$n.img
 	cp $in/$n.manifest $out/$n.manifest
+	cp $in/$n.ea-expect $out/ 2>/dev/null
 	rm -f $work/$n.img
 done
 

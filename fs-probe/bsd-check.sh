@@ -55,6 +55,17 @@ for f in $in/$pat; do
 				diff $m $out/$n.$sub.back | head -80 || true
 				echo "   differing lines: $(diff $m $out/$n.$sub.back | grep -c '^[<>]' || true)"
 			done
+			if [ -d /mnt/p/ea ] && [ -e $in/$n.ea-expect ]; then
+				# 残した f4-f8 は元のまま、Linux が作った n1-n8 には
+				# 拡張属性も ACL も付いていないはず。
+				sh "$here/ea-list.sh" /mnt/p/ea > $out/$n.ea-back
+				echo "-- ea: kept files whose attributes changed:"
+				grep '^f' $out/$n.ea-back | LC_ALL=C sort |
+					comm -23 - $(LC_ALL=C sort $in/$n.ea-expect | grep '^f' > $out/$n.ea-exp; echo $out/$n.ea-exp) |
+					sed 's/^/   /'
+				echo "-- ea: new files that carry attributes:"
+				grep '^n' $out/$n.ea-back | grep -v 'probe= big= acl=0$' | sed 's/^/   /'
+			fi
 			umount /mnt/p
 		else
 			echo "!! mount -r failed"
