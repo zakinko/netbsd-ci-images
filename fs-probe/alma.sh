@@ -21,7 +21,7 @@ grep -E 'CONFIG_(NTFS3?|UFS)_FS[ =]' /lib/modules/$KV/config | tee -a $sum
 
 # --- 道具 -------------------------------------------------------------------
 dnf -y -q install epel-release
-dnf -y -q install ntfs-3g ntfsprogs ntfs-3g-system-compression openssl gcc make \
+dnf -y -q install patch ntfs-3g ntfsprogs ntfs-3g-system-compression openssl gcc make \
 	elfutils-libelf-devel qemu-img rpm cpio xz tar attr diffutils util-linux \
 	xfsprogs bison flex
 rpm -q ntfs-3g ntfs-3g-system-compression | tee -a $sum

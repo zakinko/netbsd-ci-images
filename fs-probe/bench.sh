@@ -21,7 +21,7 @@ note "# $(cat /etc/almalinux-release) / kernel $KV / $(nproc) cpu / $(free -m | 
 grep -E 'CONFIG_(LEGACY_DIRECT_IO|BUFFER_HEAD|FS_POSIX_ACL|FUSE_FS)[ =]' /lib/modules/$KV/config | tee -a $sum
 
 dnf -y -q install epel-release
-dnf -y -q install ntfs-3g ntfsprogs fio perf gcc make elfutils-libelf-devel \
+dnf -y -q install patch ntfs-3g ntfsprogs fio perf gcc make elfutils-libelf-devel \
 	rpm cpio xz tar xfsprogs e2fsprogs bc kernel-headers
 rpm -q ntfs-3g fio perf | tee -a $sum
 

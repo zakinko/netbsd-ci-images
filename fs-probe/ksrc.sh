@@ -63,6 +63,7 @@ fs_build() {	# fs logfile
 	fs=$1 log=$2
 	modprobe -r $fs 2>/dev/null
 	if [ "${FS_PATCH:-0}" = 1 ]; then
+		command -v patch > /dev/null || { echo "!! patch(1) is not installed"; return 1; }
 		fs_make $fs $log.base || { cat $log.base; return 1; }
 		make -C /lib/modules/$KV/build M=$ksrc/$fs clean > /dev/null 2>&1
 		for p in $here/patches/$fs-*.patch; do
