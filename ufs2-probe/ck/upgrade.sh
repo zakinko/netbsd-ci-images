@@ -19,6 +19,13 @@ kernel)
 userland)
 	get base comp tests
 	for s in base comp tests; do tar -C / -xJpf $s.tar.xz || exit 1; done
+	# New connections after this run the new sshd with the old
+	# /etc/ssh/sshd_config; show whether it accepts it while this
+	# session is still open.
+	/usr/sbin/sshd -V 2>&1 | head -1
+	/usr/sbin/sshd -t; echo "sshd -t rc=$?"
+	grep -vE '^#|^$' /etc/ssh/sshd_config
+	ls /etc/ssh
 	;;
 *)	exit 2 ;;
 esac
