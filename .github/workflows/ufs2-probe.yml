@@ -30,7 +30,7 @@ jobs:
           set -x
           SSH=$(cat ./amd64-11.0.ssh)
           reboot_wait() {
-            $SSH '(sleep 2; /sbin/shutdown -r now) >/dev/null 2>&1 &'
+            $SSH '(sleep 2; /sbin/shutdown -r now) >/dev/null 2>&1 &' || true
             sleep 30
             n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && exit 1; sleep 5; done
           }
