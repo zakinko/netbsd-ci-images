@@ -238,6 +238,37 @@ for drv in $drivers; do
 done
 cp $in/win-ntfs.manifest $out/win-ntfs.manifest 2>/dev/null
 
+# 長い symlink が再マウントで普通のファイルに化けないか。ntfs3 で 200 文字の
+# sym_long が化けた (run 36771256342)。どの長さからかを数え、reparse の
+# 属性が resident かを ntfsinfo で残す。
+note ""
+note "## symlink length after remount"
+for drv in $drivers; do
+	truncate -s 64M $work/sl.raw
+	loop=$(losetup -f --show $work/sl.raw)
+	mkntfs -Q -q -F $loop > /dev/null 2>&1
+	nmount $drv $loop 2> $work/sl.err || { note "$drv: mount failed: $(tail -1 $work/sl.err)"; losetup -d $loop; continue; }
+	for n in 10 50 100 150 200 250; do
+		ln -s "$(awk -v n=$n 'BEGIN{for(i=0;i<n;i++)printf "a"}')" /mnt/p/l$n 2>/dev/null
+	done
+	umount /mnt/p
+	nmount $drv $loop ro
+	r=
+	for n in 10 50 100 150 200 250; do
+		if [ -L /mnt/p/l$n ]; then r="$r $n=link"
+		elif [ -e /mnt/p/l$n ]; then r="$r $n=NOT-LINK($(stat -c %F /mnt/p/l$n))"
+		else r="$r $n=missing"; fi
+	done
+	note "$drv:$r"
+	umount /mnt/p
+	for n in 200 250; do
+		ntfsinfo -F /l$n $loop 2>&1 | grep -iE 'reparse|resident|attribute type|allocated|data size' |
+			sed "s/^/    $drv l$n: /" | head -8 | tee -a $sum
+	done
+	losetup -d $loop
+done
+rm -f $work/sl.raw
+
 # windows_names を付けると、Windows で使えない名前を本当に拒むか。
 # ntfs-3g と ntfs3 は旗、新しい ntfs は windows_names=<BOOL> (ntfs.rst)。
 note ""
