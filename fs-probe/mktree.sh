@@ -14,13 +14,16 @@ ddq() {
 	dd "$@" 2> .dd.err || { echo "FAIL: dd $*: $(tail -1 .dd.err)" >&2; fails=$((fails + 1)); }
 	rm -f .dd.err
 }
+# 空のファイルは true > で作る。: は特殊組み込みで、それへのリダイレクトが
+# 失敗すると非対話の sh はその場で終わる (POSIX 2.8.1)。windows_names が
+# 名前を拒んだとき、alma.sh が丸ごと止まった (run 36771256342)。
 chk() { [ $? = 0 ] || { echo "FAIL: $1" >&2; fails=$((fails + 1)); }; }
 
 rep() { awk -v s="$1" -v n="$2" 'BEGIN{for(i=0;i<n;i++)printf "%s", s}'; }
 
 printf 'hello\n' > small
 chk "printf hello\n > small"
-: > empty
+true > empty
 chk ": > empty"
 # block と fragment の境目。UFS は 512/4096/32768、NTFS は 4096 の cluster と
 # MFT に収まる resident (数百 byte) の境目も跨ぐ。
@@ -43,29 +46,29 @@ chk "ln -s \$(rep a 200) sym_long"
 ln -s ../nowhere sym_dangling
 chk "ln -s ../nowhere sym_dangling"
 
-: > "$(rep n 255)"
+true > "$(rep n 255)"
 chk ": > \$(rep n 255)"
 # 「あ」は UTF-8 で 3 byte。85 個で 255 byte、UTF-16 では 85 単位。
-: > "$(rep "$(printf '\343\201\202')" 85)"
+true > "$(rep "$(printf '\343\201\202')" 85)"
 chk ": > \$(rep \$(printf \343\201\202) 85)"
 printf 'ja\n' > "$(printf '\346\227\245\346\234\254\350\252\236').txt"
 chk "printf ja\n > \$(printf \346\227\245\346\234\254\35"
-: > 'with space'
+true > 'with space'
 chk ": > with space"
-: > 'colon:name'
+true > 'colon:name'
 chk ": > colon:name"
-: > 'back\slash'
+true > 'back\slash'
 chk ": > back\slash"
-: > 'Case'
+true > 'Case'
 chk ": > Case"
-: > 'case'
+true > 'case'
 chk ": > case"
 
 mkdir many
 chk "mkdir many"
 i=0
 while [ $i -lt 5000 ]; do
-	: > many/f$i 2>/dev/null || mf=$((${mf:-0} + 1))
+	true > many/f$i 2>/dev/null || mf=$((${mf:-0} + 1))
 	i=$((i + 1))
 done
 [ ${mf:-0} = 0 ] || { echo "FAIL: many/: ${mf} of 5000 not created" >&2; fails=$((fails + 1)); }

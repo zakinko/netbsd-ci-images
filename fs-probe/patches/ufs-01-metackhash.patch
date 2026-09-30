@@ -1,5 +1,5 @@
 --- a/fs/ufs/ufs_fs.h	2026-09-29 17:46:45
-+++ b/fs/ufs/ufs_fs.h	2026-09-29 17:46:45
++++ b/fs/ufs/ufs_fs.h	2026-10-01 08:39:21
 @@ -334,6 +334,12 @@
  #define UFS_ACLS         0x10    /* file system has ACLs enabled */
  #define UFS_MULTILABEL   0x20    /* file system is MAC multi-label */
@@ -9,7 +9,7 @@
 + * FS_METACKHASH (check-hashes are maintained, see fs_metackhash) and
 + * NetBSD's FS_DOQUOTA2 (in-filesystem quotas).
 + */
-+#define UFS_METACKHASH	0x200
++#define UFS_METACKHASH	0x200U
  
  #if 0
  /*
@@ -26,7 +26,7 @@
  			__fs32	fs_maxsymlinklen;/* max length of an internal symlink */
  			__fs32	fs_inodefmt;	/* format of on-disk inodes */
 --- a/fs/ufs/super.c	2026-09-29 17:46:45
-+++ b/fs/ufs/super.c	2026-09-29 17:46:45
++++ b/fs/ufs/super.c	2026-10-01 08:39:21
 @@ -449,6 +449,38 @@
  }
  

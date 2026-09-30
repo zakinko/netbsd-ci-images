@@ -62,7 +62,7 @@ bench() {	# label dir
 	drop
 	t0=$(date +%s.%N)
 	mkdir "$2/benchmany"; i=0
-	while [ $i -lt 5000 ]; do : > "$2/benchmany/f$i"; i=$((i + 1)); done
+	while [ $i -lt 5000 ]; do true > "$2/benchmany/f$i"; i=$((i + 1)); done
 	sync
 	t1=$(date +%s.%N)
 	rm -rf "$2/benchmany"; sync
@@ -258,7 +258,7 @@ for drv in $drivers; do
 	esac 2> $work/wn.err || { note "$drv: mount -o $opt failed: $(tail -1 $work/wn.err)"; losetup -d $loop; continue; }
 	r=
 	for nm in 'colon:name' 'back\slash' 'q?mark' 'lt<gt>' 'pipe|x' 'star*x' 'quote"x' 'CON' 'nul.txt' 'trail.' 'trail ' 'ok-name'; do
-		if : > "/mnt/p/$nm" 2>/dev/null; then r="$r [$nm]=made"; else r="$r [$nm]=refused"; fi
+		if true > "/mnt/p/$nm" 2>/dev/null; then r="$r [$nm]=made"; else r="$r [$nm]=refused"; fi
 	done
 	note "$drv ($(awk '$2 == "/mnt/p" { print $3 }' /proc/mounts), -o $opt):$r"
 	umount /mnt/p
