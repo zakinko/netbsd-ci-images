@@ -10,7 +10,7 @@ env:
 jobs:
   netbsd:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
       - name: qemu
@@ -29,28 +29,37 @@ jobs:
         run: |
           set -x
           SSH=$(cat ./amd64-11.0.ssh)
-          reboot_wait() {
-            $SSH '(sleep 2; /sbin/shutdown -r now) >/dev/null 2>&1 &' || true
-            sleep 30
-            n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && exit 1; sleep 5; done
+          alive() { n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && return 1; sleep 5; done; }
+          reboot_in() {	# command to run first, in the same session
+            $SSH "$1; (sleep 5; /sbin/shutdown -r now) >/dev/null 2>&1 &" || true
+            sleep 40; alive
           }
           (cd ufs2-probe/ck && tar cf - .) | $SSH 'mkdir -p /root/p/ck && cd /root/p/ck && tar xf -'
-          $SSH sh /root/p/ck/upgrade.sh $SNAP kernel
-          reboot_wait
+          reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"
           $SSH uname -a
-          $SSH 'sh /root/p/ck/upgrade.sh '$SNAP' userland; (sleep 5; /sbin/shutdown -r now) >/dev/null 2>&1 &' || true
-          sleep 40
-          n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && exit 1; sleep 5; done
+          reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"
           $SSH uname -a
-          $SSH sh /root/p/ck/ck.sh stock | tee stock.txt
+          $SSH sh /root/p/ck/ck.sh stock T1 T2 T4 T5 | tee stock.txt
           $SSH sh /root/p/ck/atf.sh stock | tee stock-atf.txt
-          $SSH sh /root/p/ck/swap.sh
-          reboot_wait
+          $SSH sh /root/p/ck/swap.sh | tee swap.txt
+          # T3 under the stock kernel hung for three hours once; give it
+          # five minutes, and if it hangs, show where and reset the VM.
+          if timeout 300 $SSH sh /root/p/ck/ck.sh stock T3 > stock-t3.txt 2>&1; then
+            cat stock-t3.txt
+            reboot_in true
+          else
+            echo "stock T3: no answer in 300 s"; cat stock-t3.txt
+            timeout 60 $SSH 'ps -axo pid,ppid,stat,wchan,command | grep -vE "grep|sshd" | grep -E "mount|vnd|fsck|sync"; dmesg | tail -20' | tee stock-t3-hang.txt || echo "second ssh did not answer either" | tee -a stock-t3-hang.txt
+            echo system_reset | nc -N -U amd64-11.0.mon || echo system_reset | nc -U -q1 amd64-11.0.mon
+            sleep 40; alive
+          fi
           $SSH uname -a
-          $SSH sh /root/p/ck/ck.sh v2 | tee v2.txt
+          $SSH sh /root/p/ck/ck.sh v2 T1 T2 T4 T5 | tee v2.txt
+          timeout 300 $SSH sh /root/p/ck/ck.sh v2 T3 | tee v2-t3.txt || echo "v2 T3: no answer in 300 s" | tee -a v2-t3.txt
+          $SSH true || { echo system_reset | nc -N -U amd64-11.0.mon; sleep 40; alive; }
           $SSH sh /root/p/ck/atf.sh v2 | tee v2-atf.txt
-          $SSH 'cd /root/p/ck/v2 && tar cf - e1.img w.img c-sb.img c-cg.img c-ino.img' > after.tar
-          { echo '```'; cat stock.txt stock-atf.txt v2.txt v2-atf.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
+          $SSH 'cd /root/p/ck/v2 && tar cf - e1.img c-sb.img c-cg.img c-ino.img $(ls w.img 2>/dev/null)' > after.tar
+          { echo '```'; cat stock.txt stock-atf.txt stock-t3*.txt v2.txt v2-t3.txt v2-atf.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -59,11 +68,13 @@ jobs:
             after.tar
             stock*.txt
             v2*.txt
+            swap.txt
+            amd64-11.0.console.log
       - name: stop
         if: always()
         run: DIR=. sh stopvm.sh amd64-11.0 || true
       - name: console
-        if: failure()
+        if: always()
         run: tail -80 amd64-11.0.console.log || true
   freebsd:
     needs: netbsd
@@ -77,7 +88,7 @@ jobs:
         run: |
           rm -rf ufs2-probe/back && mkdir -p ufs2-probe/back
           tar xf after.tar
-          for n in e1 w c-sb c-cg c-ino; do xz -c $n.img > ufs2-probe/back/back-$n.img.xz; done
+          for n in e1 w c-sb c-cg c-ino; do [ -f $n.img ] && xz -c $n.img > ufs2-probe/back/back-$n.img.xz; done
           cp ufs2-probe/ck/eaonly.expect ufs2-probe/back/e1.expect
           cp ufs2-probe/ck/eaonly.expect ufs2-probe/back/w.expect
           for n in c-sb c-cg c-ino; do : > ufs2-probe/back/$n.expect; done
