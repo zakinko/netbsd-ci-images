@@ -72,17 +72,16 @@ fk -f -n q.img
 
 }
 want T5 && {
-echo "===== T5 benchmark: 3000 files of 8 KB, extract + umount, 3 runs"
+echo "===== T5 benchmark: 3000 files of 8 KB, extract + umount, 7 runs each, alternating"
 [ -f ../bench.tar ] || { mkdir -p ../bt && i=0 && while [ $i -lt 3000 ]; do dd if=/dev/urandom of=../bt/f$i bs=8k count=1 2>/dev/null; i=$((i+1)); done && tar -C .. -cf ../bench.tar bt; }
 dd if=/dev/zero of=nb.img bs=1m count=64 2>/dev/null
-for img in fbsd nb; do
-	for r in 1 2 3; do
+for run in 1 2 3 4 5 6 7; do
+	for img in nb fbsd; do
 		if [ $img = fbsd ]; then xz -dc ../plain.img.xz > b.img
 		else cp nb.img b.img; newfs -F -s 64m -O2 b.img >/dev/null; fi
-		mnt b.img >/dev/null || { echo "$img run $r: mount failed"; un; continue; }
-		t0=$(date +%s.%N 2>/dev/null || date +%s)
+		mnt b.img >/dev/null || { echo "$img run $run: mount failed"; un; continue; }
 		/usr/bin/time -p sh -c "tar -C $M -xf ../bench.tar && umount $M" 2> t.out
-		echo "$img run $r: $(awk '/^real/{r=$2}/^user/{u=$2}/^sys/{s=$2}END{print "real "r" user "u" sys "s}' t.out)"
+		echo "$img run $run: $(awk '/^real/{a=$2}/^user/{b=$2}/^sys/{c=$2}END{print "real "a" user "b" sys "c}' t.out)"
 		vndconfig -u $V
 	done
 done
