@@ -11,8 +11,11 @@ for d in fs/ffs sbin/fsck_ffs; do
 	echo "== $L $d"
 	if command -v atf-run >/dev/null 2>&1; then
 		(cd /usr/tests/$d && atf-run > $O/$n.raw 2>&1)
+		echo "raw: $(wc -l < $O/$n.raw) lines; last:"; tail -5 $O/$n.raw
 		atf-report -o ticker:$O/$n.txt < $O/$n.raw
 		awk '/^(Failed test cases:|Summary for)/{f=1} f' $O/$n.txt
+		grep -c 'tc-end' $O/$n.raw | sed 's/^/tc-end lines: /'
+		grep 'tc-end' $O/$n.raw | grep -vE 'passed|skipped|expected_' | head -20
 	elif command -v kyua >/dev/null 2>&1; then
 		(cd /usr/tests && kyua test --results-file=$O/$n.db $d > $O/$n.txt 2>&1)
 		tail -6 $O/$n.txt
