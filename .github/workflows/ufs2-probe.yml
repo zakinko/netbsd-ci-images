@@ -5,8 +5,6 @@ on:
 concurrency:
   group: ufs2-probe
   cancel-in-progress: true
-env:
-  SNAP: 20260928204101Z
 jobs:
   netbsd:
     runs-on: ubuntu-latest
@@ -28,6 +26,11 @@ jobs:
       - name: -current stock, then ffs-metackhash-v2
         run: |
           set -x
+          # NetBSD-daily keeps a snapshot only a few days; take the newest
+          # that has the amd64 sets and hold it for the whole job.
+          SNAP=$(curl -fsSL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/ | grep -oE '20[0-9]{12}Z' | sort -u | tail -1)
+          curl -fsI https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/$SNAP/amd64/binary/sets/tests.tar.xz | head -1
+          echo "snapshot $SNAP" | tee snap.txt
           SSH=$(cat ./amd64-11.0.ssh)
           alive() { n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && return 1; sleep 5; done; }
           reboot_in() {	# command to run first, in the same session
@@ -39,23 +42,22 @@ jobs:
           # failed upgrade cannot pass for a measurement.
           is() { v=$($SSH uname -v); echo "$v"; case $v in *"$1"*) ;; *) echo "expected $1"; exit 1;; esac; }
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"
-          is "11.99.8 (GENERIC) #0: Mon Sep 28"
+          is "11.99"
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"
-          is "11.99.8 (GENERIC) #0: Mon Sep 28"
+          is "11.99"
           $SSH 'ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile' || exit 1
-          $SSH sh /root/p/ck/ck.sh stock T5 | tee stock.txt
-          $SSH sh /root/p/ck/atf.sh stock | tee stock-atf.txt
-          # A GENERIC built from the same tree and toolchain without the
-          # patch: tells a build difference from the patch.
+          # The comparison is between two kernels built the same way from
+          # the same tree: ctl without the patch, v2 with it.
           reboot_in "sh /root/p/ck/swapk.sh ctl"
           is "#0: Thu Oct  1 19:34:11 UTC 2026"
           $SSH sh /root/p/ck/ck.sh ctl T5 | tee ctl.txt
+          $SSH sh /root/p/ck/atf.sh ctl | tee ctl-atf.txt
           $SSH sh /root/p/ck/swap.sh | tee swap.txt
           reboot_in true
           is "#2: Wed Sep 30 04:09:35 UTC 2026"
           $SSH sh /root/p/ck/ck.sh v2 T1 T2 T4 T5 | tee v2.txt
           $SSH sh /root/p/ck/atf.sh v2 | tee v2-atf.txt
-          { echo '```'; cat stock.txt stock-atf.txt ctl.txt v2.txt v2-atf.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
+          { echo '```'; cat snap.txt ctl.txt ctl-atf.txt v2.txt v2-atf.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -64,7 +66,8 @@ jobs:
             after.tar
             stock*.txt
             v2*.txt
-            ctl.txt
+            ctl*.txt
+            snap.txt
             swap.txt
             amd64-11.0.console.log
       - name: stop
