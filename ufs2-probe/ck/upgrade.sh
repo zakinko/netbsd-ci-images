@@ -9,7 +9,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
 SNAP=$1
 B=https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/$SNAP/amd64/binary/sets
 mkdir -p /root/sets && cd /root/sets || exit 1
-get() { for s in "$@"; do [ -f $s.tar.xz ] || ftp -V -o $s.tar.xz $B/$s.tar.xz || exit 1; done; }
+get() { for s in "$@"; do n=0; until [ -f $s.tar.xz ] || ftp -4 -V -o $s.tar.xz $B/$s.tar.xz; do rm -f $s.tar.xz; n=$((n+1)); [ $n -ge 5 ] && { echo "cannot fetch $s"; exit 1; }; sleep 20; done; done; }
 case $2 in
 kernel)
 	get kern-GENERIC modules

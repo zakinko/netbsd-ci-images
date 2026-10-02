@@ -35,20 +35,24 @@ jobs:
             sleep 40; alive
           }
           (cd ufs2-probe/ck && tar cf - .) | $SSH 'mkdir -p /root/p/ck && cd /root/p/ck && tar xf -'
+          # Each step must show the kernel it expects; stop if not, so a
+          # failed upgrade cannot pass for a measurement.
+          is() { v=$($SSH uname -v); echo "$v"; case $v in *"$1"*) ;; *) echo "expected $1"; exit 1;; esac; }
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"
-          $SSH uname -a
+          is "11.99.8 (GENERIC) #0: Mon Sep 28"
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"
-          $SSH uname -a
+          is "11.99.8 (GENERIC) #0: Mon Sep 28"
+          $SSH 'ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile' || exit 1
           $SSH sh /root/p/ck/ck.sh stock T5 | tee stock.txt
           $SSH sh /root/p/ck/atf.sh stock | tee stock-atf.txt
           # A GENERIC built from the same tree and toolchain without the
           # patch: tells a build difference from the patch.
           reboot_in "sh /root/p/ck/swapk.sh ctl"
-          $SSH uname -a
+          is "#0: Thu Oct  1 19:34:11 UTC 2026"
           $SSH sh /root/p/ck/ck.sh ctl T5 | tee ctl.txt
           $SSH sh /root/p/ck/swap.sh | tee swap.txt
           reboot_in true
-          $SSH uname -a
+          is "#2: Wed Sep 30 04:09:35 UTC 2026"
           $SSH sh /root/p/ck/ck.sh v2 T1 T2 T4 T5 | tee v2.txt
           $SSH sh /root/p/ck/atf.sh v2 | tee v2-atf.txt
           { echo '```'; cat stock.txt stock-atf.txt ctl.txt v2.txt v2-atf.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
