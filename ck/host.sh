@@ -10,7 +10,13 @@ boot() {	# kernel.xz
 	$SSH '[ -f /netbsd.11 ] || cp /netbsd /netbsd.11; mv /netbsd.new /netbsd && sync && (sleep 2; /sbin/shutdown -r now) >/dev/null 2>&1 &'
 	sleep 20
 	n=0; until $SSH true 2>/dev/null; do
-		n=$((n+1)); [ $n -gt 60 ] && return 1; sleep 5
+		n=$((n+1))
+		if [ $n -gt 60 ]; then
+			echo "=== $1 did not come back; console:"
+			tail -80 amd64-11.0.console.log
+			return 1
+		fi
+		sleep 5
 	done
 	$SSH uname -v
 }

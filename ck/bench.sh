@@ -26,7 +26,8 @@ put32() {
 }
 t() {	# label command...: one line with real/user/sys
 	lab=$1; shift
-	/usr/bin/time -p sh -c "$*" 2>&1 >/dev/null | tr '\n' ' ' |
+	# The command's own output is thrown away; only time(1) speaks.
+	/usr/bin/time -p sh -c "{ $*; } >/dev/null 2>&1" 2>&1 | tr '\n' ' ' |
 	    awk -v l="$lab" '{ printf "%-28s real %6s user %6s sys %6s\n", l, $2, $4, $6 }'
 }
 
@@ -41,18 +42,18 @@ echo "cgsize $(get32 pa.img $((SB + 160))) ncg $(get32 pa.img $((SB + 44)))"
 
 run() {	# img tag [mount options]
 	img=$1; tag=$2; shift 2
-	vnconfig vnd4 $img || return
-	if ! mount -t ffs "$@" /dev/vnd4a $M; then
-		echo "$tag: mount $* failed"; vnconfig -u vnd4; return
+	vnconfig vnd2 $img || return
+	if ! mount -t ffs "$@" /dev/vnd2a $M; then
+		echo "$tag: mount $* failed"; vnconfig -u vnd2; return
 	fi
 	t "$tag write-512m" "dd if=/dev/zero of=$M/big bs=64k count=8192 2>/dev/null; sync"
-	umount $M; mount -t ffs "$@" /dev/vnd4a $M
+	umount $M; mount -t ffs "$@" /dev/vnd2a $M
 	t "$tag read-512m" "dd if=$M/big of=/dev/null bs=64k 2>/dev/null"
 	rm $M/big; sync
 	t "$tag extract" "tar -xf $TAR -C $M; sync"
 	t "$tag find" "find $M | wc -l"
 	t "$tag remove" "rm -rf $M/usr; sync"
-	umount $M; vnconfig -u vnd4
+	umount $M; vnconfig -u vnd2
 }
 for r in 1 2 3; do
 	run pa.img "$r plain"
@@ -62,8 +63,8 @@ for r in 1 2 3; do
 		run pb.img "$r ckhash+log" -o log
 	fi
 done
-vnconfig vnd4 pa.img && mount -t ffs /dev/vnd4a $M &&
-    tar -xf $TAR -C $M && umount $M; vnconfig -u vnd4
+vnconfig vnd2 pa.img && mount -t ffs /dev/vnd2a $M &&
+    tar -xf $TAR -C $M && umount $M; vnconfig -u vnd2
 echo "files for fsck: $(fsck_ffs -f -n pa.img 2>&1 | grep 'files,')"
 for r in 1 2 3; do
 	t "$r fsck -f -n" "fsck_ffs -f -n pa.img"

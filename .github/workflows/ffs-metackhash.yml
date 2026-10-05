@@ -75,6 +75,9 @@ jobs:
         run: MEM=10240 KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
       - name: stock, then check-hash
         run: sh ck/host.sh
+      - name: stop
+        if: always()
+        run: timeout 300 sh -c 'DIR=. sh stopvm.sh amd64-11.0' || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -84,11 +87,9 @@ jobs:
             atf.tar
             ck.txt
             bench-*.txt
-      - name: stop
-        if: always()
-        run: DIR=. sh stopvm.sh amd64-11.0 || true
+            amd64-11.0.console.log
       - name: console
-        if: failure()
+        if: always()
         run: tail -80 amd64-11.0.console.log || true
   freebsd:
     needs: netbsd
