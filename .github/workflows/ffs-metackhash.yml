@@ -93,6 +93,8 @@ jobs:
         run: tail -80 amd64-11.0.console.log || true
   freebsd:
     needs: netbsd
+    # Skipping build skips this too unless it says otherwise.
+    if: ${{ !cancelled() && needs.netbsd.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

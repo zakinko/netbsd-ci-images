@@ -13,7 +13,8 @@ M=$W/m
 rm -rf $W; mkdir -p $M $W/out; cd $W || exit 1
 
 SB=65536			# UFS2 superblock
-get32() { od -An -tu4 -j $2 -N4 $1 | tr -d ' '; }
+# od pads with zeros; read the number as decimal, not octal
+get32() { od -An -tu4 -j $2 -N4 $1 | awk '{ print $1 + 0 }'; }
 put32() {	# img off value
 	v=$3
 	printf "$(printf '\\%03o\\%03o\\%03o\\%03o' $((v & 255)) \
@@ -21,7 +22,7 @@ put32() {	# img off value
 	    dd of=$1 bs=1 seek=$2 conv=notrunc 2>/dev/null
 }
 flip() {	# img off: invert one byte
-	b=$(od -An -tu1 -j $2 -N1 $1 | tr -d ' ')
+	b=$(od -An -tu1 -j $2 -N1 $1 | awk '{ print $1 + 0 }')
 	printf "$(printf '\\%03o' $((b ^ 255)))" |
 	    dd of=$1 bs=1 seek=$2 conv=notrunc 2>/dev/null
 }
@@ -45,7 +46,8 @@ sums() {	# img: record what FreeBSD should find
 	echo "  $(wc -l < $W/out/${1%.img}.sums) files recorded"
 }
 fsckn() {	# img: fsck -f -n, the lines that matter
-	fsck_ffs -f -n $1 2>&1 | grep -vE '^\*\* (/|Last|Phase|File sys)|NO WRITE' |
+	fsck_ffs -F -f -n $1 2>&1 |
+	    grep -vE '^\*\* (/|Last|Phase|File sys)|NO WRITE|/etc/fstab' |
 	    sed 's/^/  fsck: /'
 }
 work() {	# a mixed workload on the mounted file system
@@ -78,7 +80,7 @@ echo "=== ck: $(uname -v)"
 xz -dc $P/plain.img.xz > plain.img
 xz -dc $P/eaonly.img.xz > eaonly.img
 
-echo "[fsck-fbsd] patched fsck_ffs -f -n on the FreeBSD images as made"
+echo "[fsck-fbsd] patched fsck_ffs -F -f -n on the FreeBSD images as made"
 for i in plain eaonly; do
 	echo " $i:"; sbinfo $i.img; fsckn $i.img
 done
@@ -113,7 +115,7 @@ echo "[bad-sb] one byte of fs_fsmnt changed"
 cp eaonly.img badsb.img; flip badsb.img $((SB + 300))
 on badsb.img -r && off
 on badsb.img -r -o force && off
-fsck_ffs -f -p badsb.img 2>&1 | sed 's/^/  fsck -f -p: /'
+fsck_ffs -F -f -p badsb.img 2>&1 | sed 's/^/  fsck -f -p: /'
 on badsb.img -r && off
 sbinfo badsb.img; fsckn badsb.img; cp badsb.img out/
 
@@ -125,7 +127,7 @@ if on badcg.img; then
 	dmesg | grep 'bad check-hash' | tail -2 | sed 's/^/  dmesg: /'
 	rm $M/fill; off
 fi
-fsck_ffs -f -p badcg.img 2>&1 | sed 's/^/  fsck -f -p: /'
+fsck_ffs -F -f -p badcg.img 2>&1 | sed 's/^/  fsck -f -p: /'
 fsckn badcg.img
 if on badcg.img; then
 	dd if=/dev/zero of=$M/fill bs=64k 2>/dev/null
@@ -142,13 +144,13 @@ if on badino.img -r; then
 	dmesg | grep 'bad check-hash' | tail -1 | sed 's/^/  dmesg: /'
 	off
 fi
-fsck_ffs -f -p badino.img 2>&1 | sed 's/^/  fsck -f -p: /'
+fsck_ffs -F -f -p badino.img 2>&1 | sed 's/^/  fsck -f -p: /'
 if on badino.img -r; then cat $M/f4 > /dev/null; echo "  cat f4 rc=$?"; off; fi
 fsckn badino.img; cp badino.img out/
 
-echo "[fsck-y] patched fsck_ffs -f -y on an eaonly copy"
+echo "[fsck-y] patched fsck_ffs -F -f -y on an eaonly copy"
 cp eaonly.img fscky.img
-fsck_ffs -f -y fscky.img 2>&1 | grep -vE '^\*\* (/|Last|Phase)' | sed 's/^/  fsck: /'
+fsck_ffs -F -f -y fscky.img 2>&1 | grep -vE '^\*\* (/|Last|Phase)' | sed 's/^/  fsck: /'
 sbinfo fscky.img; cp fscky.img out/
 
 echo "[tunefs] eaonly copy"
@@ -167,8 +169,8 @@ if on nb.img; then echo before > $M/before; mkdir $M/d; off; fi
 put32 nb.img $((SB + 1308)) 7
 put32 nb.img $((SB + 1312)) $(($(get32 nb.img $((SB + 1312))) | 512))
 sbinfo nb.img
-fsck_ffs -f -n nb.img 2>&1 | grep -c 'CHECK HASH' | sed 's/^/  fsck -n: check-hash complaints: /'
-fsck_ffs -f -y nb.img 2>&1 | grep -E 'CHECK HASH|MODIFIED|files,' |
+fsck_ffs -F -f -n nb.img 2>&1 | grep -c 'CHECK HASH' | sed 's/^/  fsck -n: check-hash complaints: /'
+fsck_ffs -F -f -y nb.img 2>&1 | grep -E 'CHECK HASH|MODIFIED|files,' |
     sort | uniq -c | sed 's/^/  fsck -y: /'
 fsckn nb.img
 if on nb.img; then work; sums nb.img; off; fi
@@ -187,7 +189,7 @@ newfs -F -s 1g -O2 -b 32k -f 4k pa.img > /dev/null
 cp pa.img pb.img
 put32 pb.img $((SB + 1308)) 7
 put32 pb.img $((SB + 1312)) $(($(get32 pb.img $((SB + 1312))) | 512))
-fsck_ffs -f -y pb.img > /dev/null 2>&1
+fsck_ffs -F -f -y pb.img > /dev/null 2>&1
 echo "  cgsize $(get32 pa.img $((SB + 160))) ncg $(get32 pa.img $((SB + 44)))"
 sbinfo pa.img; sbinfo pb.img
 for round in 1 2 3; do

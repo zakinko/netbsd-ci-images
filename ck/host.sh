@@ -49,6 +49,12 @@ $SSH 'cd /t/tmp/ck/out && tar cf - .' > ck-out.tar
 bench patched
 $SSH 'cd /root && tar cf - atf-stock atf-patched' > atf.tar
 
+# The stock kernel again, to see how much the order of boots moves the
+# numbers.
+boot out/stock/netbsd.xz || exit 1
+$SSH sh /root/chroot.sh stock
+bench stock-again
+
 mkdir -p res && tar xf atf.tar -C res
 for n in fs_ffs sbin_fsck_ffs sbin_newfs sbin_resize_ffs; do
 	for k in stock patched; do
@@ -64,7 +70,7 @@ done | tee cmp.txt
 ok=0
 grep -q '^=== ck:' ck.txt || { echo "ck.sh did not run"; ok=1; }
 tar tf ck-out.tar >/dev/null 2>&1 || { echo "no ck images"; ok=1; }
-for f in bench-stock.txt bench-patched.txt; do
+for f in bench-stock.txt bench-patched.txt bench-stock-again.txt; do
 	grep -q 'fsck -f -n' $f || { echo "$f incomplete"; ok=1; }
 done
 exit $ok

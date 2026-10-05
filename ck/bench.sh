@@ -2,12 +2,12 @@
 # Runs as root inside a trunk chroot: bench.sh <label> <tar>
 # Times FFS on memory-backed images (tmpfs under vnd), so that what is
 # measured is the file system's CPU work, not the disk:
-#   pa   newfs -O2 -b 32k -f 4k, 1 GB
+#   pa   newfs -O2 -b 32k -f 4k, 8 GB (32 KB cylinder groups)
 #   pa   the same with -o log
 #   pb   pa given metadata check-hashes (only where the kernel has them)
 #   pb   the same with -o log
 # Workloads: 512 MB sequential write, read after a remount, extract
-# <tar> (many small files), find over it, remove it; then fsck_ffs -f -n
+# <tar> (many small files), find over it, remove it; then fsck_ffs -F -f -n
 # of pa with <tar> extracted.  Three rounds each.
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
 L=$1
@@ -17,7 +17,8 @@ M=$W/m
 SB=65536
 rm -rf $W; mkdir -p $M; cd $W || exit 1
 
-get32() { od -An -tu4 -j $2 -N4 $1 | tr -d ' '; }
+# od pads with zeros; read the number as decimal, not octal
+get32() { od -An -tu4 -j $2 -N4 $1 | awk '{ print $1 + 0 }'; }
 put32() {
 	v=$3
 	printf "$(printf '\\%03o\\%03o\\%03o\\%03o' $((v & 255)) \
@@ -32,12 +33,13 @@ t() {	# label command...: one line with real/user/sys
 }
 
 echo "=== bench $L: $(uname -v)"
-dd if=/dev/zero of=pa.img bs=1m count=1 seek=1023 2>/dev/null
-newfs -F -s 1g -O2 -b 32k -f 4k pa.img > /dev/null
-cp pa.img pb.img
+for i in pa pb; do	# not cp: it would write the 8 GB of holes
+	dd if=/dev/zero of=$i.img bs=1m count=1 seek=8191 2>/dev/null
+	newfs -F -s 8g -O2 -b 32k -f 4k $i.img > /dev/null
+done
 put32 pb.img $((SB + 1308)) 7
 put32 pb.img $((SB + 1312)) $(($(get32 pb.img $((SB + 1312))) | 512))
-fsck_ffs -f -y pb.img > /dev/null 2>&1
+fsck_ffs -F -f -y pb.img > /dev/null 2>&1
 echo "cgsize $(get32 pa.img $((SB + 160))) ncg $(get32 pa.img $((SB + 44)))"
 
 run() {	# img tag [mount options]
@@ -58,15 +60,16 @@ run() {	# img tag [mount options]
 for r in 1 2 3; do
 	run pa.img "$r plain"
 	run pa.img "$r plain+log" -o log
-	if [ "$L" != stock ]; then
-		run pb.img "$r ckhash"
-		run pb.img "$r ckhash+log" -o log
-	fi
+	case $L in
+	stock*)	;;	# the stock kernel cannot write pb
+	*)	run pb.img "$r ckhash"
+		run pb.img "$r ckhash+log" -o log ;;
+	esac
 done
 vnconfig vnd2 pa.img && mount -t ffs /dev/vnd2a $M &&
     tar -xf $TAR -C $M && umount $M; vnconfig -u vnd2
-echo "files for fsck: $(fsck_ffs -f -n pa.img 2>&1 | grep 'files,')"
+echo "files for fsck: $(fsck_ffs -F -f -n pa.img 2>&1 | grep 'files,')"
 for r in 1 2 3; do
-	t "$r fsck -f -n" "fsck_ffs -f -n pa.img"
+	t "$r fsck -f -n" "fsck_ffs -F -f -n pa.img"
 done
 rm -f pa.img pb.img
