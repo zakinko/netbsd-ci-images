@@ -31,15 +31,39 @@ sbinfo() {	# img
 	    $(get32 $1 $((SB + 1312))) $(get32 $1 $((SB + 1308))) \
 	    $(get32 $1 $((SB + 1304))) $(get32 $1 $((SB + 904)))
 }
+# Seconds since the epoch, to time the steps that once took ten seconds
+# and more for no reason seen.
+now() { date +%s; }
+slow() {	# what start: say so when it took more than 2 seconds
+	d=$(($(now) - $2))
+	[ $d -gt 2 ] && echo "  SLOW: $1 took ${d}s"
+	return 0
+}
+# The kernel's messages since the last call, all of them.
+kmsg_seen=$(dmesg | wc -l)
+kmsg() {
+	dmesg > $W/kmsg
+	n=$(wc -l < $W/kmsg)
+	[ $n -gt $kmsg_seen ] &&
+	    tail -n $((n - kmsg_seen)) $W/kmsg | sed 's/^/  kernel: /'
+	kmsg_seen=$n
+	return 0
+}
 on() {	# img [mount options]: attach and mount, report
 	i=$1; shift
-	vnconfig vnd3 $i || return 1
-	mount -t ffs "$@" /dev/vnd3a $M; r=$?
+	t0=$(now); vnconfig vnd3 $i || return 1; slow "vnconfig $i" $t0
+	t0=$(now); mount -t ffs "$@" /dev/vnd3a $M; r=$?; slow "mount $i" $t0
 	echo "  mount $* $i -> rc=$r"
-	[ $r = 0 ] || { dmesg | tail -2 | sed 's/^/  dmesg: /'; vnconfig -u vnd3; }
+	[ $r = 0 ] || vnconfig -u vnd3
+	kmsg
 	return $r
 }
-off() { umount $M; r=$?; vnconfig -u vnd3; [ $r = 0 ] || echo "  umount rc=$r"; }
+off() {
+	t0=$(now); umount $M; r=$?; slow umount $t0
+	t0=$(now); vnconfig -u vnd3; slow "vnconfig -u" $t0
+	[ $r = 0 ] || echo "  umount rc=$r"
+	kmsg
+}
 sums() {	# img: record what FreeBSD should find
 	(cd $M && find . -type f ! -path './.snap/*' | LC_ALL=C sort | xargs sha256) \
 	    > $W/out/${1%.img}.sums
@@ -92,14 +116,14 @@ if on eaonly.img -r; then
 fi
 
 echo "[rw] eaonly copy, mixed workload, no log"
-cp eaonly.img rw.img
+t0=$(now); cp eaonly.img rw.img; slow cp $t0
 if on rw.img; then
 	rm $M/f3; work; sums rw.img; off
 fi
 sbinfo rw.img; fsckn rw.img; cp rw.img out/
 
 echo "[log] plain copy, workload with -o log, then a mount without log"
-cp plain.img log.img
+t0=$(now); cp plain.img log.img; slow cp $t0
 if on log.img -o log; then work; off; fi
 sbinfo log.img
 if on log.img; then sums log.img; off; fi
@@ -112,7 +136,7 @@ iblkno=$(get32 eaonly.img $((SB + 16)))
 fpg=$(get32 eaonly.img $((SB + 188)))
 
 echo "[bad-sb] one byte of fs_fsmnt changed"
-cp eaonly.img badsb.img; flip badsb.img $((SB + 300))
+t0=$(now); cp eaonly.img badsb.img; slow cp $t0; flip badsb.img $((SB + 300))
 on badsb.img -r && off
 on badsb.img -r -o force && off
 fsck_ffs -F -f -p badsb.img 2>&1 | sed 's/^/  fsck -f -p: /'
