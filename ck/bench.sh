@@ -8,9 +8,7 @@
 #                kernel has them)
 #   ckhash+log   the same with -o log
 # Each run gets a new file system.  The image stays at 1 GB: tmpfs
-# charges the whole length of a file when it is extended, and writes
-# through vnd to a 4 GB tmpfs file took ten times as long as to a 1 GB
-# one, which would measure tmpfs rather than FFS.
+# charges the whole length of a file when it is extended.
 # Workloads: 512 MB sequential write, read after a remount, extract
 # <tar> (many small files), find over it, remove it; then fsck_ffs -F -f -n
 # of a new plain file system with <tar> extracted.  Three rounds each.
@@ -42,6 +40,9 @@ t() {	# label command...: one line with real/user/sys and exit status
 
 mkimg() {	# ckhash: 0 or 1
 	rm -f fs.img
+	# Make the file first: when newfs makes it, writes through vnd to
+	# it take ten times as long (21 s for 512 MB, against 2 s).
+	dd if=/dev/zero of=fs.img bs=1m count=1 seek=1023 2>/dev/null
 	newfs -F -s 1g -O2 -b 32k -f 4k fs.img > /dev/null || return 1
 	[ $1 = 1 ] || return 0
 	put32 fs.img $((SB + 1308)) 7
