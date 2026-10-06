@@ -2,14 +2,15 @@
 # Runs as root inside a trunk chroot: bench.sh <label> <tar>
 # Times FFS on memory-backed images (tmpfs under vnd), so that what is
 # measured is the file system's CPU work, not the disk:
-#   plain        newfs -O2 -b 32k -f 4k, 4 GB
+#   plain        newfs -O2 -b 32k -f 4k, 1 GB
 #   plain+log    the same with -o log
 #   ckhash       the same given metadata check-hashes (only where the
 #                kernel has them)
 #   ckhash+log   the same with -o log
-# Each run gets a new file system, and only one image exists at a time:
-# tmpfs charges the whole size of a file when it is extended, holes
-# included, so two images of this size do not fit in the VM.
+# Each run gets a new file system.  The image stays at 1 GB: tmpfs
+# charges the whole length of a file when it is extended, and writes
+# through vnd to a 4 GB tmpfs file took ten times as long as to a 1 GB
+# one, which would measure tmpfs rather than FFS.
 # Workloads: 512 MB sequential write, read after a remount, extract
 # <tar> (many small files), find over it, remove it; then fsck_ffs -F -f -n
 # of a new plain file system with <tar> extracted.  Three rounds each.
@@ -29,16 +30,17 @@ put32() {
 	    $((v >> 8 & 255)) $((v >> 16 & 255)) $((v >> 24 & 255)))" |
 	    dd of=$1 bs=1 seek=$2 conv=notrunc 2>/dev/null
 }
-t() {	# label command...: one line with real/user/sys
+t() {	# label command...: one line with real/user/sys and exit status
 	lab=$1; shift
 	# The command's own output is thrown away; only time(1) speaks.
-	/usr/bin/time -p sh -c "{ $*; } >/dev/null 2>&1" 2>&1 | tr '\n' ' ' |
-	    awk -v l="$lab" '{ printf "%-28s real %6s user %6s sys %6s\n", l, $2, $4, $6 }'
+	tm=$(/usr/bin/time -p sh -c "{ $*; } >/dev/null 2>&1; echo \$? > $W/rc" 2>&1)
+	echo $tm | awk -v l="$lab" -v rc="$(cat $W/rc)" \
+	    '{ printf "%-28s real %6s user %6s sys %6s%s\n", l, $2, $4, $6, rc == 0 ? "" : " rc=" rc }'
 }
 
 mkimg() {	# ckhash: 0 or 1
 	rm -f fs.img
-	newfs -F -s 4g -O2 -b 32k -f 4k fs.img > /dev/null || return 1
+	newfs -F -s 1g -O2 -b 32k -f 4k fs.img > /dev/null || return 1
 	[ $1 = 1 ] || return 0
 	put32 fs.img $((SB + 1308)) 7
 	put32 fs.img $((SB + 1312)) $(($(get32 fs.img $((SB + 1312))) | 512))

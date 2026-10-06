@@ -14,11 +14,28 @@ boot() {	# kernel.xz
 		if [ $n -gt 60 ]; then
 			echo "=== $1 did not come back; console:"
 			tail -80 amd64-11.0.console.log
+			echo "=== panics and tracebacks on the console:"
+			grep -a -B5 -A45 'Begin traceback\|panic:' amd64-11.0.console.log |
+			    tail -300
 			return 1
 		fi
 		sleep 5
 	done
 	$SSH uname -v
+	crashinfo "$1"
+}
+# After a panic, savecore leaves a dump; print its message buffer and
+# the stack of the thread that panicked, then remove it.
+crashinfo() {	# label
+	$SSH 'for c in /var/crash/netbsd.*.core.gz; do
+		[ -f "$c" ] || exit 0
+		k=${c%.core.gz}.gz
+		echo "=== crash dump $c"
+		gunzip -c $c > /tmp/core && gunzip -c $k > /tmp/kern &&
+		    { dmesg -M /tmp/core -N /tmp/kern | tail -250
+		      echo "--- bt"; echo bt | crash -M /tmp/core -N /tmp/kern 2>&1 | tail -60; }
+		rm -f /tmp/core /tmp/kern $c $k
+	done' 2>&1 | sed "s/^/[$1] /" | tee -a crash.txt
 }
 bench() {	# label
 	$SSH "cp /root/bench.sh /t/tmp/ && /usr/sbin/chroot /t sh /tmp/bench.sh $1 /tmp/tests.tar" 2>&1 |
@@ -44,8 +61,12 @@ done
 boot out/patched/netbsd.xz || exit 1
 $SSH sh /root/chroot.sh patched
 $SSH sh /root/atf.sh patched | tee atf-patched.txt
+# Twice: a kernel that is not right may well show it only some of the
+# time.  The kernel's messages from the whole of it are kept.
 $SSH 'mkdir -p /t/tmp/p && cp /root/p/* /t/tmp/p/ && cp /root/ck.sh /t/tmp/ && /usr/sbin/chroot /t sh /tmp/ck.sh /tmp/p' 2>&1 | tee ck.txt
 $SSH 'cd /t/tmp/ck/out && tar cf - .' > ck-out.tar
+$SSH '/usr/sbin/chroot /t sh /tmp/ck.sh /tmp/p' 2>&1 | tee ck2.txt
+$SSH dmesg 2>&1 | tail -150 | tee dmesg-ck.txt
 bench patched
 $SSH 'cd /root && tar cf - atf-stock atf-patched' > atf.tar
 
@@ -64,11 +85,14 @@ for n in fs_ffs sbin_fsck_ffs sbin_newfs sbin_resize_ffs; do
 	echo "--- $n stock vs patched"
 	diff res/$n.stock.r res/$n.patched.r && echo identical
 done | tee cmp.txt
-{ echo '```'; cat atf-stock.txt atf-patched.txt cmp.txt ck.txt bench-*.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
+{ echo '```'; cat atf-stock.txt atf-patched.txt cmp.txt ck.txt ck2.txt dmesg-ck.txt crash.txt bench-*.txt 2>/dev/null; echo '```'; } >> $GITHUB_STEP_SUMMARY
 
 # Fail if a step gave nothing, rather than pass on empty results.
 ok=0
-grep -q '^=== ck:' ck.txt || { echo "ck.sh did not run"; ok=1; }
+for f in ck.txt ck2.txt; do
+	grep -q '^\[cost\]' $f || { echo "$f incomplete"; ok=1; }
+done
+[ -s crash.txt ] && { echo "the guest panicked"; ok=1; }
 tar tf ck-out.tar >/dev/null 2>&1 || { echo "no ck images"; ok=1; }
 for f in bench-stock.txt bench-patched.txt bench-stock-again.txt; do
 	grep -q 'plain write-512m' $f && grep -q 'files for fsck: .*files,' $f ||
