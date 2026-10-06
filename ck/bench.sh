@@ -2,13 +2,17 @@
 # Runs as root inside a trunk chroot: bench.sh <label> <tar>
 # Times FFS on memory-backed images (tmpfs under vnd), so that what is
 # measured is the file system's CPU work, not the disk:
-#   pa   newfs -O2 -b 32k -f 4k, 8 GB (32 KB cylinder groups)
-#   pa   the same with -o log
-#   pb   pa given metadata check-hashes (only where the kernel has them)
-#   pb   the same with -o log
+#   plain        newfs -O2 -b 32k -f 4k, 4 GB
+#   plain+log    the same with -o log
+#   ckhash       the same given metadata check-hashes (only where the
+#                kernel has them)
+#   ckhash+log   the same with -o log
+# Each run gets a new file system, and only one image exists at a time:
+# tmpfs charges the whole size of a file when it is extended, holes
+# included, so two images of this size do not fit in the VM.
 # Workloads: 512 MB sequential write, read after a remount, extract
 # <tar> (many small files), find over it, remove it; then fsck_ffs -F -f -n
-# of pa with <tar> extracted.  Three rounds each.
+# of a new plain file system with <tar> extracted.  Three rounds each.
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
 L=$1
 TAR=$2
@@ -32,19 +36,23 @@ t() {	# label command...: one line with real/user/sys
 	    awk -v l="$lab" '{ printf "%-28s real %6s user %6s sys %6s\n", l, $2, $4, $6 }'
 }
 
-echo "=== bench $L: $(uname -v)"
-for i in pa pb; do	# not cp: it would write the 8 GB of holes
-	dd if=/dev/zero of=$i.img bs=1m count=1 seek=8191 2>/dev/null
-	newfs -F -s 8g -O2 -b 32k -f 4k $i.img > /dev/null
-done
-put32 pb.img $((SB + 1308)) 7
-put32 pb.img $((SB + 1312)) $(($(get32 pb.img $((SB + 1312))) | 512))
-fsck_ffs -F -f -y pb.img > /dev/null 2>&1
-echo "cgsize $(get32 pa.img $((SB + 160))) ncg $(get32 pa.img $((SB + 44)))"
+mkimg() {	# ckhash: 0 or 1
+	rm -f fs.img
+	newfs -F -s 4g -O2 -b 32k -f 4k fs.img > /dev/null || return 1
+	[ $1 = 1 ] || return 0
+	put32 fs.img $((SB + 1308)) 7
+	put32 fs.img $((SB + 1312)) $(($(get32 fs.img $((SB + 1312))) | 512))
+	fsck_ffs -F -f -y fs.img > /dev/null 2>&1
+}
 
-run() {	# img tag [mount options]
-	img=$1; tag=$2; shift 2
-	vnconfig vnd2 $img || return
+echo "=== bench $L: $(uname -v)"
+mkimg 0 || exit 1
+echo "cgsize $(get32 fs.img $((SB + 160))) ncg $(get32 fs.img $((SB + 44)))"
+
+run() {	# ckhash tag [mount options]
+	ck=$1; tag=$2; shift 2
+	mkimg $ck || { echo "$tag: newfs failed"; return; }
+	vnconfig vnd2 fs.img || return
 	if ! mount -t ffs "$@" /dev/vnd2a $M; then
 		echo "$tag: mount $* failed"; vnconfig -u vnd2; return
 	fi
@@ -58,18 +66,18 @@ run() {	# img tag [mount options]
 	umount $M; vnconfig -u vnd2
 }
 for r in 1 2 3; do
-	run pa.img "$r plain"
-	run pa.img "$r plain+log" -o log
+	run 0 "$r plain"
+	run 0 "$r plain+log" -o log
 	case $L in
-	stock*)	;;	# the stock kernel cannot write pb
-	*)	run pb.img "$r ckhash"
-		run pb.img "$r ckhash+log" -o log ;;
+	stock*)	;;	# the stock kernel cannot keep check-hashes
+	*)	run 1 "$r ckhash"
+		run 1 "$r ckhash+log" -o log ;;
 	esac
 done
-vnconfig vnd2 pa.img && mount -t ffs /dev/vnd2a $M &&
+mkimg 0 && vnconfig vnd2 fs.img && mount -t ffs /dev/vnd2a $M &&
     tar -xf $TAR -C $M && umount $M; vnconfig -u vnd2
-echo "files for fsck: $(fsck_ffs -F -f -n pa.img 2>&1 | grep 'files,')"
+echo "files for fsck: $(fsck_ffs -F -f -n fs.img 2>&1 | grep 'files,')"
 for r in 1 2 3; do
-	t "$r fsck -f -n" "fsck_ffs -F -f -n pa.img"
+	t "$r fsck -f -n" "fsck_ffs -F -f -n fs.img"
 done
-rm -f pa.img pb.img
+rm -f fs.img

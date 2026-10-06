@@ -71,6 +71,7 @@ ok=0
 grep -q '^=== ck:' ck.txt || { echo "ck.sh did not run"; ok=1; }
 tar tf ck-out.tar >/dev/null 2>&1 || { echo "no ck images"; ok=1; }
 for f in bench-stock.txt bench-patched.txt bench-stock-again.txt; do
-	grep -q 'fsck -f -n' $f || { echo "$f incomplete"; ok=1; }
+	grep -q 'plain write-512m' $f && grep -q 'files for fsck: .*files,' $f ||
+	    { echo "$f incomplete"; ok=1; }
 done
 exit $ok
