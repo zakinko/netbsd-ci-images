@@ -34,8 +34,10 @@ t() {	# label command...: one line with real/user/sys and exit status
 	lab=$1; shift
 	# The command's own output is thrown away; only time(1) speaks.
 	tm=$(/usr/bin/time -p sh -c "{ $*; } >/dev/null 2>&1; echo \$? > $W/rc" 2>&1)
-	echo $tm | awk -v l="$lab" -v rc="$(cat $W/rc)" \
-	    '{ printf "%-28s real %6s user %6s sys %6s%s\n", l, $2, $4, $6, rc == 0 ? "" : " rc=" rc }'
+	rc=$(cat $W/rc)
+	[ "$rc" = 0 ] && rc= || rc=" rc=$rc"
+	echo $tm | awk -v l="$lab" -v rc="$rc" \
+	    '{ printf "%-28s real %6s user %6s sys %6s%s\n", l, $2, $4, $6, rc }'
 }
 
 mkimg() {	# ckhash: 0 or 1
