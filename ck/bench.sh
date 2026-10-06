@@ -11,7 +11,7 @@
 # charges the whole length of a file when it is extended.
 # Workloads: 512 MB sequential write, read after a remount, extract
 # <tar> (many small files), find over it, remove it; then fsck_ffs -F -f -n
-# of a new plain file system with <tar> extracted.  Three rounds each.
+# of a new plain file system with <tar> extracted five times.  Three rounds each.
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
 L=$1
 TAR=$2
@@ -79,8 +79,10 @@ for r in 1 2 3; do
 		run 1 "$r ckhash+log" -o log ;;
 	esac
 done
+# Five copies of <tar>: one alone is checked in 0.01 seconds.
 mkimg 0 && vnconfig vnd2 fs.img && mount -t ffs /dev/vnd2a $M &&
-    tar -xf $TAR -C $M && umount $M; vnconfig -u vnd2
+    for i in 1 2 3 4 5; do mkdir $M/$i; tar -xf $TAR -C $M/$i; done &&
+    umount $M; vnconfig -u vnd2
 echo "files for fsck: $(fsck_ffs -F -f -n fs.img 2>&1 | grep 'files,')"
 for r in 1 2 3; do
 	t "$r fsck -f -n" "fsck_ffs -F -f -n fs.img"

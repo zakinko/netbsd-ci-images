@@ -7,7 +7,7 @@ set -x
 SSH=$(cat ./amd64-11.0.ssh)
 boot() {	# kernel.xz
 	xz -dc $1 | $SSH 'cat > /netbsd.new'
-	$SSH '[ -f /netbsd.11 ] || cp /netbsd /netbsd.11; mv /netbsd.new /netbsd && sync && (sleep 2; /sbin/shutdown -r now) >/dev/null 2>&1 &'
+	$SSH '[ -f /netbsd.11 ] || cp /netbsd /netbsd.11; mv /netbsd.new /netbsd && sync && (sleep 2; /sbin/reboot -q) >/dev/null 2>&1 &'
 	sleep 20
 	n=0; until $SSH true 2>/dev/null; do
 		n=$((n+1))
@@ -39,6 +39,10 @@ crashinfo() {	# label
 		mv $c $c.seen
 	done' 2>&1 | sed "s|^|[${1%/netbsd.xz}] |" | tee -a crash.txt
 }
+vndprobe() {	# label
+	$SSH "cp /root/vndprobe.sh /t/tmp/ && /usr/sbin/chroot /t sh /tmp/vndprobe.sh $1" 2>&1 |
+	    tee -a vndprobe.txt
+}
 bench() {	# label
 	$SSH "cp /root/bench.sh /t/tmp/ && /usr/sbin/chroot /t sh /tmp/bench.sh $1 /tmp/tests.tar" 2>&1 |
 	    tee bench-$1.txt
@@ -47,11 +51,12 @@ bench() {	# label
     $SSH 'mkdir -p /root/p && cd /root/p && tar xf -'
 (cd out && tar cf - .) |
     $SSH 'mkdir -p /root/trunk && cd /root/trunk && tar xf -'
-(cd ck && tar cf - chroot.sh atf.sh ck.sh bench.sh) | $SSH 'cd /root && tar xf -'
+(cd ck && tar cf - chroot.sh atf.sh ck.sh bench.sh vndprobe.sh) | $SSH 'cd /root && tar xf -'
 
 boot out/stock/netbsd.xz || exit 1
 $SSH sh /root/chroot.sh stock
 $SSH sh /root/atf.sh stock | tee atf-stock.txt
+vndprobe stock
 bench stock
 
 for c in $STEPS; do
@@ -63,6 +68,7 @@ done
 boot out/patched/netbsd.xz || exit 1
 $SSH sh /root/chroot.sh patched
 $SSH sh /root/atf.sh patched | tee atf-patched.txt
+vndprobe patched
 # Twice: a kernel that is not right may well show it only some of the
 # time.  The kernel's messages from the whole of it are kept.
 $SSH 'mkdir -p /t/tmp/p && cp /root/p/* /t/tmp/p/ && cp /root/ck.sh /t/tmp/ && /usr/sbin/chroot /t sh /tmp/ck.sh /tmp/p' 2>&1 | tee ck.txt
@@ -87,7 +93,7 @@ for n in fs_ffs sbin_fsck_ffs sbin_newfs sbin_resize_ffs; do
 	echo "--- $n stock vs patched"
 	diff res/$n.stock.r res/$n.patched.r && echo identical
 done | tee cmp.txt
-{ echo '```'; cat atf-stock.txt atf-patched.txt cmp.txt ck.txt ck2.txt dmesg-ck.txt crash.txt bench-*.txt 2>/dev/null; echo '```'; } >> $GITHUB_STEP_SUMMARY
+{ echo '```'; cat atf-stock.txt atf-patched.txt cmp.txt vndprobe.txt ck.txt ck2.txt dmesg-ck.txt crash.txt bench-*.txt 2>/dev/null; echo '```'; } >> $GITHUB_STEP_SUMMARY
 
 # Fail if a step gave nothing, rather than pass on empty results.
 ok=0
