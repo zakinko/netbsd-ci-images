@@ -28,7 +28,12 @@ ea_fill() {	# name [noacl]
 	done
 	[ "${2:-}" = noacl ] || setfacl -m u:nobody:rwx /mnt/p/ea/f1
 	dd if=/dev/random bs=1 count=3000 2>/dev/null | openssl base64 > "$out/big.tmp"
-	setextattr -i user big /mnt/p/ea/f2 < "$out/big.tmp"
+	# -i は FreeBSD では値を標準入力から読み、NetBSD では次の引数の
+	# ファイルから読む。
+	case $(uname -s) in
+	NetBSD) setextattr -i "$out/big.tmp" user big /mnt/p/ea/f2 ;;
+	*)      setextattr -i user big /mnt/p/ea/f2 < "$out/big.tmp" ;;
+	esac
 	rm -f "$out/big.tmp"
 	sh "$here/ea-list.sh" /mnt/p/ea > "$out/$1.ea-expect"
 }
