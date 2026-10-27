@@ -107,6 +107,23 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 			note "rw: mktree exit $? $(grep -c FAIL $out/$n.mktree) FAIL $(grep FAIL $out/$n.mktree | head -6 | tr "\n" ";")"
 			mani /mnt/p/linux > $out/$n.linux.manifest 2>>$out/$n.err
 			case $n in
+			*-quota2)
+				# 持ち主の違うファイルを 300 人分作って quota ファイルの
+				# 空き entry を使い切らせ、一部を消し、持ち主を替える。
+				# 数え方が NetBSD と合っているかは bsd-check.sh の fsck が見る。
+				mkdir /mnt/p/q2
+				for u in $(seq 2000 2299); do
+					printf 'owned by %s\n' $u > /mnt/p/q2/u$u
+					chown $u:$u /mnt/p/q2/u$u
+				done
+				dd if=/dev/urandom of=/mnt/p/q2/big bs=65536 count=64 2>/dev/null
+				chown 2000:2000 /mnt/p/q2/big
+				rm -f /mnt/p/q2/u2001 /mnt/p/q2/u2002
+				chown 3000:3001 /mnt/p/q2/u2003 /mnt/p/q2/big
+				mkdir /mnt/p/q2/dir && chown 4000:4001 /mnt/p/q2/dir
+				ln -s target /mnt/p/q2/link && chown -h 4002:4003 /mnt/p/q2/link
+				note "quota2: wrote q2/ ($(ls /mnt/p/q2 | wc -l) entries)"
+				;;
 			*-ea)
 				# 拡張属性つきのファイルを消し、空いた inode が使い回される
 				# よう新しく作る。解放漏れと取り違えは bsd-check.sh が見る。
