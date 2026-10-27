@@ -20,17 +20,50 @@ fill() {	# name
 # 拡張属性つきのファイルを ea/ の下に置き、その値を ea-expect に書く。
 # f2 には 1 ブロックを越える属性、f1 には ACL。作り方は ci-images の
 # ufs2-quota-probe 枝の ufs2-probe/mkimg.sh に倣った。
-ea_fill() {	# name
+ea_fill() {	# name [noacl]
 	mkdir /mnt/p/ea
 	for i in 1 2 3 4 5 6 7 8; do
 		dd if=/dev/random of=/mnt/p/ea/f$i bs=64k count=4 2>/dev/null
-		setextattr user probe "attr-$i-$(sha256 -q /mnt/p/ea/f$i)" /mnt/p/ea/f$i
+		setextattr user probe "attr-$i-$(sha /mnt/p/ea/f$i)" /mnt/p/ea/f$i
 	done
-	setfacl -m u:nobody:rwx /mnt/p/ea/f1
-	dd if=/dev/random bs=1 count=3000 2>/dev/null | b64encode - | tail -n +2 > "$out/big.tmp"
+	[ "${2:-}" = noacl ] || setfacl -m u:nobody:rwx /mnt/p/ea/f1
+	dd if=/dev/random bs=1 count=3000 2>/dev/null | openssl base64 > "$out/big.tmp"
 	setextattr -i user big /mnt/p/ea/f2 < "$out/big.tmp"
 	rm -f "$out/big.tmp"
 	sh "$here/ea-list.sh" /mnt/p/ea > "$out/$1.ea-expect"
+}
+
+# sha256 は FreeBSD と NetBSD で道具の名前が違うので openssl で揃える。
+sha() { openssl dgst -sha256 -r "$1" | cut -d' ' -f1; }
+
+# 古い fsck に壊された拡張属性の欄を作る。NetBSD 9 以前の fsck は拡張属性
+# のブロックを空きに戻すので、di_extb[] が別のファイルのものになった
+# ブロックを指したまま残りうる。tests/sbin/fsck_ffs/t_extattr.sh の
+# fsck_extattr_enable_corrupted と同じく fsdb で作る。
+stale_fill() {	# name
+	mkdir /mnt/p/ea
+	dd if=/dev/random of=/mnt/p/ea/victim bs=8k count=1 2>/dev/null
+	true > /mnt/p/ea/stale
+	echo "$(ls -i /mnt/p/ea/victim | awk '{print $1}')" \
+	     "$(ls -i /mnt/p/ea/stale | awk '{print $1}')" \
+	     "$(sha /mnt/p/ea/victim)" > "$out/$1.stale"
+}
+stale_point() {	# name rawdev
+	set -- $1 $2 $(cat "$out/$1.stale")
+	blk=$(printf 'inode %s\niptrs\n' $3 | fsdb -n $2 | awk '$1 == "di_db" && $2 == 0 {print $3}')
+	printf 'inode %s\nchextb 0 %s\n' $4 $blk | fsdb -N $2 > /dev/null
+	printf 'inode %s\nchextsize 1024\n' $4 | fsdb -N $2 > /dev/null
+	echo "$1: stale inode $4 points di_extb[0] at block $blk of victim inode $3"
+}
+
+# UFS2ea を普通の UFS2 の magic に戻す。2020-04 から 2022-11 の -current は
+# 普通の UFS2 の magic のまま拡張属性を作れたので、その頃の image と同じ
+# 状態になる。本体の superblock は 65536、fs_magic は 1372 (fs.h)。
+ea_as_plain_ufs2() {	# image
+	off=$((65536 + 1372))
+	cur=$(dd if="$1" bs=1 skip=$off count=4 2>/dev/null | od -An -tx1 | tr -d ' ')
+	[ "$cur" = 38200119 ] || { echo "!! $1: fs_magic is $cur, not UFS2ea"; return 1; }
+	printf '\031\001\124\031' | dd of="$1" bs=1 seek=$off conv=notrunc 2>/dev/null
 }
 
 case $(uname -s) in
@@ -45,12 +78,18 @@ NetBSD)
 		vndconfig vnd0 "$f"
 		mount $3 /dev/vnd0$raw /mnt/p
 		fill "$1"
+		case $1 in
+		*-ea-current) ea_fill "$1" noacl ;;
+		*-stale) stale_fill "$1" ;;
+		esac
 		umount /mnt/p
+		case $1 in *-stale) stale_point "$1" /dev/rvnd0$raw ;; esac
 		fsck_ffs -n -f /dev/rvnd0$raw > "$out/$1.fsck" 2>&1 ||
 			echo "$1: fsck_ffs -n exit $?: $(grep -vE '^\*\*' "$out/$1.fsck" | head -3 | tr '\n' ';')"
 		dumpfs -s /dev/rvnd0$raw > "$out/$1.dumpfs" 2>&1 || true
 		dumpfs -s /dev/rvnd0$raw 2>&1 | grep -iE "^flags|quota" | sed "s/^/$1: /"
 		vndconfig -u vnd0
+		case $1 in *-ea-current) ea_as_plain_ufs2 "$f" ;; esac
 	}
 	one netbsd-ffs1       '-O 1' ''
 	one netbsd-ffs2       '-O 2' ''
@@ -61,6 +100,12 @@ NetBSD)
 	# UFS2ea は拡張属性を知らない実装に mount させないための別の magic。
 	# Linux が rw で断ることを確かめる。
 	one netbsd-ffs2ea      '-O 2ea' ''
+	# 2020-04 から 2022-11 の -current が作った、普通の UFS2 の magic で拡張
+	# 属性を持つ FS。FreeBSD の拡張属性つき UFS2 と同じ形になる。
+	one netbsd-ffs2-ea-current '-O 2ea' ''
+	# その FS が古い fsck にかけられて、di_extb[] が他人のブロックを指した
+	# まま残ったもの。
+	one netbsd-ffs2-stale  '-O 2' ''
 	;;
 FreeBSD)
 	one() {	# name newfs-args

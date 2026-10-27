@@ -124,7 +124,13 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 				ln -s target /mnt/p/q2/link && chown -h 4002:4003 /mnt/p/q2/link
 				note "quota2: wrote q2/ ($(ls /mnt/p/q2 | wc -l) entries)"
 				;;
-			*-ea)
+			*-stale)
+				# di_extb[] が victim のブロックを指したままの stale を
+				# 消す。victim が無事かは bsd-check.sh が見る。
+				rm -f /mnt/p/ea/stale
+				note "stale: removed ea/stale"
+				;;
+			*-ea|*-ea-current)
 				# 拡張属性つきのファイルを消し、空いた inode が使い回される
 				# よう新しく作る。解放漏れと取り違えは bsd-check.sh が見る。
 				rm -f /mnt/p/ea/f1 /mnt/p/ea/f2 /mnt/p/ea/f3
@@ -158,6 +164,7 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	cp --sparse=always $work/$n.img $out/$n.img
 	cp $in/$n.manifest $out/$n.manifest
 	cp $in/$n.ea-expect $out/ 2>/dev/null
+	cp $in/$n.stale $out/ 2>/dev/null
 	rm -f $work/$n.img
 done
 

@@ -55,6 +55,13 @@ for f in $in/$pat; do
 				diff $m $out/$n.$sub.back | head -80 || true
 				echo "   differing lines: $(diff $m $out/$n.$sub.back | grep -c '^[<>]' || true)"
 			done
+			if [ -e $in/$n.stale ]; then
+				# Linux が stale を消すときに di_extb[] のブロックを
+				# 解放していたら、victim のブロックが空きに戻っている。
+				set -- $(cat $in/$n.stale)
+				got=$(openssl dgst -sha256 -r /mnt/p/ea/victim | cut -d' ' -f1)
+				echo "-- stale: victim sha256 $([ "$got" = "$3" ] && echo unchanged || echo "CHANGED ($got)"); stale $([ -e /mnt/p/ea/stale ] && echo still-present || echo removed)"
+			fi
 			if [ -d /mnt/p/ea ] && [ -e $in/$n.ea-expect ]; then
 				# 残した f4-f8 は元のまま、Linux が作った n1-n8 には
 				# 拡張属性も ACL も付いていないはず。
