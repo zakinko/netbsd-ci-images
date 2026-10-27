@@ -43,6 +43,9 @@ for m in ntfs3 ntfs; do
 done
 # ntfs3 は既定では新しいファイルを sparse にしない (ntfs3.rst の sparse)。
 grep -qw ntfs3 /proc/filesystems && drivers="$drivers ntfs3-sparse"
+# 新しい ntfs は Windows の絶対 symlink と junction を既定 (raw) では
+# \??\C:\ のまま返し、native_symlink=rel で根からの相対にする (ntfs.rst)。
+grep -qw ntfs /proc/filesystems && drivers="$drivers ntfs-rel"
 note "ntfs drivers: $drivers"
 for m in ntfs3 ntfs; do
 	modinfo $m 2>/dev/null | grep -E '^(filename|version|description):' | sed "s/^/    $m /" | tee -a $sum
@@ -153,6 +156,7 @@ nmount() {	# driver dev [ro]
 	case $1 in
 	ntfs-3g)      ntfs-3g ${3:+-o ro} $2 /mnt/p; want=fuseblk ;;
 	ntfs3-sparse) mount -i -t ntfs3 -o sparse${3:+,ro} $2 /mnt/p; want=ntfs3 ;;
+	ntfs-rel)     mount -i -t ntfs -o native_symlink=rel${3:+,ro} $2 /mnt/p; want=ntfs ;;
 	*)            mount -i -t $1 ${3:+-o ro} $2 /mnt/p; want=$1 ;;
 	esac || return 1
 	got=$(awk '$2 == "/mnt/p" { print $3 }' /proc/mounts)
@@ -270,14 +274,16 @@ done
 rm -f $work/sl.raw
 
 # windows_names を付けると、Windows で使えない名前を本当に拒むか。
-# ntfs-3g と ntfs3 は旗、新しい ntfs は windows_names=<BOOL> (ntfs.rst)。
+# 三つとも値を取らない旗。新しい ntfs の ntfs.rst は windows_names=<BOOL>
+# と書くが、super.c は fsparam_flag で、=1 を付けると mount が断られる
+# (run 36792259609、7.2.8)。
 note ""
 note "## windows_names"
 for drv in $drivers; do
 	case $drv in
 	ntfs-3g)       opt=windows_names ;;
 	ntfs3*)        opt=windows_names ;;
-	ntfs)          opt=windows_names=1 ;;
+	ntfs*)         opt=windows_names ;;
 	esac
 	truncate -s 64M $work/wn.raw
 	loop=$(losetup -f --show $work/wn.raw)
@@ -285,6 +291,7 @@ for drv in $drivers; do
 	case $drv in
 	ntfs-3g)      ntfs-3g -o $opt $loop /mnt/p ;;
 	ntfs3-sparse) mount -i -t ntfs3 -o sparse,$opt $loop /mnt/p ;;
+	ntfs-rel)     mount -i -t ntfs -o native_symlink=rel,$opt $loop /mnt/p ;;
 	*)            mount -i -t $drv -o $opt $loop /mnt/p ;;
 	esac 2> $work/wn.err || { note "$drv: mount -o $opt failed: $(tail -1 $work/wn.err)"; losetup -d $loop; continue; }
 	r=
