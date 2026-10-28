@@ -35,7 +35,10 @@ jobs:
           SSH=$(cat ./amd64-11.0.ssh)
           alive() { n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && return 1; sleep 5; done; }
           reboot_in() {	# command to run first, in the same session
-            $SSH "$1; (sleep 5; /sbin/shutdown -r now) >/dev/null 2>&1 &" || true
+            # Not shutdown(8): its SIGTERM sweep panics -current's
+            # DIAGNOSTIC kernel in pg_remove() (KASSERT pg_members
+            # empty, from spec_close() in exit), and the VM then hangs.
+            $SSH "$1; (sleep 5; sync; sync; /sbin/reboot -q) >/dev/null 2>&1 &" || true
             sleep 40; alive
           }
           (cd ufs2-probe/ck && tar cf - .) | $SSH 'mkdir -p /root/p/ck && cd /root/p/ck && tar xf -'
