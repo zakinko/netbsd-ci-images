@@ -58,6 +58,18 @@ fs_warnings() {	# logfile
 	grep -E 'warning:|error:' $1 | sed -E 's/:[0-9]+:[0-9]+:/:/' | LC_ALL=C sort -u
 }
 
+# sparse は Alma にも EPEL にも無いので、kernel.org の release から建てる。
+# alma.sh と bench.sh の両方が fs_build を使うので、ここで用意する。
+fs_sparse() {
+	command -v sparse > /dev/null && return 0
+	d=$(mktemp -d /var/tmp/sparse.XXXXXX)
+	curl -fsSL https://www.kernel.org/pub/software/devel/sparse/dist/sparse-0.6.4.tar.xz |
+		tar -xJf - -C $d &&
+		make -s -C $d/sparse-0.6.4 PREFIX=/usr/local install > $d/build.log 2>&1 ||
+		{ tail -20 $d/build.log; return 1; }
+	echo "sparse: $(sparse --version)"
+}
+
 # FS_PATCH=1 なら fs-probe/patches/<fs>-*.patch を当ててから建てる。
 # 当たらなければ建てない (当たらないまま測ると、直した物を測った
 # ことにならない)。建てたものは、同じ名前の出荷のモジュールと差し替える。
@@ -66,7 +78,7 @@ fs_build() {	# fs logfile
 	modprobe -r $fs 2>/dev/null
 	if [ "${FS_PATCH:-0}" = 1 ]; then
 		command -v patch > /dev/null || { echo "!! patch(1) is not installed"; return 1; }
-		command -v sparse > /dev/null || { echo "!! sparse is not installed"; return 1; }
+		fs_sparse || { echo "!! sparse is not installed"; return 1; }
 		fs_make $fs $log.base || { cat $log.base; return 1; }
 		make -C /lib/modules/$KV/build M=$ksrc/$fs clean > /dev/null 2>&1
 		for p in $here/patches/$fs-*.patch; do

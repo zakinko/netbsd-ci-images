@@ -25,14 +25,6 @@ dnf -y -q install patch ntfs-3g ntfsprogs ntfs-3g-system-compression openssl gcc
 	elfutils-libelf-devel qemu-img rpm cpio xz tar attr diffutils util-linux \
 	xfsprogs bison flex
 rpm -q ntfs-3g ntfs-3g-system-compression | tee -a $sum
-# sparse は EPEL に無ければ kernel.org の release から建てる。
-if ! command -v sparse > /dev/null && ! dnf -y -q install sparse; then
-	dnf -y -q install libxml2-devel 2>/dev/null
-	curl -fsSL https://www.kernel.org/pub/software/devel/sparse/dist/sparse-0.6.4.tar.xz |
-		tar -xJf - -C $work &&
-		make -s -C $work/sparse-0.6.4 PREFIX=/usr/local install > $out/sparse-build.log 2>&1
-fi
-command -v sparse > /dev/null && note "sparse: $(sparse --version)"
 
 . $here/ksrc.sh
 note "fs source: $ksrc"
