@@ -98,6 +98,18 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 		note "!! ro mount failed: $(tail -1 $out/$n.err)"
 	fi
 	dmesg -c > $out/$n.ro.dmesg
+	# 論理ブロックが 4K の disk (4Kn) に載せたとき。fragment が 4K の
+	# FS は読めるはずで、1K の FS はそもそも fragment を番地にできない。
+	loop4k=$(losetup -f --show --sector-size 4096 -r $work/$n.img)
+	if mount -t ufs -o ro,ufstype=$t $loop4k /mnt/p 2>>$out/$n.err; then
+		mani /mnt/p/src > $out/$n.4kn.manifest 2>>$out/$n.err
+		note "4Kn: mounted; differing lines $(diff $in/$n.manifest $out/$n.4kn.manifest | grep -c '^[<>]')"
+		umount /mnt/p
+	else
+		note "4Kn: mount failed: $(dmesg | grep -iE 'ufs|blocksize' | tail -1)"
+	fi
+	losetup -d $loop4k
+	dmesg -c >> $out/$n.ro.dmesg
 
 	if mount -t ufs -o rw,ufstype=$t $loop /mnt/p 2>>$out/$n.err; then
 		mo=$(awk '$2 == "/mnt/p" { print $4 }' /proc/mounts | cut -d, -f1)
