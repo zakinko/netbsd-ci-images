@@ -55,7 +55,7 @@ fs_make() {	# fs logfile
 		C=1 CF=-D__CHECK_ENDIAN__ modules > $2 2>&1
 }
 fs_warnings() {	# logfile
-	grep -E 'warning:|error:' $1 | sed -E 's/:[0-9]+:[0-9]+:/:/' | LC_ALL=C sort -u
+	grep -E 'warning:|error:' $1 | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | LC_ALL=C sort -u
 }
 
 # sparse は Alma にも EPEL にも無いので、kernel.org の release から建てる。
