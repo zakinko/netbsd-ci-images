@@ -413,3 +413,10 @@ for m in $out/*.linux.manifest; do
 done
 dmesg > $out/dmesg-end.txt
 ls -ls $out
+
+# 当て物を当てて建てられなかったら、試験は出荷のモジュールで進んでいる。
+# job を通すと、一覧の上では当て物を試したことになってしまう。
+if [ -s $out/build-failed ]; then
+	note "!! FS_PATCH=1 but not built: $(tr '\n' ' ' < $out/build-failed)"
+	exit 1
+fi

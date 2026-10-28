@@ -166,3 +166,10 @@ dmesg > $out/dmesg-end.txt
 note ""
 note "fio errors: $(wc -l < $out/fio.err)  cp errors: $(wc -l < $out/cp.err 2>/dev/null || echo 0)"
 sed -n '1,10p' $out/cp.err 2>/dev/null | sed 's/^/    /' | tee -a $sum
+
+# 当て物を当てて建てられなかったら、試験は出荷のモジュールで進んでいる。
+# job を通すと、一覧の上では当て物を試したことになってしまう。
+if [ -s $out/build-failed ]; then
+	note "!! FS_PATCH=1 but not built: $(tr '\n' ' ' < $out/build-failed)"
+	exit 1
+fi

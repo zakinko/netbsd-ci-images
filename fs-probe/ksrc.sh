@@ -86,6 +86,12 @@ fs_patches() {	# fs
 # 当たらなければ建てない (当たらないまま測ると、直した物を測った
 # ことにならない)。建てたものは、同じ名前の出荷のモジュールと差し替える。
 fs_build() {	# fs logfile
+	if ! fs_build1 "$@" && [ "${FS_PATCH:-0}" = 1 ]; then
+		echo "$1" >> $out/build-failed
+		return 1
+	fi
+}
+fs_build1() {	# fs logfile
 	fs=$1 log=$2
 	modprobe -r $fs 2>/dev/null
 	if [ "${FS_PATCH:-0}" = 1 ]; then
