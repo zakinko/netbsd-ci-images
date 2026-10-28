@@ -1,0 +1,134 @@
+--- a/fs/ufs/inode.c
++++ b/fs/ufs/inode.c
+@@ -843,6 +843,123 @@
+ 	return ufs_update_inode (inode, 1);
+ }
+ 
++/*
++ * The size of extended attribute block @i of an area @extsize bytes long:
++ * sblksize() in FreeBSD's fs.h.  0 when the area does not reach it.
++ */
++static unsigned int ufs2_extattr_blksize(struct ufs_sb_private_info *uspi,
++					 u32 extsize, unsigned int i)
++{
++	u64 start = (u64)i << uspi->s_bshift;
++
++	if (extsize <= start)
++		return 0;
++	if (extsize - start >= uspi->s_bsize)
++		return uspi->s_bsize;
++	return (unsigned int)ufs_fragroundup(extsize - start);
++}
++
++/*
++ * Do the extended attribute fields name blocks that belong to the inode?
++ * They must lie in the filesystem, a partial block must not cross into
++ * the next one, and once the data blocks are freed, i_blocks must count
++ * exactly the extended attribute blocks.
++ */
++static bool ufs2_extattr_owned(struct inode *inode, u32 extsize,
++			       const u64 blk[UFS_NXADDR])
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
++	blkcnt_t counted = 0;
++	unsigned int i;
++
++	if (extsize > (u64)UFS_NXADDR << uspi->s_bshift)
++		return false;
++	for (i = 0; i < UFS_NXADDR; i++) {
++		unsigned int frags = ufs2_extattr_blksize(uspi, extsize, i) >>
++				     uspi->s_fshift;
++
++		if (!frags) {
++			if (blk[i])
++				return false;
++			continue;
++		}
++		if (!blk[i] || blk[i] >= uspi->s_size ||
++		    frags > uspi->s_size - blk[i] ||
++		    ufs_fragnum(blk[i]) + frags > uspi->s_fpb)
++			return false;
++		counted += (blkcnt_t)frags << uspi->s_nspfshift;
++	}
++	return inode->i_blocks == counted;
++}
++
++/*
++ * UFS2 keeps a file's extended attributes in the blocks named by
++ * di_extb[], di_extsize bytes of them (FreeBSD's sys/ufs/ufs/dinode.h).
++ * This driver neither reads nor writes them, but a file deleted here has
++ * to give them back as ffs_truncate() does with IO_EXT; left allocated,
++ * FreeBSD's fsck reports them as BLK(S) MISSING IN BIT MAPS.
++ *
++ * The blocks are only freed when di_blocks counts them.  FreeBSD and
++ * NetBSD's UFS2ea count them; NetBSD's fsck_ffs before UFS2ea recomputed
++ * di_blocks from the data blocks alone and left the fields behind,
++ * pointing at blocks it may since have given to another file.  Freeing
++ * those would free that file's data.
++ *
++ * Like ffs_truncate(), clear the fields before freeing the blocks.
++ */
++static void ufs2_free_extattr(struct inode *inode)
++{
++	struct super_block *sb = inode->i_sb;
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct buffer_head *bh;
++	struct ufs2_inode *ui;
++	u64 blk[UFS_NXADDR];
++	bool owned;
++	u32 extsize;
++	unsigned int i;
++
++	if (uspi->fs_magic != UFS2_MAGIC)
++		return;
++	bh = sb_bread(sb, ufs_inotofsba(inode->i_ino));
++	if (!bh) {
++		ufs_warning(sb, __func__, "unable to read inode %llu\n",
++			    inode->i_ino);
++		return;
++	}
++	ui = (struct ufs2_inode *)bh->b_data + ufs_inotofsbo(inode->i_ino);
++	extsize = fs32_to_cpu(sb, ui->ui_extsize);
++	for (i = 0; i < UFS_NXADDR; i++)
++		blk[i] = fs64_to_cpu(sb, ui->ui_extb[i]);
++	if (!extsize && !blk[0] && !blk[1]) {
++		brelse(bh);
++		return;
++	}
++
++	owned = ufs2_extattr_owned(inode, extsize, blk);
++	ui->ui_extsize = 0;
++	memset(ui->ui_extb, 0, sizeof(ui->ui_extb));
++	mark_buffer_dirty(bh);
++	if (inode_needs_sync(inode))
++		sync_dirty_buffer(bh);
++	brelse(bh);
++
++	if (!owned) {
++		ufs_warning(sb, __func__,
++			    "inode %llu: extended attribute fields not counted in di_blocks, blocks left allocated\n",
++			    inode->i_ino);
++		return;
++	}
++	for (i = 0; i < UFS_NXADDR; i++) {
++		unsigned int frags = ufs2_extattr_blksize(uspi, extsize, i) >>
++				     uspi->s_fshift;
++
++		if (frags == uspi->s_fpb)
++			ufs_free_blocks(inode, blk[i], frags);
++		else if (frags)
++			ufs_free_fragments(inode, blk[i], frags);
++	}
++}
++
+ void ufs_evict_inode(struct inode * inode)
+ {
+ 	int want_delete = 0;
+@@ -857,6 +974,7 @@
+ 		    (S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode) ||
+ 		     S_ISLNK(inode->i_mode)))
+ 			ufs_truncate_blocks(inode);
++		ufs2_free_extattr(inode);
+ 		ufs_update_inode(inode, inode_needs_sync(inode));
+ 	}
+ 
