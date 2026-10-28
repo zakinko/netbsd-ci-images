@@ -45,6 +45,17 @@ sha() { openssl dgst -sha256 -r "$1" | cut -d' ' -f1; }
 # のブロックを空きに戻すので、di_extb[] が別のファイルのものになった
 # ブロックを指したまま残りうる。tests/sbin/fsck_ffs/t_extattr.sh の
 # fsck_extattr_enable_corrupted と同じく fsdb で作る。
+# Linux が quota2 の上限を守るかを見るための持ち主。単位は KB、猶予は秒
+# (edquota.8)。5000 は block の hard、5001 は inode の hard、5002 は
+# 2 秒で切れる block の soft を試す。
+q2_limits() {	# name
+	edquota -u -f /mnt/p -s 256/1000 -h 512/1000 -t 1D/1D 5000 &&
+	edquota -u -f /mnt/p -s 1M/3 -h 1M/5 -t 1D/1D 5001 &&
+	edquota -u -f /mnt/p -s 64/1000 -h 1M/1000 -t 2/1D 5002 ||
+		echo "$1: edquota exit $?"
+	repquota -u /mnt/p 2>&1 | grep -E 'User|500[0-2]' | sed "s/^/$1: /"
+}
+
 stale_fill() {	# name
 	mkdir /mnt/p/ea
 	dd if=/dev/random of=/mnt/p/ea/victim bs=8k count=1 2>/dev/null
@@ -86,6 +97,7 @@ NetBSD)
 		case $1 in
 		*-ea-current) ea_fill "$1" noacl ;;
 		*-stale) stale_fill "$1" ;;
+		*-quota2) q2_limits "$1" ;;
 		esac
 		umount /mnt/p
 		case $1 in *-stale) stale_point "$1" /dev/rvnd0$raw ;; esac

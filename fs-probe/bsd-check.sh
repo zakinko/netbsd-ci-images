@@ -55,6 +55,13 @@ for f in $in/$pat; do
 				diff $m $out/$n.$sub.back | head -80 || true
 				echo "   differing lines: $(diff $m $out/$n.$sub.back | grep -c '^[<>]' || true)"
 			done
+			case $n in
+			*-quota2)
+				# 上限の試験の後の使用量と、soft を越えた時刻。
+				echo "-- repquota"
+				repquota -u /mnt/p 2>&1 | grep -E 'User|500[0-2]' || true
+				;;
+			esac
 			if [ -e $in/$n.stale ]; then
 				# Linux が stale を消すときに di_extb[] のブロックを
 				# 解放していたら、victim のブロックが空きに戻っている。

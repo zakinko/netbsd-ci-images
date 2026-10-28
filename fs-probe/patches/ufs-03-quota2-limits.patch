@@ -1,0 +1,414 @@
+--- a/fs/ufs/balloc.c
++++ b/fs/ufs/balloc.c
+@@ -23,6 +23,7 @@
+ #include "ufs.h"
+ #include "swab.h"
+ #include "util.h"
++#include "quota2.h"
+ 
+ #define INVBLOCK ((u64)-1L)
+ 
+@@ -347,6 +348,11 @@
+ 	sb = inode->i_sb;
+ 	uspi = UFS_SB(sb)->s_uspi;
+ 	usb1 = ubh_get_usb_first(uspi);
++
++	/* NetBSD's ffs_alloc() asks chkdq() before taking anything. */
++	*err = ufs_quota2_check_blocks(inode, count);
++	if (*err)
++		return 0;
+ 	*err = -ENOSPC;
+ 
+ 	mutex_lock(&UFS_SB(sb)->s_lock);
+--- a/fs/ufs/ialloc.c
++++ b/fs/ufs/ialloc.c
+@@ -196,6 +196,20 @@
+ 	sbi = UFS_SB(sb);
+ 	uspi = sbi->s_uspi;
+ 
++	/*
++	 * The owner decides whose inode limit applies, and NetBSD's
++	 * ffs_valloc() asks chkiq() before taking an inode, so the owner is
++	 * set before the search rather than after it.
++	 */
++	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
++	err = ufs_quota2_check_inode(inode);
++	if (err) {
++		make_bad_inode(inode);
++		iput(inode);
++		return ERR_PTR(err);
++	}
++	err = -ENOSPC;
++
+ 	mutex_lock(&sbi->s_lock);
+ 
+ 	/*
+@@ -290,7 +304,6 @@
+ 	ufs_mark_sb_dirty(sb);
+ 
+ 	inode->i_ino = cg * uspi->s_ipg + bit;
+-	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
+ 	inode->i_blocks = 0;
+ 	inode->i_generation = 0;
+ 	simple_inode_init_ts(inode);
+--- a/fs/ufs/inode.c
++++ b/fs/ufs/inode.c
+@@ -285,10 +285,12 @@
+ 	tmp = ufs_new_fragments(inode, p, ufs_blknum(new_fragment),
+ 				goal, nfrags, err, locked_folio);
+ 
+-	if (!tmp) {
+-		*err = -ENOSPC;
++	/*
++	 * ufs_new_fragments() has set *err.  This used to overwrite it with
++	 * -ENOSPC, which turned a quota refusal into "no space".
++	 */
++	if (!tmp)
+ 		return 0;
+-	}
+ 
+ 	if (new)
+ 		*new = 1;
+--- a/fs/ufs/quota2.c	2026-10-28 14:32:02
++++ b/fs/ufs/quota2.c	2026-10-28 14:32:02
+@@ -11,8 +11,14 @@
+  * not held: on leaving ufs_getfrag_block(), at the end of a truncate,
+  * when an inode is freed, and before its owner changes.
+  *
+- * Limits are not enforced here; usage is counted so that NetBSD's fsck
+- * finds it consistent.
++ * Limits are checked before anything is allocated, as quota2_check()
++ * does: before a fragment is taken, before an inode is, and before an
++ * owner changes.  A caller with CAP_SYS_RESOURCE is not held to them,
++ * which is what NetBSD's default secmodel grants the superuser through
++ * KAUTH_REQ_SYSTEM_FS_QUOTA_NOLIMIT.  Blocks allocated in writeback,
++ * for a page dirtied through mmap, are allocated by a kernel thread and
++ * so are not held to them either.  NetBSD's warning on the user's
++ * terminal is not reproduced; the caller sees EDQUOT.
+  *
+  * Positions in the quota file are u64, as the offsets stored in it are.
+  */
+@@ -20,6 +26,8 @@
+ #include <linux/fs.h>
+ #include <linux/pagemap.h>
+ #include <linux/highmem.h>
++#include <linux/capability.h>
++#include <linux/timekeeping.h>
+ 
+ #include "ufs_fs.h"
+ #include "ufs.h"
+@@ -32,8 +40,13 @@
+ static_assert(sizeof(struct ufs_q2_entry) == 96);
+ static_assert(offsetof(struct ufs_q2_header, q2h_entries) == 112);
+ 
+-/* The quota inodes' i_rwsem nests inside that of the inode being written. */
++/*
++ * The quota inodes' i_rwsem and truncate_mutex nest inside those of the
++ * inode being written: a limit check made while a fragment is allocated
++ * may have to grow the quota file.
++ */
+ static struct lock_class_key ufs_q2_rwsem_key;
++static struct lock_class_key ufs_q2_truncate_key;
+ 
+ static bool ufs_q2_is_quota_inode(struct inode *inode)
+ {
+@@ -190,12 +203,17 @@
+ 	       (u64)(id & mask) * sizeof(h->q2h_entries[0]);
+ }
+ 
++/* Where the @ql values live in the entry at @off. */
++static u64 ufs_q2_val_pos(u64 off, unsigned int ql)
++{
++	return off + offsetof(struct ufs_q2_entry, q2e_val) +
++	       (u64)ql * sizeof(struct ufs_q2_val);
++}
++
+ /* Where the current usage of @ql lives in the entry at @off. */
+ static u64 ufs_q2_cur_pos(u64 off, unsigned int ql)
+ {
+-	return off + offsetof(struct ufs_q2_entry, q2e_val) +
+-	       (u64)ql * sizeof(struct ufs_q2_val) +
+-	       offsetof(struct ufs_q2_val, q2v_cur);
++	return ufs_q2_val_pos(off, ql) + offsetof(struct ufs_q2_val, q2v_cur);
+ }
+ 
+ /*
+@@ -308,6 +326,26 @@
+ }
+ 
+ /*
++ * The entry for @id, made from the default entry if there is none and
++ * @create is set, as getinoquota2() does for an increase.  *@off is 0
++ * when there is none and none was made.
++ */
++static int ufs_q2_lookup(struct super_block *sb, struct inode *qi, u32 id,
++			 bool create, u64 *off)
++{
++	struct ufs_q2_header h;
++	int err;
++
++	err = ufs_q2_read_header(qi, &h);
++	if (err)
++		return err;
++	err = ufs_q2_find(sb, qi, &h, id, off);
++	if (err || *off || !create)
++		return err;
++	return ufs_q2_alloc(sb, qi, &h, id, off);
++}
++
++/*
+  * Add @delta to the @ql usage of @id in the quota of @type: the
+  * bookkeeping half of quota2_check().  An id with no entry has nothing
+  * to give back, so a decrease leaves it alone; usage does not go below 0.
+@@ -316,26 +354,15 @@
+ 			 unsigned int ql, s64 delta)
+ {
+ 	struct inode *qi = UFS_SB(sb)->s_q2_inode[type];
+-	struct ufs_q2_header h;
+ 	u64 off, cur_pos, val;
+ 	__fs64 cur;
+ 	int err;
+ 
+ 	if (!qi || !delta)
+ 		return 0;
+-	err = ufs_q2_read_header(qi, &h);
+-	if (err)
++	err = ufs_q2_lookup(sb, qi, id, delta > 0, &off);
++	if (err || !off)
+ 		return err;
+-	err = ufs_q2_find(sb, qi, &h, id, &off);
+-	if (err)
+-		return err;
+-	if (!off) {
+-		if (delta < 0)
+-			return 0;
+-		err = ufs_q2_alloc(sb, qi, &h, id, &off);
+-		if (err)
+-			return err;
+-	}
+ 
+ 	cur_pos = ufs_q2_cur_pos(off, ql);
+ 	err = ufs_q2_read(qi, cur_pos, &cur, sizeof(cur));
+@@ -353,6 +380,82 @@
+ 	return ufs_q2_write(qi, cur_pos, &cur, sizeof(cur));
+ }
+ 
++/* Would @cur + @change exceed @limit?  Without the sum overflowing. */
++static bool ufs_q2_exceeds(u64 cur, u64 change, u64 limit)
++{
++	return cur > limit || change > limit - cur;
++}
++
++/*
++ * May @change more of @ql be charged to @id in the quota of @type?  The
++ * test is quota_check_limit() (quota2_subr.c): over the hard limit is
++ * refused, over the soft limit is refused once its grace time has run
++ * out.  Crossing the soft limit starts the grace time whether or not the
++ * charge is then refused, as quota2_check() records it before knowing.
++ * Returns -EDQUOT only when @enforce is set.
++ */
++static int ufs_q2_limit(struct super_block *sb, int type, u32 id,
++			unsigned int ql, u64 change, bool enforce)
++{
++	struct inode *qi = UFS_SB(sb)->s_q2_inode[type];
++	time64_t now = ktime_get_real_seconds();
++	bool deny = false, cross = false;
++	struct ufs_q2_val v;
++	u64 off, pos, cur, soft, hard;
++	int err;
++
++	if (!qi || !change)
++		return 0;
++	err = ufs_q2_lookup(sb, qi, id, true, &off);
++	if (err)
++		return err;
++	pos = ufs_q2_val_pos(off, ql);
++	err = ufs_q2_read(qi, pos, &v, sizeof(v));
++	if (err)
++		return err;
++	cur = fs64_to_cpu(sb, v.q2v_cur);
++	soft = fs64_to_cpu(sb, v.q2v_softlimit);
++	hard = fs64_to_cpu(sb, v.q2v_hardlimit);
++
++	if (ufs_q2_exceeds(cur, change, hard)) {
++		cross = cur <= soft;
++		deny = true;
++	} else if (ufs_q2_exceeds(cur, change, soft)) {
++		cross = cur <= soft;
++		deny = !cross && now > (time64_t)fs64_to_cpu(sb, v.q2v_time);
++	}
++
++	if (cross) {
++		time64_t grace = (time64_t)fs64_to_cpu(sb, v.q2v_grace);
++
++		v.q2v_time = cpu_to_fs64(sb, (u64)(now + grace));
++		err = ufs_q2_write(qi, pos + offsetof(struct ufs_q2_val, q2v_time),
++				   &v.q2v_time, sizeof(v.q2v_time));
++		if (err)
++			return err;
++	}
++	return deny && enforce ? -EDQUOT : 0;
++}
++
++/*
++ * Check @change of @ql against both the user's and the group's limits.
++ * Both are looked at even when the first refuses, so that each records
++ * its own crossing of the soft limit.
++ */
++static int ufs_q2_limit_owner(struct inode *inode, unsigned int ql,
++			      u64 change)
++{
++	struct super_block *sb = inode->i_sb;
++	bool enforce = !capable(CAP_SYS_RESOURCE);
++	int usr_err, grp_err;
++
++	usr_err = ufs_q2_limit(sb, UFS_Q2_USR, i_uid_read(inode), ql, change,
++			       enforce);
++	grp_err = ufs_q2_limit(sb, UFS_Q2_GRP, i_gid_read(inode), ql, change,
++			       enforce);
++	return usr_err ? usr_err : grp_err;
++}
++
+ /* Charge @delta of @ql to both the user and the group. */
+ static void ufs_q2_charge_owner(struct inode *inode, u32 uid, u32 gid,
+ 				unsigned int ql, s64 delta)
+@@ -397,6 +500,41 @@
+ 	mutex_unlock(&sbi->s_q2_lock);
+ }
+ 
++/*
++ * May @frags more fragments be allocated to @inode?  What it already
++ * holds is charged first, so the check sees the usage NetBSD would have
++ * charged allocation by allocation.  Called with truncate_mutex held and
++ * s_lock not.
++ */
++int ufs_quota2_check_blocks(struct inode *inode, unsigned int frags)
++{
++	struct ufs_sb_info *sbi = UFS_SB(inode->i_sb);
++	int err;
++
++	if (!ufs_quota2_active(inode->i_sb) || ufs_q2_is_quota_inode(inode))
++		return 0;
++	mutex_lock(&sbi->s_q2_lock);
++	__ufs_quota2_sync_blocks(inode);
++	err = ufs_q2_limit_owner(inode, UFS_Q2_BLOCK,
++				 (u64)frags << sbi->s_uspi->s_nspfshift);
++	mutex_unlock(&sbi->s_q2_lock);
++	return err;
++}
++
++/* May an inode be allocated for @inode's owner?  chkiq() with +1. */
++int ufs_quota2_check_inode(struct inode *inode)
++{
++	struct ufs_sb_info *sbi = UFS_SB(inode->i_sb);
++	int err;
++
++	if (!ufs_quota2_active(inode->i_sb))
++		return 0;
++	mutex_lock(&sbi->s_q2_lock);
++	err = ufs_q2_limit_owner(inode, UFS_Q2_FILE, 1);
++	mutex_unlock(&sbi->s_q2_lock);
++	return err;
++}
++
+ void ufs_quota2_new_inode(struct inode *inode)
+ {
+ 	struct ufs_sb_info *sbi = UFS_SB(inode->i_sb);
+@@ -436,9 +574,22 @@
+ 	ufs_q2_charge(sb, type, new_id, UFS_Q2_FILE, 1);
+ }
+ 
++/* May @id in @type take on an inode holding @blocks? */
++static int ufs_q2_limit_take(struct super_block *sb, int type, u32 id,
++			     u64 blocks, bool enforce)
++{
++	int block_err, file_err;
++
++	block_err = ufs_q2_limit(sb, type, id, UFS_Q2_BLOCK, blocks, enforce);
++	file_err = ufs_q2_limit(sb, type, id, UFS_Q2_FILE, 1, enforce);
++	return block_err ? block_err : file_err;
++}
++
+ /*
+  * Move the inode's usage to its new owner before setattr_copy() changes
+- * it, as ufs_chown() does with chkdq() and chkiq().
++ * it, as ufs_chown() does with chkdq() and chkiq().  The new owner's
++ * limits are checked first, and nothing moves if they refuse; ufs_chown()
++ * reaches the same state by moving and then moving back.
+  */
+ int ufs_quota2_transfer(struct inode *inode, const struct iattr *attr)
+ {
+@@ -446,32 +597,39 @@
+ 	struct ufs_sb_info *sbi = UFS_SB(sb);
+ 	bool uid_changes = i_uid_needs_update(&nop_mnt_idmap, attr, inode);
+ 	bool gid_changes = i_gid_needs_update(&nop_mnt_idmap, attr, inode);
++	bool enforce = !capable(CAP_SYS_RESOURCE);
++	u32 new_uid = 0, new_gid = 0;
++	int err = 0;
+ 	s64 blocks;
+ 
+ 	if (!ufs_quota2_active(sb) || ufs_q2_is_quota_inode(inode))
+ 		return 0;
+ 	if (!uid_changes && !gid_changes)
+ 		return 0;
++	if (uid_changes)
++		new_uid = from_kuid(&init_user_ns,
++				    from_vfsuid(&nop_mnt_idmap, i_user_ns(inode),
++						attr->ia_vfsuid));
++	if (gid_changes)
++		new_gid = from_kgid(&init_user_ns,
++				    from_vfsgid(&nop_mnt_idmap, i_user_ns(inode),
++						attr->ia_vfsgid));
+ 
+ 	mutex_lock(&sbi->s_q2_lock);
+ 	__ufs_quota2_sync_blocks(inode);
+ 	blocks = (s64)UFS_I(inode)->i_q2_blocks;
+ 	if (uid_changes)
+-		ufs_q2_move(sb, UFS_Q2_USR, i_uid_read(inode),
+-			    from_kuid(&init_user_ns,
+-				      from_vfsuid(&nop_mnt_idmap,
+-						  i_user_ns(inode),
+-						  attr->ia_vfsuid)),
+-			    blocks);
+-	if (gid_changes)
+-		ufs_q2_move(sb, UFS_Q2_GRP, i_gid_read(inode),
+-			    from_kgid(&init_user_ns,
+-				      from_vfsgid(&nop_mnt_idmap,
+-						  i_user_ns(inode),
+-						  attr->ia_vfsgid)),
+-			    blocks);
++		err = ufs_q2_limit_take(sb, UFS_Q2_USR, new_uid, (u64)blocks,
++					enforce);
++	if (!err && gid_changes)
++		err = ufs_q2_limit_take(sb, UFS_Q2_GRP, new_gid, (u64)blocks,
++					enforce);
++	if (!err && uid_changes)
++		ufs_q2_move(sb, UFS_Q2_USR, i_uid_read(inode), new_uid, blocks);
++	if (!err && gid_changes)
++		ufs_q2_move(sb, UFS_Q2_GRP, i_gid_read(inode), new_gid, blocks);
+ 	mutex_unlock(&sbi->s_q2_lock);
+-	return 0;
++	return err;
+ }
+ 
+ /*
+@@ -536,6 +694,8 @@
+ 			goto fail;
+ 		}
+ 		lockdep_set_class(&qi->i_rwsem, &ufs_q2_rwsem_key);
++		lockdep_set_class(&UFS_I(qi)->truncate_mutex,
++				  &ufs_q2_truncate_key);
+ 		sbi->s_q2_inode[type] = qi;
+ 		err = ufs_q2_check(sb, qi, type);
+ 		if (err)
+--- a/fs/ufs/quota2.h	2026-10-28 14:32:02
++++ b/fs/ufs/quota2.h	2026-10-28 14:32:02
+@@ -60,6 +60,8 @@
+ void ufs_quota2_unload(struct super_block *sb);
+ bool ufs_quota2_active(struct super_block *sb);
+ void ufs_quota2_sync_blocks(struct inode *inode);
++int ufs_quota2_check_blocks(struct inode *inode, unsigned int frags);
++int ufs_quota2_check_inode(struct inode *inode);
+ void ufs_quota2_new_inode(struct inode *inode);
+ void ufs_quota2_free_inode(struct inode *inode);
+ int ufs_quota2_transfer(struct inode *inode, const struct iattr *attr);

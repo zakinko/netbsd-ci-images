@@ -131,6 +131,26 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 				mkdir /mnt/p/q2/dir && chown 4000:4001 /mnt/p/q2/dir
 				ln -s target /mnt/p/q2/link && chown -h 4002:4003 /mnt/p/q2/link
 				note "quota2: wrote q2/ ($(ls /mnt/p/q2 | wc -l) entries)"
+				# 上限は bsd-make.sh の q2_limits が付けた。CAP_SYS_RESOURCE
+				# の無い持ち主として書き、断られる所で EDQUOT になるかを見る。
+				mkdir -m 1777 /mnt/p/lim
+				q2as() { setpriv --reuid=$1 --regid=$1 --clear-groups sh -c "$2" 2>&1 | tail -1; }
+				r=$(q2as 5000 'dd if=/dev/zero of=/mnt/p/lim/hard bs=4k count=200')
+				note "quota2 block hard 512K (expect EDQUOT, <= 1024 blocks): $r; $(stat -c '%s bytes %b blocks' /mnt/p/lim/hard)"
+				r=$(q2as 5001 'for i in 1 2 3 4 5 6 7 8; do true > /mnt/p/lim/f$i || exit; done')
+				note "quota2 inode hard 5 (expect 5 then EDQUOT): $(ls /mnt/p/lim | grep -c '^f') created; $r"
+				r=$(q2as 5002 'dd if=/dev/zero of=/mnt/p/lim/grace bs=4k count=32')
+				note "quota2 block soft 64K, inside grace (expect allowed): $r"
+				sleep 3
+				r=$(q2as 5002 'dd if=/dev/zero of=/mnt/p/lim/grace bs=4k count=8 seek=32 conv=notrunc')
+				note "quota2 block soft 64K, grace over (expect EDQUOT): $r"
+				dd if=/dev/zero of=/mnt/p/lim/root bs=4k count=200 2>/dev/null &&
+					chown 5000:5000 /mnt/p/lim/root
+				note "quota2 root over 5000's hard limit (expect allowed): exit $?"
+				true > /mnt/p/lim/give
+				r=$(setpriv --bounding-set=-sys_resource --inh-caps=-sys_resource \
+					chown 5001 /mnt/p/lim/give 2>&1)
+				note "quota2 chown to 5001 without CAP_SYS_RESOURCE (expect EDQUOT): exit $? $r; owner $(stat -c %u /mnt/p/lim/give)"
 				;;
 			*-stale)
 				# di_extb[] が victim のブロックを指したままの stale を
