@@ -17,7 +17,7 @@
 +		return 0;
 +	if (extsize - start >= uspi->s_bsize)
 +		return uspi->s_bsize;
-+	return (unsigned int)ufs_fragroundup(extsize - start);
++	return round_up(extsize - (u32)start, uspi->s_fsize);
 +}
 +
 +/*
@@ -83,7 +83,7 @@
 +		return;
 +	bh = sb_bread(sb, ufs_inotofsba(inode->i_ino));
 +	if (!bh) {
-+		ufs_warning(sb, __func__, "unable to read inode %llu\n",
++		ufs_warning(sb, __func__, "unable to read inode %lu\n",
 +			    inode->i_ino);
 +		return;
 +	}
@@ -106,7 +106,7 @@
 +
 +	if (!owned) {
 +		ufs_warning(sb, __func__,
-+			    "inode %llu: extended attribute fields not counted in di_blocks, blocks left allocated\n",
++			    "inode %lu: extended attribute fields not counted in di_blocks, blocks left allocated\n",
 +			    inode->i_ino);
 +		return;
 +	}

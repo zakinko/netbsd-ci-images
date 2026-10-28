@@ -17,7 +17,7 @@
 +		return 0;
 +	if (extsize - start >= uspi->s_bsize)
 +		return uspi->s_bsize;
-+	return (unsigned int)ufs_fragroundup(extsize - start);
++	return round_up(extsize - (u32)start, uspi->s_fsize);
 +}
 +
 +/*
