@@ -48,12 +48,14 @@ fs_config() {	# fs
 # 警告は一番厳しい W=123 で取る。既存のコードが元から出す警告は直さない
 # ので、当てる前と後で並べ、当てた後にだけ出るもの (行と桁を伏せて比べる)
 # を数える。それが 0 でなければ建てたことにしない。
+# sparse (C=1) も同じ扱いにする。__fs32/__fs64 と cpu の整数の取り違えは
+# コンパイラには見えず、sparse にしか捕まらない。
 fs_make() {	# fs logfile
 	make -C /lib/modules/$KV/build M=$ksrc/$1 $(fs_config $1) W=123 \
-		modules > $2 2>&1
+		C=1 CF=-D__CHECK_ENDIAN__ modules > $2 2>&1
 }
 fs_warnings() {	# logfile
-	grep -E 'warning:' $1 | sed -E 's/:[0-9]+:[0-9]+:/:/' | LC_ALL=C sort -u
+	grep -E 'warning:|error:' $1 | sed -E 's/:[0-9]+:[0-9]+:/:/' | LC_ALL=C sort -u
 }
 
 # FS_PATCH=1 なら fs-probe/patches/<fs>-*.patch を当ててから建てる。
@@ -64,6 +66,7 @@ fs_build() {	# fs logfile
 	modprobe -r $fs 2>/dev/null
 	if [ "${FS_PATCH:-0}" = 1 ]; then
 		command -v patch > /dev/null || { echo "!! patch(1) is not installed"; return 1; }
+		command -v sparse > /dev/null || { echo "!! sparse is not installed"; return 1; }
 		fs_make $fs $log.base || { cat $log.base; return 1; }
 		make -C /lib/modules/$KV/build M=$ksrc/$fs clean > /dev/null 2>&1
 		for p in $here/patches/$fs-*.patch; do
@@ -79,7 +82,7 @@ fs_build() {	# fs logfile
 		fs_warnings $log.base > $log.w-base
 		fs_warnings $log > $log.w-patched
 		comm -13 $log.w-base $log.w-patched > $log.w-new
-		echo "$fs W=123 warnings: before $(wc -l < $log.w-base), after $(wc -l < $log.w-patched), new $(wc -l < $log.w-new)"
+		echo "$fs W=123+sparse warnings: before $(wc -l < $log.w-base), after $(wc -l < $log.w-patched), new $(wc -l < $log.w-new)"
 		cat $log.w-new
 		[ -s $log.w-new ] && return 1
 	fi
