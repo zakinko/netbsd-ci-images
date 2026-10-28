@@ -57,10 +57,11 @@ jobs:
             $SSH sh /root/p/ck/ea.sh $v | tee ea-$v.txt
             $SSH sh /root/p/ck/atf.sh $v | tee atf-$v.txt
           done
-          reboot_in "sh /root/p/ck/swapk.sh v2"
-          is "#0: Wed Oct 28 09:54:44 UTC 2026"
-          $SSH sh /root/p/ck/ck.sh v2 T6 | tee v2.txt
-          { echo '```'; cat snap.txt ea-*.txt atf-*.txt v2.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
+          # fs/ffs runs on rump: the same tests with librumpfs_ffs built
+          # from the same tree plus the WAPBL-on-failed-mount fix.
+          $SSH sh /root/p/ck/swaprump.sh hf | tee swaprump-hf.txt
+          $SSH sh /root/p/ck/atf.sh hf | tee atf-hf.txt
+          { echo '```'; cat snap.txt ea-*.txt swaprump-hf.txt atf-*.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -70,7 +71,7 @@ jobs:
             ea-*.txt
             atf-*.txt
             swapu-*.txt
-            v2*.txt
+            swaprump-*.txt
             snap.txt
             swap.txt
             amd64-11.0.console.log
