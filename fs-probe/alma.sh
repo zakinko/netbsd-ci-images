@@ -287,12 +287,15 @@ for drv in $drivers; do
 		note "rw: $(awk '$2 == "/mnt/p" { print $3, $4 }' /proc/mounts)"
 		sh $here/mktree.sh /mnt/p/linux > $out/$a.mktree 2>&1
 		note "mktree exit $? $(grep -c FAIL $out/$a.mktree) FAIL $(grep FAIL $out/$a.mktree | head -6 | tr "\n" ";")"
+		note "sym_long while mounted: $(ls -ld /mnt/p/linux/sym_long 2>&1 | cut -c1-80)"
 		mani /mnt/p/linux > $out/$a.linux.manifest
 		umount /mnt/p
 		drop
 		nmount $drv ${loop}p1 ro
+		note "sym_long after remount: $(ls -ld /mnt/p/linux/sym_long 2>&1 | cut -c1-80)"
 		mani /mnt/p/linux > $out/$a.linux.reread
 		note "after remount, differing lines $(ndiff $out/$a.linux.manifest $out/$a.linux.reread)"
+		diff $out/$a.linux.manifest $out/$a.linux.reread | grep '^[<>]' | cut -c1-160 | head -6 | tee -a $sum
 		umount /mnt/p
 		ntfsfix -n ${loop}p1 > $out/$a.ntfsfix 2>&1
 		note "ntfsfix -n exit $?"
