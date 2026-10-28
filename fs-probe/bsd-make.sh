@@ -53,7 +53,8 @@ q2_limits() {	# name
 	edquota -u -f /mnt/p -s 1M/3 -h 1M/5 -t 1D/1D 5001 &&
 	edquota -u -f /mnt/p -s 64/1000 -h 1M/1000 -t 2/1D 5002 ||
 		echo "$1: edquota exit $?"
-	repquota -u /mnt/p 2>&1 | grep -E 'User|500[0-2]' | sed "s/^/$1: /"
+	# 使用量 0 の持ち主は既定の表には出ないので、-x で全部を出す。
+	repquota -x -u /mnt/p 2>&1 | grep -E '^#|user 500[0-2] ' | sed "s/^/$1: /"
 }
 
 stale_fill() {	# name

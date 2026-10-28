@@ -71,6 +71,14 @@ fs_sparse() {
 }
 
 # FS_PATCH=1 なら fs-probe/patches/<fs>-*.patch を当ててから建てる。
+# 当て物は mainline 向けに書く。古い kernel で当たらない所があれば、
+# patches/<major.minor>/ に合わせた組を置き、そちらを使う。6.12 は
+# remount がまだ fs_context になっていない。
+fs_patches() {	# fs
+	d=$here/patches/$(echo $KV | cut -d. -f1,2)
+	ls $d/$1-*.patch > /dev/null 2>&1 || d=$here/patches
+	ls $d/$1-*.patch 2>/dev/null
+}
 # 当たらなければ建てない (当たらないまま測ると、直した物を測った
 # ことにならない)。建てたものは、同じ名前の出荷のモジュールと差し替える。
 fs_build() {	# fs logfile
@@ -81,12 +89,11 @@ fs_build() {	# fs logfile
 		fs_sparse || { echo "!! sparse is not installed"; return 1; }
 		fs_make $fs $log.base || { cat $log.base; return 1; }
 		make -C /lib/modules/$KV/build M=$ksrc/$fs clean > /dev/null 2>&1
-		for p in $here/patches/$fs-*.patch; do
-			[ -e "$p" ] || continue
+		for p in $(fs_patches $fs); do
 			(cd $(dirname $ksrc) && patch -p1 -f -i $p < /dev/null) \
 				> $log.patch 2>&1 || { cat $log.patch; return 1; }
 			grep -qi 'fuzz\|offset' $log.patch && cat $log.patch
-			echo "patched: $(basename $p)"
+			echo "patched: ${p#$here/patches/}"
 		done
 	fi
 	fs_make $fs $log || { tail -20 $log; return 1; }

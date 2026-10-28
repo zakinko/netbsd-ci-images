@@ -1,0 +1,937 @@
+--- a/fs/ufs/Makefile
++++ b/fs/ufs/Makefile
+@@ -6,5 +6,5 @@
+ obj-$(CONFIG_UFS_FS) += ufs.o
+ 
+ ufs-objs := balloc.o cylinder.o dir.o file.o ialloc.o inode.o \
+-	    namei.o super.o util.o
++	    namei.o quota2.o super.o util.o
+ ccflags-$(CONFIG_UFS_DEBUG)    += -DDEBUG
+--- a/fs/ufs/ialloc.c
++++ b/fs/ufs/ialloc.c
+@@ -37,6 +37,7 @@
+ #include "ufs.h"
+ #include "swab.h"
+ #include "util.h"
++#include "quota2.h"
+ 
+ /*
+  * NOTE! When we get the inode, we're the only people
+@@ -335,6 +336,7 @@
+ 		brelse(bh);
+ 	}
+ 	mutex_unlock(&sbi->s_lock);
++	ufs_quota2_new_inode(inode);
+ 
+ 	UFSD("allocating inode %lu\n", inode->i_ino);
+ 	UFSD("EXIT\n");
+--- a/fs/ufs/inode.c
++++ b/fs/ufs/inode.c
+@@ -43,6 +43,7 @@
+ #include "ufs.h"
+ #include "swab.h"
+ #include "util.h"
++#include "quota2.h"
+ 
+ static int ufs_block_to_path(struct inode *inode, sector_t i_block, unsigned offsets[4])
+ {
+@@ -460,6 +461,7 @@
+ 			set_buffer_new(bh_result);
+ 	}
+ 	mutex_unlock(&UFS_I(inode)->truncate_mutex);
++	ufs_quota2_sync_blocks(inode);
+ 	return err;
+ 
+ done:
+@@ -550,15 +552,17 @@
+ 	} else if (S_ISLNK(inode->i_mode)) {
+ 		if (!inode->i_blocks) {
+ 			inode->i_link = (char *)UFS_I(inode)->i_u1.i_symlink;
+-			inode->i_op = &simple_symlink_inode_operations;
++			inode->i_op = &ufs_fast_symlink_inode_operations;
+ 		} else {
+ 			inode->i_mapping->a_ops = &ufs_aops;
+-			inode->i_op = &page_symlink_inode_operations;
++			inode->i_op = &ufs_symlink_inode_operations;
+ 			inode_nohighmem(inode);
+ 		}
+-	} else
++	} else {
+ 		init_special_inode(inode, inode->i_mode,
+ 				   ufs_get_inode_dev(inode->i_sb, UFS_I(inode)));
++		inode->i_op = &ufs_special_inode_operations;
++	}
+ }
+ 
+ static int ufs1_read_inode(struct inode *inode, struct ufs_inode *ufs_inode)
+@@ -706,6 +710,7 @@
+ 		(inode->i_size + uspi->s_fsize - 1) >> uspi->s_fshift;
+ 	ufsi->i_dir_start_lookup = 0;
+ 	ufsi->i_osync = 0;
++	ufsi->i_q2_blocks = inode->i_blocks;
+ 
+ 	ufs_set_inode_ops(inode);
+ 
+@@ -876,8 +881,10 @@
+ 	invalidate_inode_buffers(inode);
+ 	clear_inode(inode);
+ 
+-	if (want_delete)
++	if (want_delete) {
+ 		ufs_free_inode(inode);
++		ufs_quota2_free_inode(inode);
++	}
+ }
+ 
+ struct to_free {
+@@ -1190,6 +1197,7 @@
+ 	read_sequnlock_excl(&ufsi->meta_lock);
+ 	mark_inode_dirty(inode);
+ 	mutex_unlock(&ufsi->truncate_mutex);
++	ufs_quota2_sync_blocks(inode);
+ }
+ 
+ static int ufs_truncate(struct inode *inode, loff_t size)
+@@ -1240,11 +1248,34 @@
+ 			return error;
+ 	}
+ 
++	error = ufs_quota2_transfer(inode, attr);
++	if (error)
++		return error;
++
+ 	setattr_copy(&nop_mnt_idmap, inode, attr);
+ 	mark_inode_dirty(inode);
+ 	return 0;
+ }
+ 
+ const struct inode_operations ufs_file_inode_operations = {
++	.setattr = ufs_setattr,
++};
++
++/*
++ * Symlinks and special files take ufs_setattr() too, so that a change of
++ * owner reaches ufs_quota2_transfer().  Otherwise they are the generic
++ * page_symlink_inode_operations and simple_symlink_inode_operations.
++ */
++const struct inode_operations ufs_symlink_inode_operations = {
++	.get_link = page_get_link,
++	.setattr = ufs_setattr,
++};
++
++const struct inode_operations ufs_fast_symlink_inode_operations = {
++	.get_link = simple_get_link,
++	.setattr = ufs_setattr,
++};
++
++const struct inode_operations ufs_special_inode_operations = {
+ 	.setattr = ufs_setattr,
+ };
+--- a/fs/ufs/namei.c
++++ b/fs/ufs/namei.c
+@@ -99,6 +99,7 @@
+ 	err = PTR_ERR(inode);
+ 	if (!IS_ERR(inode)) {
+ 		init_special_inode(inode, mode, rdev);
++		inode->i_op = &ufs_special_inode_operations;
+ 		ufs_set_inode_dev(inode->i_sb, UFS_I(inode), rdev);
+ 		mark_inode_dirty(inode);
+ 		err = ufs_add_nondir(dentry, inode);
+@@ -124,7 +125,7 @@
+ 
+ 	if (l > UFS_SB(sb)->s_uspi->s_maxsymlinklen) {
+ 		/* slow symlink */
+-		inode->i_op = &page_symlink_inode_operations;
++		inode->i_op = &ufs_symlink_inode_operations;
+ 		inode_nohighmem(inode);
+ 		inode->i_mapping->a_ops = &ufs_aops;
+ 		err = page_symlink(inode, symname, l);
+@@ -132,7 +133,7 @@
+ 			goto out_fail;
+ 	} else {
+ 		/* fast symlink */
+-		inode->i_op = &simple_symlink_inode_operations;
++		inode->i_op = &ufs_fast_symlink_inode_operations;
+ 		inode->i_link = (char *)UFS_I(inode)->i_u1.i_symlink;
+ 		memcpy(inode->i_link, symname, l);
+ 		inode->i_size = l-1;
+@@ -332,4 +333,5 @@
+ 	.rmdir		= ufs_rmdir,
+ 	.mknod		= ufs_mknod,
+ 	.rename		= ufs_rename,
++	.setattr	= ufs_setattr,
+ };
+--- a/fs/ufs/quota2.c	1970-01-01 09:00:00
++++ b/fs/ufs/quota2.c	2026-10-28 16:26:36
+@@ -0,0 +1,565 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Keep NetBSD's in-filesystem quotas (quota2) up to date when writing.
++ * See quota2.h for the layout.
++ *
++ * Usage is charged from the inode's own block count rather than at each
++ * allocation: every inode remembers how many 512-byte blocks have been
++ * charged for it (i_q2_blocks), and ufs_quota2_sync_blocks() charges the
++ * difference.  Block allocation runs under s_lock, which growing the
++ * quota file needs too, so the charge is made at points where s_lock is
++ * not held: on leaving ufs_getfrag_block(), at the end of a truncate,
++ * when an inode is freed, and before its owner changes.
++ *
++ * Limits are not enforced here; usage is counted so that NetBSD's fsck
++ * finds it consistent.
++ *
++ * Positions in the quota file are u64, as the offsets stored in it are.
++ */
++
++#include <linux/fs.h>
++#include <linux/pagemap.h>
++#include <linux/highmem.h>
++
++#include "ufs_fs.h"
++#include "ufs.h"
++#include "swab.h"
++#include "util.h"
++#include "quota2.h"
++
++/* The NetBSD layout, which quota2.h restates field by field. */
++static_assert(sizeof(struct ufs_q2_val) == 40);
++static_assert(sizeof(struct ufs_q2_entry) == 96);
++static_assert(offsetof(struct ufs_q2_header, q2h_entries) == 112);
++
++/* The quota inodes' i_rwsem nests inside that of the inode being written. */
++static struct lock_class_key ufs_q2_rwsem_key;
++
++static bool ufs_q2_is_quota_inode(struct inode *inode)
++{
++	struct ufs_sb_info *sbi = UFS_SB(inode->i_sb);
++
++	return inode == sbi->s_q2_inode[UFS_Q2_USR] ||
++	       inode == sbi->s_q2_inode[UFS_Q2_GRP];
++}
++
++bool ufs_quota2_active(struct super_block *sb)
++{
++	struct ufs_sb_info *sbi = UFS_SB(sb);
++
++	return sbi->s_q2_inode[UFS_Q2_USR] || sbi->s_q2_inode[UFS_Q2_GRP];
++}
++
++/* i_size is never negative. */
++static u64 ufs_q2_size(struct inode *qi)
++{
++	return (u64)i_size_read(qi);
++}
++
++/* Is [@pos, @pos + @len) inside the quota file? */
++static bool ufs_q2_in_file(struct inode *qi, u64 pos, size_t len)
++{
++	u64 size = ufs_q2_size(qi);
++
++	return pos <= size && len <= size - pos;
++}
++
++/*
++ * The folio of the quota file that holds @pos, with the offset of @pos in
++ * it and how many of the @len bytes from there it holds.  An entry may
++ * straddle a folio boundary, so callers go a folio at a time.
++ */
++static struct folio *ufs_q2_folio(struct inode *qi, u64 pos, size_t len,
++				  size_t *off, size_t *n)
++{
++	struct folio *folio;
++
++	folio = read_mapping_folio(qi->i_mapping, (pgoff_t)(pos >> PAGE_SHIFT),
++				   NULL);
++	if (!IS_ERR(folio)) {
++		*off = offset_in_folio(folio, pos);
++		*n = min(len, folio_size(folio) - *off);
++	}
++	return folio;
++}
++
++static int ufs_q2_read(struct inode *qi, u64 pos, void *buf, size_t len)
++{
++	u8 *dst = buf;
++
++	if (!ufs_q2_in_file(qi, pos, len))
++		return -EIO;
++	while (len) {
++		struct folio *folio;
++		size_t off, n;
++
++		folio = ufs_q2_folio(qi, pos, len, &off, &n);
++		if (IS_ERR(folio))
++			return (int)PTR_ERR(folio);
++		memcpy_from_folio(dst, folio, off, n);
++		folio_put(folio);
++		pos += n;
++		dst += n;
++		len -= n;
++	}
++	return 0;
++}
++
++/* Only the part inside i_size is written; ufs_q2_extend() grows the file. */
++static int ufs_q2_write(struct inode *qi, u64 pos, const void *buf,
++			size_t len)
++{
++	const u8 *src = buf;
++
++	if (!ufs_q2_in_file(qi, pos, len))
++		return -EIO;
++	while (len) {
++		struct folio *folio;
++		size_t off, n;
++
++		folio = ufs_q2_folio(qi, pos, len, &off, &n);
++		if (IS_ERR(folio))
++			return (int)PTR_ERR(folio);
++		folio_lock(folio);
++		memcpy_to_folio(folio, off, src, n);
++		folio_mark_dirty(folio);
++		folio_unlock(folio);
++		folio_put(folio);
++		pos += n;
++		src += n;
++		len -= n;
++	}
++	return 0;
++}
++
++/* Append @len zero bytes to the quota file, allocating its blocks. */
++static int ufs_q2_extend(struct inode *qi, unsigned int len)
++{
++	const struct address_space_operations *aops = qi->i_mapping->a_ops;
++	u64 pos;
++	int err = 0;
++
++	inode_lock(qi);
++	pos = ufs_q2_size(qi);
++	while (len) {
++		unsigned int n = min_t(unsigned int, len,
++				       PAGE_SIZE - offset_in_page(pos));
++		struct folio *folio;
++		void *fsdata = NULL;
++		int copied;
++
++		err = aops->write_begin(NULL, qi->i_mapping, (loff_t)pos, n,
++					&folio, &fsdata);
++		if (err)
++			break;
++		folio_zero_range(folio, offset_in_folio(folio, pos), n);
++		copied = aops->write_end(NULL, qi->i_mapping, (loff_t)pos, n, n,
++					 folio, fsdata);
++		if (copied < 0) {
++			err = copied;
++			break;
++		}
++		if ((unsigned int)copied != n) {
++			err = -EIO;
++			break;
++		}
++		pos += n;
++		len -= n;
++	}
++	inode_unlock(qi);
++	return err;
++}
++
++static int ufs_q2_read_header(struct inode *qi, struct ufs_q2_header *h)
++{
++	return ufs_q2_read(qi, 0, h, sizeof(*h));
++}
++
++static int ufs_q2_write_free(struct inode *qi, const struct ufs_q2_header *h)
++{
++	return ufs_q2_write(qi, offsetof(struct ufs_q2_header, q2h_free),
++			    &h->q2h_free, sizeof(h->q2h_free));
++}
++
++/* Where the hash chain for @id starts: ufs_quota2.c hashes on the low bits. */
++static u64 ufs_q2_head_pos(const struct ufs_q2_header *h, u32 id)
++{
++	u32 mask = (1U << h->q2h_hash_shift) - 1;
++
++	return offsetof(struct ufs_q2_header, q2h_entries) +
++	       (u64)(id & mask) * sizeof(h->q2h_entries[0]);
++}
++
++/* Where the current usage of @ql lives in the entry at @off. */
++static u64 ufs_q2_cur_pos(u64 off, unsigned int ql)
++{
++	return off + offsetof(struct ufs_q2_entry, q2e_val) +
++	       (u64)ql * sizeof(struct ufs_q2_val) +
++	       offsetof(struct ufs_q2_val, q2v_cur);
++}
++
++/*
++ * Find the entry for @id.  Returns 0 with its offset in *@off, which is 0
++ * when there is none.  A chain longer than the file can hold entries is a
++ * loop.
++ */
++static int ufs_q2_find(struct super_block *sb, struct inode *qi,
++		       const struct ufs_q2_header *h, u32 id, u64 *off)
++{
++	u64 max_steps = ufs_q2_size(qi) / sizeof(struct ufs_q2_entry);
++	struct ufs_q2_entry e;
++	__fs64 next;
++	u64 pos;
++	int err;
++
++	err = ufs_q2_read(qi, ufs_q2_head_pos(h, id), &next, sizeof(next));
++	if (err)
++		return err;
++	for (pos = fs64_to_cpu(sb, next); pos;
++	     pos = fs64_to_cpu(sb, e.q2e_next)) {
++		if (!max_steps--)
++			return -EIO;
++		err = ufs_q2_read(qi, pos, &e, sizeof(e));
++		if (err)
++			return err;
++		if (fs32_to_cpu(sb, e.q2e_uid) == id) {
++			*off = pos;
++			return 0;
++		}
++	}
++	*off = 0;
++	return 0;
++}
++
++/*
++ * Add a filesystem block of free entries to the end of the quota file and
++ * put them on the free list, as quota2_q2ealloc() does through
++ * quota2_addfreeq2e() when the list is empty.
++ */
++static int ufs_q2_grow(struct super_block *sb, struct inode *qi,
++		       struct ufs_q2_header *h)
++{
++	unsigned int bsize = UFS_SB(sb)->s_uspi->s_bsize;
++	unsigned int i, n = bsize / (unsigned int)sizeof(struct ufs_q2_entry);
++	u64 base = ufs_q2_size(qi);
++	int err;
++
++	/* NetBSD keeps the quota file a whole number of blocks long. */
++	if (base % bsize)
++		return -EIO;
++	err = ufs_q2_extend(qi, bsize);
++	if (err)
++		return err;
++	for (i = 0; i < n; i++) {
++		u64 pos = base + (u64)i * sizeof(struct ufs_q2_entry);
++		struct ufs_q2_entry e = { .q2e_next = h->q2h_free };
++
++		err = ufs_q2_write(qi, pos, &e, sizeof(e));
++		if (err)
++			return err;
++		h->q2h_free = cpu_to_fs64(sb, pos);
++	}
++	return ufs_q2_write_free(qi, h);
++}
++
++/*
++ * Take an entry off the free list, fill it from the default entry and
++ * link it into @id's hash chain: quota2_q2ealloc().
++ */
++static int ufs_q2_alloc(struct super_block *sb, struct inode *qi,
++			struct ufs_q2_header *h, u32 id, u64 *off)
++{
++	u64 head = ufs_q2_head_pos(h, id);
++	struct ufs_q2_entry e;
++	__fs64 first;
++	u64 pos;
++	int err;
++
++	if (!h->q2h_free) {
++		err = ufs_q2_grow(sb, qi, h);
++		if (err)
++			return err;
++	}
++	pos = fs64_to_cpu(sb, h->q2h_free);
++	err = ufs_q2_read(qi, pos, &e, sizeof(e));
++	if (err)
++		return err;
++	h->q2h_free = e.q2e_next;
++
++	err = ufs_q2_read(qi, head, &first, sizeof(first));
++	if (err)
++		return err;
++	e = h->q2h_defentry;
++	e.q2e_uid = cpu_to_fs32(sb, id);
++	e.q2e_next = first;
++	err = ufs_q2_write(qi, pos, &e, sizeof(e));
++	if (err)
++		return err;
++
++	first = cpu_to_fs64(sb, pos);
++	err = ufs_q2_write(qi, head, &first, sizeof(first));
++	if (err)
++		return err;
++	err = ufs_q2_write_free(qi, h);
++	if (err)
++		return err;
++	*off = pos;
++	return 0;
++}
++
++/*
++ * Add @delta to the @ql usage of @id in the quota of @type: the
++ * bookkeeping half of quota2_check().  An id with no entry has nothing
++ * to give back, so a decrease leaves it alone; usage does not go below 0.
++ */
++static int ufs_q2_charge(struct super_block *sb, int type, u32 id,
++			 unsigned int ql, s64 delta)
++{
++	struct inode *qi = UFS_SB(sb)->s_q2_inode[type];
++	struct ufs_q2_header h;
++	u64 off, cur_pos, val;
++	__fs64 cur;
++	int err;
++
++	if (!qi || !delta)
++		return 0;
++	err = ufs_q2_read_header(qi, &h);
++	if (err)
++		return err;
++	err = ufs_q2_find(sb, qi, &h, id, &off);
++	if (err)
++		return err;
++	if (!off) {
++		if (delta < 0)
++			return 0;
++		err = ufs_q2_alloc(sb, qi, &h, id, &off);
++		if (err)
++			return err;
++	}
++
++	cur_pos = ufs_q2_cur_pos(off, ql);
++	err = ufs_q2_read(qi, cur_pos, &cur, sizeof(cur));
++	if (err)
++		return err;
++	val = fs64_to_cpu(sb, cur);
++	if (delta > 0) {
++		val += (u64)delta;
++	} else {
++		u64 give_back = (u64)-delta;
++
++		val = val < give_back ? 0 : val - give_back;
++	}
++	cur = cpu_to_fs64(sb, val);
++	return ufs_q2_write(qi, cur_pos, &cur, sizeof(cur));
++}
++
++/* Charge @delta of @ql to both the user and the group. */
++static void ufs_q2_charge_owner(struct inode *inode, u32 uid, u32 gid,
++				unsigned int ql, s64 delta)
++{
++	struct super_block *sb = inode->i_sb;
++	int err;
++
++	err = ufs_q2_charge(sb, UFS_Q2_USR, uid, ql, delta);
++	if (!err)
++		err = ufs_q2_charge(sb, UFS_Q2_GRP, gid, ql, delta);
++	if (err)
++		ufs_warning(sb, __func__,
++			    "inode %llu: quota update failed (%d)\n",
++			    (unsigned long long)inode->i_ino, err);
++}
++
++/* Charge the blocks the inode gained or lost since the last charge. */
++static void __ufs_quota2_sync_blocks(struct inode *inode)
++{
++	struct ufs_inode_info *ufsi = UFS_I(inode);
++	blkcnt_t blocks;
++
++	spin_lock(&inode->i_lock);
++	blocks = inode->i_blocks;
++	spin_unlock(&inode->i_lock);
++	if (blocks == ufsi->i_q2_blocks)
++		return;
++	ufs_q2_charge_owner(inode, i_uid_read(inode), i_gid_read(inode),
++			    UFS_Q2_BLOCK,
++			    (s64)blocks - (s64)ufsi->i_q2_blocks);
++	ufsi->i_q2_blocks = blocks;
++}
++
++void ufs_quota2_sync_blocks(struct inode *inode)
++{
++	struct ufs_sb_info *sbi = UFS_SB(inode->i_sb);
++
++	if (!ufs_quota2_active(inode->i_sb) || ufs_q2_is_quota_inode(inode))
++		return;
++	mutex_lock(&sbi->s_q2_lock);
++	__ufs_quota2_sync_blocks(inode);
++	mutex_unlock(&sbi->s_q2_lock);
++}
++
++void ufs_quota2_new_inode(struct inode *inode)
++{
++	struct ufs_sb_info *sbi = UFS_SB(inode->i_sb);
++
++	if (!ufs_quota2_active(inode->i_sb))
++		return;
++	mutex_lock(&sbi->s_q2_lock);
++	ufs_q2_charge_owner(inode, i_uid_read(inode), i_gid_read(inode),
++			    UFS_Q2_FILE, 1);
++	mutex_unlock(&sbi->s_q2_lock);
++}
++
++/* The inode is gone from the disk: give back its blocks and itself. */
++void ufs_quota2_free_inode(struct inode *inode)
++{
++	struct ufs_sb_info *sbi = UFS_SB(inode->i_sb);
++	struct ufs_inode_info *ufsi = UFS_I(inode);
++	u32 uid = i_uid_read(inode), gid = i_gid_read(inode);
++
++	if (!ufs_quota2_active(inode->i_sb) || ufs_q2_is_quota_inode(inode))
++		return;
++	mutex_lock(&sbi->s_q2_lock);
++	ufs_q2_charge_owner(inode, uid, gid, UFS_Q2_BLOCK,
++			    -(s64)ufsi->i_q2_blocks);
++	ufsi->i_q2_blocks = 0;
++	ufs_q2_charge_owner(inode, uid, gid, UFS_Q2_FILE, -1);
++	mutex_unlock(&sbi->s_q2_lock);
++}
++
++/* Move @blocks and the inode itself from @old_id to @new_id in @type. */
++static void ufs_q2_move(struct super_block *sb, int type, u32 old_id,
++			u32 new_id, s64 blocks)
++{
++	ufs_q2_charge(sb, type, old_id, UFS_Q2_BLOCK, -blocks);
++	ufs_q2_charge(sb, type, old_id, UFS_Q2_FILE, -1);
++	ufs_q2_charge(sb, type, new_id, UFS_Q2_BLOCK, blocks);
++	ufs_q2_charge(sb, type, new_id, UFS_Q2_FILE, 1);
++}
++
++/*
++ * Move the inode's usage to its new owner before setattr_copy() changes
++ * it, as ufs_chown() does with chkdq() and chkiq().
++ */
++int ufs_quota2_transfer(struct inode *inode, const struct iattr *attr)
++{
++	struct super_block *sb = inode->i_sb;
++	struct ufs_sb_info *sbi = UFS_SB(sb);
++	bool uid_changes = i_uid_needs_update(&nop_mnt_idmap, attr, inode);
++	bool gid_changes = i_gid_needs_update(&nop_mnt_idmap, attr, inode);
++	s64 blocks;
++
++	if (!ufs_quota2_active(sb) || ufs_q2_is_quota_inode(inode))
++		return 0;
++	if (!uid_changes && !gid_changes)
++		return 0;
++
++	mutex_lock(&sbi->s_q2_lock);
++	__ufs_quota2_sync_blocks(inode);
++	blocks = (s64)UFS_I(inode)->i_q2_blocks;
++	if (uid_changes)
++		ufs_q2_move(sb, UFS_Q2_USR, i_uid_read(inode),
++			    from_kuid(&init_user_ns,
++				      from_vfsuid(&nop_mnt_idmap,
++						  i_user_ns(inode),
++						  attr->ia_vfsuid)),
++			    blocks);
++	if (gid_changes)
++		ufs_q2_move(sb, UFS_Q2_GRP, i_gid_read(inode),
++			    from_kgid(&init_user_ns,
++				      from_vfsgid(&nop_mnt_idmap,
++						  i_user_ns(inode),
++						  attr->ia_vfsgid)),
++			    blocks);
++	mutex_unlock(&sbi->s_q2_lock);
++	return 0;
++}
++
++/*
++ * Check what the superblock says about a quota file before trusting it:
++ * the header must be one quota2_create_blk0() could have written for this
++ * @type, and the file must hold the header and its hash table.
++ */
++static int ufs_q2_check(struct super_block *sb, struct inode *qi, int type)
++{
++	struct ufs_q2_header h;
++	u64 table_end;
++	int err;
++
++	if (!S_ISREG(qi->i_mode) || !qi->i_nlink)
++		return -EIO;
++	if (ufs_q2_size(qi) < sizeof(h))
++		return -EIO;
++	err = ufs_q2_read_header(qi, &h);
++	if (err)
++		return err;
++	if (fs32_to_cpu(sb, h.q2h_magic_number) != UFS_Q2_HEAD_MAGIC ||
++	    h.q2h_type != type || h.q2h_hash_shift > 15 ||
++	    fs16_to_cpu(sb, h.q2h_hash_size) != 1U << h.q2h_hash_shift)
++		return -EIO;
++	table_end = offsetof(struct ufs_q2_header, q2h_entries) +
++		    ((u64)sizeof(h.q2h_entries[0]) << h.q2h_hash_shift);
++	if (ufs_q2_size(qi) < table_end)
++		return -EIO;
++	return 0;
++}
++
++/*
++ * NetBSD marks a filesystem that keeps quota2 with Q2_HEAD_MAGIC in
++ * fs_quota_magic and one FS_Q2_DO_TYPE() bit per kind in fs_quota_flags,
++ * and names the quota inodes in fs_quotafile[] (newfs/mkfs.c).  FreeBSD
++ * leaves the same bytes zero.
++ */
++int ufs_quota2_load(struct super_block *sb)
++{
++	struct ufs_sb_info *sbi = UFS_SB(sb);
++	struct ufs_super_block_second *usb2 = ubh_get_usb_second(sbi->s_uspi);
++	u8 kinds;
++	int type, err;
++
++	if ((sbi->s_flags & UFS_ST_MASK) != UFS_ST_44BSD)
++		return 0;
++	if (fs32_to_cpu(sb, usb2->fs_un.fs_u2.fs_quota_magic) !=
++	    UFS_Q2_HEAD_MAGIC)
++		return 0;
++
++	kinds = usb2->fs_un.fs_u2.fs_quota_flags;
++	for (type = 0; type < UFS_Q2_NTYPES; type++) {
++		struct inode *qi;
++		u64 ino;
++
++		if (!(kinds & UFS_Q2_DO_TYPE(type)))
++			continue;
++		ino = fs64_to_cpu(sb, usb2->fs_un.fs_u2.fs_quotafile[type]);
++		qi = ufs_iget(sb, ino);
++		if (IS_ERR(qi)) {
++			err = (int)PTR_ERR(qi);
++			goto fail;
++		}
++		lockdep_set_class(&qi->i_rwsem, &ufs_q2_rwsem_key);
++		sbi->s_q2_inode[type] = qi;
++		err = ufs_q2_check(sb, qi, type);
++		if (err)
++			goto fail;
++	}
++	return 0;
++
++fail:
++	ufs_quota2_unload(sb);
++	return err;
++}
++
++void ufs_quota2_unload(struct super_block *sb)
++{
++	struct ufs_sb_info *sbi = UFS_SB(sb);
++	int type;
++
++	for (type = 0; type < UFS_Q2_NTYPES; type++) {
++		struct inode *qi = sbi->s_q2_inode[type];
++
++		if (!qi)
++			continue;
++		sbi->s_q2_inode[type] = NULL;
++		write_inode_now(qi, 1);
++		iput(qi);
++	}
++}
+--- a/fs/ufs/quota2.h	1970-01-01 09:00:00
++++ b/fs/ufs/quota2.h	2026-10-28 16:26:36
+@@ -0,0 +1,67 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * NetBSD in-filesystem quotas ("quota2").
++ *
++ * NetBSD keeps the per-user and per-group usage and limits in two hidden
++ * inodes named by the superblock, and its fsck checks them against the
++ * filesystem.  A write that does not update them leaves fsck reporting a
++ * quota mismatch for every owner whose usage changed.  There is no
++ * separate specification; the layout below follows NetBSD's
++ * sys/ufs/ufs/quota2.h, and the update rules its sys/ufs/ufs/ufs_quota2.c.
++ *
++ * Everything on disk is in the filesystem's byte order, except the two
++ * single-byte header fields.
++ */
++
++#ifndef _UFS_QUOTA2_H
++#define _UFS_QUOTA2_H
++
++#include "ufs_fs.h"
++
++#define UFS_Q2_HEAD_MAGIC	0xb746915eU	/* Q2_HEAD_MAGIC */
++
++/* Quota types; the index into fs_quotafile[] and the bit in fs_quota_flags. */
++#define UFS_Q2_USR		0		/* USRQUOTA */
++#define UFS_Q2_GRP		1		/* GRPQUOTA */
++#define UFS_Q2_NTYPES		2		/* MAXQUOTAS */
++#define UFS_Q2_DO_TYPE(type)	(0x01U << (type))	/* FS_Q2_DO_TYPE() */
++
++/* What a quota2_val counts. */
++#define UFS_Q2_BLOCK		0	/* QL_BLOCK: 512-byte units, as di_blocks */
++#define UFS_Q2_FILE		1	/* QL_FILE: inodes */
++#define UFS_Q2_NQL		2	/* N_QL */
++
++struct ufs_q2_val {
++	__fs64	q2v_hardlimit;
++	__fs64	q2v_softlimit;
++	__fs64	q2v_cur;		/* current usage */
++	__fs64	q2v_time;		/* when the soft limit grace runs out */
++	__fs64	q2v_grace;
++};
++
++struct ufs_q2_entry {
++	struct ufs_q2_val q2e_val[UFS_Q2_NQL];
++	__fs64	q2e_next;		/* byte offset of the next entry, or 0 */
++	__fs32	q2e_uid;		/* the user or group it counts */
++	__fs32	q2e_pad;
++};
++
++struct ufs_q2_header {
++	__fs32	q2h_magic_number;
++	__u8	q2h_type;
++	__u8	q2h_hash_shift;
++	__fs16	q2h_hash_size;		/* 1 << q2h_hash_shift */
++	struct ufs_q2_entry q2h_defentry;	/* copied into new entries */
++	__fs64	q2h_free;		/* head of the free entry list */
++	__fs64	q2h_entries[];		/* hash table, q2h_hash_size heads */
++};
++
++int ufs_quota2_load(struct super_block *sb);
++void ufs_quota2_unload(struct super_block *sb);
++bool ufs_quota2_active(struct super_block *sb);
++void ufs_quota2_sync_blocks(struct inode *inode);
++void ufs_quota2_new_inode(struct inode *inode);
++void ufs_quota2_free_inode(struct inode *inode);
++int ufs_quota2_transfer(struct inode *inode, const struct iattr *attr);
++
++#endif /* _UFS_QUOTA2_H */
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -95,6 +95,7 @@
+ #include "ufs.h"
+ #include "swab.h"
+ #include "util.h"
++#include "quota2.h"
+ 
+ static struct inode *ufs_nfs_get_inode(struct super_block *sb, u64 ino, u32 generation)
+ {
+@@ -778,8 +779,10 @@
+ 
+ 	UFSD("ENTER\n");
+ 
+-	if (!sb_rdonly(sb))
++	if (!sb_rdonly(sb)) {
++		ufs_quota2_unload(sb);
+ 		ufs_put_super_internal(sb);
++	}
+ 	cancel_delayed_work_sync(&sbi->sync_work);
+ 
+ 	ubh_brelse_uspi (sbi->s_uspi);
+@@ -844,6 +847,7 @@
+ 	UFSD("flag %u\n", (int)(sb_rdonly(sb)));
+ 	
+ 	mutex_init(&sbi->s_lock);
++	mutex_init(&sbi->s_q2_lock);
+ 	spin_lock_init(&sbi->work_lock);
+ 	INIT_DELAYED_WORK(&sbi->sync_work, delayed_sync_fs);
+ 	/*
+@@ -1303,6 +1307,21 @@
+ 
+ 	ufs_setup_cstotal(sb);
+ 	/*
++	 * Writes must keep NetBSD's quota2 in step.  If its files cannot be
++	 * used, stay read-only; deciding that before the cylinder group
++	 * structures are read keeps ufs_put_super() from leaking them.
++	 */
++	if (!sb_rdonly(sb)) {
++		int err = ufs_quota2_load(sb);
++
++		if (err) {
++			ufs_warning(sb, __func__,
++				    "cannot use the quota2 files (%d), mounting read-only\n",
++				    err);
++			sb->s_flags |= SB_RDONLY;
++		}
++	}
++	/*
+ 	 * Read cylinder group structures
+ 	 */
+ 	if (!sb_rdonly(sb)) {
+@@ -1327,6 +1346,7 @@
+ 	return 0;
+ 
+ failed:
++	ufs_quota2_unload(sb);
+ 	if (ubh)
+ 		ubh_brelse_uspi (uspi);
+ 	kfree (uspi);
+@@ -1384,6 +1404,7 @@
+ 	 * fs was mouted as rw, remounting ro
+ 	 */
+ 	if (*mount_flags & SB_RDONLY) {
++		ufs_quota2_unload(sb);
+ 		ufs_put_super_internal(sb);
+ 		usb1->fs_time = ufs_get_seconds(sb);
+ 		if ((flags & UFS_ST_MASK) == UFS_ST_SUN
+@@ -1411,8 +1432,14 @@
+ 			mutex_unlock(&UFS_SB(sb)->s_lock);
+ 			return -EINVAL;
+ 		}
++		if (ufs_quota2_load(sb)) {
++			pr_err("cannot use the quota2 files, staying read-only\n");
++			mutex_unlock(&UFS_SB(sb)->s_lock);
++			return -EROFS;
++		}
+ 		if (!ufs_read_cylinder_structures(sb)) {
+ 			pr_err("failed during remounting\n");
++			ufs_quota2_unload(sb);
+ 			mutex_unlock(&UFS_SB(sb)->s_lock);
+ 			return -EPERM;
+ 		}
+@@ -1487,6 +1514,7 @@
+ 	inode_set_iversion(&ei->vfs_inode, 1);
+ 	seqlock_init(&ei->meta_lock);
+ 	mutex_init(&ei->truncate_mutex);
++	ei->i_q2_blocks = 0;
+ 	return &ei->vfs_inode;
+ }
+ 
+--- a/fs/ufs/ufs.h
++++ b/fs/ufs/ufs.h
+@@ -30,6 +30,8 @@
+ 	struct delayed_work sync_work; /* FS sync delayed work */
+ 	spinlock_t work_lock; /* protects sync_work and work_queued */
+ 	struct mutex s_lock;
++	struct inode *s_q2_inode[2];	/* NetBSD quota2 files, see quota2.c */
++	struct mutex s_q2_lock;		/* serializes quota2 updates */
+ };
+ 
+ struct ufs_inode_info {
+@@ -47,6 +49,7 @@
+ 	__u64	i_lastfrag;
+ 	seqlock_t meta_lock;
+ 	struct mutex	truncate_mutex;
++	blkcnt_t i_q2_blocks;	/* blocks charged to quota2 */
+ 	__u32   i_dir_start_lookup;
+ 	struct inode vfs_inode;
+ };
+@@ -113,6 +116,9 @@
+ 
+ /* file.c */
+ extern const struct inode_operations ufs_file_inode_operations;
++extern const struct inode_operations ufs_symlink_inode_operations;
++extern const struct inode_operations ufs_fast_symlink_inode_operations;
++extern const struct inode_operations ufs_special_inode_operations;
+ extern const struct file_operations ufs_file_operations;
+ extern const struct address_space_operations ufs_aops;
+ 
+--- a/fs/ufs/ufs_fs.h
++++ b/fs/ufs/ufs_fs.h
+@@ -903,7 +903,12 @@
+ 			__fs32   fs_active;
+ 			__fs32   fs_old_cpc;
+ 			__fs32   fs_maxbsize;
+-			__fs64   fs_sparecon64[17];
++			__fs64   fs_sparecon64[5];	/* NetBSD: WAPBL journal */
++			__fs32   fs_quota_magic;	/* NetBSD: quota2, see quota2.h */
++			__u8     fs_quota_flags;
++			__u8     fs_quota_reserved[3];
++			__fs64   fs_quotafile[2];	/* NetBSD: quota inodes */
++			__fs64   fs_sparecon64_2[9];
+ 			__fs64   fs_sblockloc;
+ 			__fs64	cs_ndir;
+ 			__fs64	cs_nbfree;
