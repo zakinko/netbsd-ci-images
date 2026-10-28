@@ -106,6 +106,16 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 			sh $here/mktree.sh /mnt/p/linux > $out/$n.mktree 2>&1
 			note "rw: mktree exit $? $(grep -c FAIL $out/$n.mktree) FAIL $(grep FAIL $out/$n.mktree | head -6 | tr "\n" ";")"
 			mani /mnt/p/linux > $out/$n.linux.manifest 2>>$out/$n.err
+			# 新しく取った fragment の、まだ書いていない所が 0 で読めるか。
+			# 消したファイルの乱数が残る空きから取らせ、4K 書いた後に
+			# 同じ block の 6000 へ 1 byte 書いて、間を device から読み直す。
+			dd if=/dev/urandom of=/mnt/p/junk bs=1M count=8 2>/dev/null
+			sync; rm -f /mnt/p/junk; sync
+			dd if=/dev/urandom of=/mnt/p/zf bs=4k count=1 2>/dev/null; sync
+			printf x | dd of=/mnt/p/zf bs=1 seek=6000 conv=notrunc 2>/dev/null
+			sync; echo 3 > /proc/sys/vm/drop_caches
+			note "zero-fill: $(dd if=/mnt/p/zf bs=1 skip=4096 count=1904 2>/dev/null | tr -d '\000' | wc -c) non-zero bytes in 4096-5999 (expect 0)"
+			rm -f /mnt/p/zf
 			case $n in
 			*-quota2)
 				# 持ち主の違うファイルを 300 人分作って quota ファイルの
