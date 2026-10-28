@@ -50,18 +50,10 @@ jobs:
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"
           is "11.99.9 (GENERIC) #0: Tue Oct 27 22:58:42 UTC 2026"
           $SSH 'ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile /usr/tests/sbin/newfs/Atffile' || exit 1
-          # newfs and fsck_ffs built the same way from the same tree:
-          # stock without the 2ea fixes, ea with them.
-          for v in stock ea; do
-            $SSH sh /root/p/ck/swapu.sh $v | tee swapu-$v.txt
-            $SSH sh /root/p/ck/ea.sh $v | tee ea-$v.txt
-            $SSH sh /root/p/ck/atf.sh $v | tee atf-$v.txt
-          done
-          # fs/ffs runs on rump: the same tests with librumpfs_ffs built
-          # from the same tree plus the WAPBL-on-failed-mount fix.
-          $SSH sh /root/p/ck/swaprump.sh hf | tee swaprump-hf.txt
-          $SSH sh /root/p/ck/atf.sh hf | tee atf-hf.txt
-          { echo '```'; cat snap.txt ea-*.txt swaprump-hf.txt atf-*.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
+          # One run with hf failed t_quotalimit:slimit_le_1_group; its grace
+          # time is 1s.  Same cases, many times, both libraries.
+          $SSH sh /root/p/ck/rep.sh 20 | tee rep.txt
+          { echo '```'; cat snap.txt rep.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -72,6 +64,7 @@ jobs:
             atf-*.txt
             swapu-*.txt
             swaprump-*.txt
+            rep.txt
             snap.txt
             swap.txt
             amd64-11.0.console.log
