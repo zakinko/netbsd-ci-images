@@ -324,6 +324,10 @@ for drv in $drivers; do
 	for n in 10 50 100 150 200 250; do
 		ln -s "$(awk -v n=$n 'BEGIN{for(i=0;i<n;i++)printf "a"}')" /mnt/p/l$n 2>/dev/null
 	done
+	# 一度 readlink して atime を動かす。ntfs3 はその書き戻しで親の
+	# 索引の項目を作り直し、readdir が返す型がそこで決まる。
+	for n in 10 50 100 150 200 250; do readlink /mnt/p/l$n > /dev/null; done
+	sync
 	umount /mnt/p
 	nmount $drv $loop ro
 	r=
@@ -333,6 +337,8 @@ for drv in $drivers; do
 		else r="$r $n=missing"; fi
 	done
 	note "$drv:$r"
+	# find -type は lstat でなく readdir の d_type を見る。
+	note "$drv: readdir says link for:$(find /mnt/p -maxdepth 1 -type l -name 'l*' | sed 's|.*/l| |' | sort -n | tr -d '\n')"
 	umount /mnt/p
 	for n in 200 250; do
 		ntfsinfo -F /l$n $loop 2>&1 | grep -iE 'reparse|resident|attribute type|allocated|data size' |
