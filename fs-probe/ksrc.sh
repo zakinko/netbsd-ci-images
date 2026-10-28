@@ -58,14 +58,18 @@ fs_warnings() {	# logfile
 	grep -E 'warning:|error:' $1 | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | LC_ALL=C sort -u
 }
 
-# sparse は Alma にも EPEL にも無いので、kernel.org の release から建てる。
+# sparse は Alma にも EPEL にも無いので、kernel.org から建てる。最後の
+# release の 0.6.4 は __typeof_unqual__ を知らず、kernel の
+# scripts/checker-valid.sh に古いと言われて C=1 が黙って外れる。それを
+# 実装した dc9efe44 (2025-10) を含む commit に留める。
 # alma.sh と bench.sh の両方が fs_build を使うので、ここで用意する。
+sparse_commit=37156835e3d725b6d750f000be33ba3814bb2310
 fs_sparse() {
 	command -v sparse > /dev/null && return 0
 	d=$(mktemp -d /var/tmp/sparse.XXXXXX)
-	curl -fsSL https://www.kernel.org/pub/software/devel/sparse/dist/sparse-0.6.4.tar.xz |
-		tar -xJf - -C $d &&
-		make -s -C $d/sparse-0.6.4 PREFIX=/usr/local install > $d/build.log 2>&1 ||
+	curl -fsSL https://git.kernel.org/pub/scm/devel/sparse/sparse.git/snapshot/sparse-$sparse_commit.tar.gz |
+		tar -xzf - -C $d &&
+		make -s -C $d/sparse-$sparse_commit PREFIX=/usr/local install > $d/build.log 2>&1 ||
 		{ tail -20 $d/build.log; return 1; }
 	echo "sparse: $(sparse --version)"
 }
@@ -97,6 +101,10 @@ fs_build() {	# fs logfile
 		done
 	fi
 	fs_make $fs $log || { tail -20 $log; return 1; }
+	# C=1 は sparse が使えないと警告一行で外れ、W=123 だけの比較になる。
+	if grep -q 'sparse is not available' $log; then
+		echo "!! sparse did not run"; return 1
+	fi
 	if [ "${FS_PATCH:-0}" = 1 ]; then
 		fs_warnings $log.base > $log.w-base
 		fs_warnings $log > $log.w-patched
