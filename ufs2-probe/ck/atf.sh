@@ -6,7 +6,7 @@ L=$1
 O=/root/p/atf-$L
 mkdir -p $O
 echo "== $L runners: atf-run=$(command -v atf-run) kyua=$(command -v kyua)"
-for d in fs/ffs sbin/fsck_ffs; do
+for d in fs/ffs sbin/fsck_ffs sbin/newfs; do
 	n=$(echo $d | tr / _)
 	echo "== $L $d"
 	if command -v atf-run >/dev/null 2>&1; then

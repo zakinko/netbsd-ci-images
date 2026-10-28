@@ -1,6 +1,8 @@
 /*
  * poke img flags          print fs_flags, the check-hash words and quota2 magic
  * poke img sb|cg|ino N    flip one byte inside what the check-hash covers
+ * poke img nohash         make it a UFS2 without check-hashes (the stale
+ *                         hashes left behind are then never read)
  *
  * The fields picked are ones nothing else reads, so the only thing
  * wrong afterwards is the check-hash: fs_avgfpdir in the superblock,
@@ -43,6 +45,13 @@ main(int argc, char **argv)
 		printf("%s: magic=%#x flags=%#x ckhash=%#x metackhash=%#x quota_magic=%#x\n",
 		    argv[1], fs->fs_magic, fs->fs_flags, fs->fs_sparecon32[24],
 		    fs->fs_sparecon32[25], fs->fs_quota_magic);
+	} else if (strcmp(argv[2], "nohash") == 0) {
+		/* FreeBSD FS_METACKHASH is NetBSD FS_DOQUOTA2 */
+		fs->fs_flags &= ~FS_DOQUOTA2;
+		fs->fs_sparecon32[25] = 0;	/* fs_metackhash */
+		if (pwrite(fd, u.b, SBLOCKSIZE, SBLOCK_UFS2) != SBLOCKSIZE)
+			return 1;
+		printf("cleared the check-hash flag and fs_metackhash\n");
 	} else if (strcmp(argv[2], "sb") == 0) {
 		flip(fd, SBLOCK_UFS2 + offsetof(struct fs, fs_avgfpdir));
 	} else if (strcmp(argv[2], "cg") == 0) {
