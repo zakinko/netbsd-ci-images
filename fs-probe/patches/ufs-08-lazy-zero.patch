@@ -202,7 +202,39 @@
  static int ufs_writepages(struct address_space *mapping,
  		struct writeback_control *wbc)
  {
-@@ -488,8 +537,14 @@
+@@ -483,16 +532,51 @@
+ 	}
+ }
+ 
++/*
++ * A write at @to past EOF at @from leaves a gap.  The buffers of @folio
++ * that lie wholly in it and have not been read hold nothing, and the
++ * fragments behind them may have just been taken without being zeroed
++ * on the device (see ufs_clear_frags()).  __block_write_begin() only
++ * prepares the buffers that the write touches, so zero these here.
++ */
++static void ufs_zero_gap_in_folio(struct folio *folio, loff_t from, loff_t to)
++{
++	struct buffer_head *head = folio_buffers(folio), *bh = head;
++	size_t bsize = i_blocksize(folio->mapping->host);
++	loff_t start = folio_pos(folio);
++	size_t off = 0;
++
++	do {
++		if (start + (loff_t)off >= from &&
++		    start + (loff_t)(off + bsize) <= to &&
++		    !buffer_uptodate(bh)) {
++			folio_zero_range(folio, off, bsize);
++			set_buffer_uptodate(bh);
++			mark_buffer_dirty(bh);
++		}
++		off += bsize;
++		bh = bh->b_this_page;
++	} while (bh != head);
++}
++
+ static int ufs_write_begin(const struct kiocb *iocb,
+ 			   struct address_space *mapping,
  			   loff_t pos, unsigned len,
  			   struct folio **foliop, void **fsdata)
  {
@@ -217,7 +249,12 @@
  	ret = block_write_begin(mapping, pos, len, foliop, ufs_getfrag_block);
  	if (unlikely(ret))
  		ufs_write_failed(mapping, pos + len);
-@@ -1163,6 +1218,36 @@
++	else if (pos > size)
++		ufs_zero_gap_in_folio(*foliop, size, pos);
+ 
+ 	return ret;
+ }
+@@ -1163,6 +1247,36 @@
  	ubh_brelse(ubh);
  }
  
@@ -254,7 +291,7 @@
  static int ufs_alloc_lastblock(struct inode *inode, loff_t size)
  {
  	int err = 0;
-@@ -1210,6 +1295,7 @@
+@@ -1210,6 +1324,7 @@
  	       mark_buffer_dirty(bh);
  		folio_mark_dirty(folio);
         }
@@ -262,7 +299,7 @@
  
         if (lastfrag >= UFS_IND_FRAGMENT) {
  	       end = uspi->s_fpb - ufs_fragnum(lastfrag) - 1;
-@@ -1311,6 +1397,12 @@
+@@ -1311,6 +1426,12 @@
  		return -EINVAL;
  	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
  		return -EPERM;
