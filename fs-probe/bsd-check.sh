@@ -35,7 +35,11 @@ for f in $in/$pat; do
 		attach "$f"
 		echo "-- dumpfs"
 		case $(uname -s) in
-		FreeBSD) dumpfs $rdev 2>&1 | sed -n "1,40p" | grep -iE "flags|hash|magic" ;;
+		FreeBSD) dumpfs $rdev 2>&1 | sed -n "1,40p" | grep -iE "flags|hash|magic"
+			# 検査値を FreeBSD が見続けるかは FS_METACKHASH 次第で、
+			# 落ちていれば下の fsck と mount は検査値を照らさない。
+			ck=$(dumpfs $rdev 2>/dev/null | grep '^check hashes' | cut -f2-)
+			echo "-- check hashes kept: ${ck:-no (FS_METACKHASH clear)}" ;;
 		NetBSD)  dumpfs -s $rdev 2>&1 | grep -iE "^flags|quota|magic" ;;
 		esac
 		echo "-- fsck_ffs -n -f"

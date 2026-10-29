@@ -196,6 +196,9 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	fi
 	dmesg -c > $out/$n.rw.dmesg
 	[ -s $out/$n.rw.dmesg ] && grep -v drop_caches $out/$n.rw.dmesg | sed -n '1,8p' | sed 's/^/    dmesg: /' | tee -a $sum
+	# FreeBSD の検査値を ufs-09 が読むたびに照らす。一つでも合わなければ
+	# 計算か欄の位置が違う (FreeBSD の作った image では 0 のはず)。
+	note "check-hash mismatches while reading and writing: $(cat $out/$n.ro.dmesg $out/$n.rw.dmesg | grep -c 'check-hash of .* does not match')"
 	losetup -d $loop
 	cp --sparse=always $work/$n.img $out/$n.img
 	cp $in/$n.manifest $out/$n.manifest
