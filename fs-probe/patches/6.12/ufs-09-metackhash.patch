@@ -1,0 +1,594 @@
+--- a/fs/ufs/Kconfig
++++ b/fs/ufs/Kconfig
+@@ -3,6 +3,7 @@
+ 	tristate "UFS file system support (read only)"
+ 	depends on BLOCK
+ 	select BUFFER_HEAD
++	select LIBCRC32C
+ 	help
+ 	  BSD and derivate versions of Unix (such as SunOS, FreeBSD, NetBSD,
+ 	  OpenBSD and NeXTstep) use a file system called UFS. Some System V
+--- a/fs/ufs/Makefile
++++ b/fs/ufs/Makefile
+@@ -5,6 +5,6 @@
+ 
+ obj-$(CONFIG_UFS_FS) += ufs.o
+ 
+-ufs-objs := balloc.o cylinder.o dir.o file.o ialloc.o inode.o \
++ufs-objs := balloc.o ckhash.o cylinder.o dir.o file.o ialloc.o inode.o \
+ 	    namei.o quota2.o super.o util.o
+ ccflags-$(CONFIG_UFS_DEBUG)    += -DDEBUG
+--- a/fs/ufs/balloc.c
++++ b/fs/ufs/balloc.c
+@@ -115,8 +115,8 @@
+ 		}
+ 	}
+ 	
+-	ubh_mark_buffer_dirty (USPI_UBH(uspi));
+-	ubh_mark_buffer_dirty (UCPI_UBH(ucpi));
++	ufs_mark_usb_dirty(sb);
++	ufs_mark_cg_dirty(sb, ucpi);
+ 	if (sb->s_flags & SB_SYNCHRONOUS)
+ 		ubh_sync_block(UCPI_UBH(ucpi));
+ 	ufs_mark_sb_dirty(sb);
+@@ -205,8 +205,8 @@
+ 		}
+ 	}
+ 
+-	ubh_mark_buffer_dirty (USPI_UBH(uspi));
+-	ubh_mark_buffer_dirty (UCPI_UBH(ucpi));
++	ufs_mark_usb_dirty(sb);
++	ufs_mark_cg_dirty(sb, ucpi);
+ 	if (sb->s_flags & SB_SYNCHRONOUS)
+ 		ubh_sync_block(UCPI_UBH(ucpi));
+ 
+@@ -625,8 +625,8 @@
+ 	fs32_sub(sb, &UFS_SB(sb)->fs_cs(cgno).cs_nffree, count);
+ 	uspi->cs_total.cs_nffree -= count;
+ 	
+-	ubh_mark_buffer_dirty (USPI_UBH(uspi));
+-	ubh_mark_buffer_dirty (UCPI_UBH(ucpi));
++	ufs_mark_usb_dirty(sb);
++	ufs_mark_cg_dirty(sb, ucpi);
+ 	if (sb->s_flags & SB_SYNCHRONOUS)
+ 		ubh_sync_block(UCPI_UBH(ucpi));
+ 	ufs_mark_sb_dirty(sb);
+@@ -746,8 +746,8 @@
+ 		fs32_add(sb, &ucg->cg_frsum[allocsize - count], 1);
+ 
+ succed:
+-	ubh_mark_buffer_dirty (USPI_UBH(uspi));
+-	ubh_mark_buffer_dirty (UCPI_UBH(ucpi));
++	ufs_mark_usb_dirty(sb);
++	ufs_mark_cg_dirty(sb, ucpi);
+ 	if (sb->s_flags & SB_SYNCHRONOUS)
+ 		ubh_sync_block(UCPI_UBH(ucpi));
+ 	ufs_mark_sb_dirty(sb);
+--- a/fs/ufs/ckhash.c
++++ b/fs/ufs/ckhash.c
+@@ -0,0 +1,271 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * FreeBSD's metadata check-hashes.
++ *
++ * FreeBSD keeps a CRC32C of the superblock, of each cylinder group and
++ * of each UFS2 inode when FS_METACKHASH is set in fs_flags, and names
++ * which of them in fs_metackhash.  It refuses a superblock or cylinder
++ * group whose check-hash does not match, so whoever changes one has to
++ * update its check-hash as well.  There is no separate specification;
++ * what follows is from FreeBSD's sys/ufs/ffs/fs.h, ffs_subr.c
++ * (ffs_calc_sbhash, ffs_update_dinode_ckhash) and ffs_alloc.c
++ * (ffs_ckhash_cg).
++ *
++ * Each check-hash is calculate_crc32c(~0, ...) over the whole structure
++ * with the check-hash field taken as zero.  FreeBSD's calculate_crc32c()
++ * does not invert the result, and neither does crc32c(), so the two
++ * agree.  The field is skipped rather than cleared in the buffer, so
++ * that writeback never sees it zeroed.
++ *
++ * NetBSD uses the bit of FS_METACKHASH for FS_DOQUOTA2 and leaves
++ * fs_metackhash zero, so check-hashes are kept only when both are set.
++ *
++ * A check-hash that does not match on reading is reported, and then the
++ * check-hashes are given up the way FreeBSD's fs.h asks of a kernel that
++ * does not maintain them: FS_METACKHASH is cleared, FreeBSD stops
++ * verifying them, and its fsck rebuilds them.
++ */
++
++#include <linux/crc32c.h>
++#include <linux/fs.h>
++#include <linux/buffer_head.h>
++
++#include "ufs_fs.h"
++#include "ufs.h"
++#include "swab.h"
++#include "util.h"
++
++/* fs_metackhash; FreeBSD's CK_ flags. */
++#define UFS_CK_SUPERBLOCK	0x0001U
++#define UFS_CK_CYLGRP		0x0002U
++#define UFS_CK_INODE		0x0004U
++#define UFS_CK_SUPPORTED	0x0007U	/* the ones FreeBSD maintains */
++
++/* fs_ckhash sits in the third sector of the superblock. */
++#define UFS_SB_CKHASH_OFFSET \
++	(2 * UFS_SECTOR_SIZE + \
++	 offsetof(struct ufs_super_block_third, fs_un2.fs_44.fs_ckhash))
++#define UFS_CG_CKHASH_OFFSET \
++	offsetof(struct ufs_cylinder_group, cg_u.cg_u2.cg_ckhash)
++
++static bool ufs_ckhash_kept(struct super_block *sb, u32 kind)
++{
++	return UFS_SB(sb)->s_metackhash & kind;
++}
++
++/* CRC32C of the first @len bytes of @data, with the 4 bytes at @skip as 0. */
++static u32 ufs_crc32c_skip(u32 crc, const u8 *data, unsigned int len,
++			   unsigned int skip)
++{
++	static const u8 zero[4];
++
++	crc = crc32c(crc, data, skip);
++	crc = crc32c(crc, zero, sizeof(zero));
++	return crc32c(crc, data + skip + sizeof(zero),
++		      len - skip - (unsigned int)sizeof(zero));
++}
++
++/*
++ * The same over the first @len bytes of a ufs_buffer_head, whose buffers
++ * each hold @bsize bytes.
++ */
++static u32 ufs_crc32c_ubh(struct ufs_buffer_head *ubh, unsigned int bsize,
++			  unsigned int len, unsigned int skip)
++{
++	u32 crc = ~0U;
++	unsigned int i;
++
++	for (i = 0; i < ubh->count && len; i++) {
++		unsigned int n = min(len, bsize);
++		const u8 *data = (const u8 *)ubh->bh[i]->b_data;
++
++		if (skip < n) {
++			crc = ufs_crc32c_skip(crc, data, n, skip);
++			skip = UINT_MAX;	/* skipped; none in later buffers */
++		} else {
++			crc = crc32c(crc, data, n);
++			if (skip != UINT_MAX)
++				skip -= n;
++		}
++		len -= n;
++	}
++	return crc;
++}
++
++static __fs32 *ufs_ubh_field(struct ufs_buffer_head *ubh, unsigned int bsize,
++			     unsigned int offset)
++{
++	return (__fs32 *)(ubh->bh[offset / bsize]->b_data + offset % bsize);
++}
++
++static u32 ufs_sb_ckhash(struct super_block *sb)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++
++	return ufs_crc32c_ubh(USPI_UBH(uspi), uspi->s_fsize, uspi->s_sbsize,
++			      UFS_SB_CKHASH_OFFSET);
++}
++
++static u32 ufs_cg_ckhash(struct super_block *sb, struct ufs_buffer_head *ubh)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++
++	return ufs_crc32c_ubh(ubh, uspi->s_fsize, uspi->s_cgsize,
++			      UFS_CG_CKHASH_OFFSET);
++}
++
++static u32 ufs_inode_ckhash(struct ufs2_inode *ui)
++{
++	return ufs_crc32c_skip(~0U, (const u8 *)ui, (unsigned int)sizeof(*ui),
++			       (unsigned int)offsetof(struct ufs2_inode,
++						      ui_ckhash));
++}
++
++/* Stop keeping check-hashes; the caller has said why. */
++static void ufs_ckhash_give_up(struct super_block *sb)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct ufs_super_block_third *usb3 = ubh_get_usb_third(uspi);
++	u32 flags;
++
++	UFS_SB(sb)->s_metackhash = 0;
++	pr_warn("%s: no longer keeping FreeBSD's metadata check-hashes; fsck_ffs on FreeBSD rebuilds them\n",
++		sb->s_id);
++	if (sb_rdonly(sb))
++		return;
++	flags = fs32_to_cpu(sb, usb3->fs_un2.fs_44.fs_flags);
++	usb3->fs_un2.fs_44.fs_flags = cpu_to_fs32(sb, flags & ~UFS_METACKHASH);
++	ubh_mark_buffer_dirty(USPI_UBH(uspi));
++	ufs_mark_sb_dirty(sb);
++}
++
++static void ufs_ckhash_mismatch(struct super_block *sb, const char *what,
++				u64 which)
++{
++	if (!UFS_SB(sb)->s_metackhash)
++		return;
++	pr_warn("%s: check-hash of %s %llu does not match\n",
++		sb->s_id, what, which);
++	ufs_ckhash_give_up(sb);
++}
++
++/*
++ * Decide at mount which check-hashes to keep, and verify the superblock's.
++ * The superblock has been read; nothing has been written yet.
++ */
++void ufs_ckhash_mount(struct super_block *sb)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct ufs_super_block_third *usb3 = ubh_get_usb_third(uspi);
++	u32 flags, metackhash, ckhash;
++
++	/* FreeBSD's dinode.h: 256 bytes, di_ckhash at 244 */
++	BUILD_BUG_ON(sizeof(struct ufs2_inode) != 256);
++	BUILD_BUG_ON(offsetof(struct ufs2_inode, ui_ckhash) != 244);
++
++	UFS_SB(sb)->s_metackhash = 0;
++	if ((UFS_SB(sb)->s_flags & UFS_ST_MASK) != UFS_ST_44BSD)
++		return;
++	flags = fs32_to_cpu(sb, usb3->fs_un2.fs_44.fs_flags);
++	metackhash = fs32_to_cpu(sb, usb3->fs_un2.fs_44.fs_metackhash);
++	if (!(flags & UFS_METACKHASH) || !metackhash)
++		return;
++	UFS_SB(sb)->s_metackhash = metackhash & UFS_CK_SUPPORTED;
++	/*
++	 * A cylinder group is read in whole fragments.  FreeBSD's newfs
++	 * rounds fs_cgsize up to one; do not guess at one that is not.
++	 */
++	if (uspi->s_cgsize % uspi->s_fsize) {
++		pr_warn("%s: cylinder group size %u is not a whole number of fragments\n",
++			sb->s_id, uspi->s_cgsize);
++		ufs_ckhash_give_up(sb);
++		return;
++	}
++	if (!ufs_ckhash_kept(sb, UFS_CK_SUPERBLOCK))
++		return;
++	ckhash = fs32_to_cpu(sb, *ufs_ubh_field(USPI_UBH(uspi), uspi->s_fsize,
++						 UFS_SB_CKHASH_OFFSET));
++	if (ckhash != ufs_sb_ckhash(sb))
++		ufs_ckhash_mismatch(sb, "superblock", 0);
++}
++
++/*
++ * A read-only mount does not give up check-hashes on disk.  Before the
++ * filesystem becomes writable, clear FS_METACKHASH if they are on disk
++ * but no longer kept.
++ */
++void ufs_ckhash_remount_rw(struct super_block *sb)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct ufs_super_block_third *usb3 = ubh_get_usb_third(uspi);
++	u32 flags;
++
++	if (UFS_SB(sb)->s_metackhash ||
++	    (UFS_SB(sb)->s_flags & UFS_ST_MASK) != UFS_ST_44BSD ||
++	    !usb3->fs_un2.fs_44.fs_metackhash)
++		return;
++	flags = fs32_to_cpu(sb, usb3->fs_un2.fs_44.fs_flags);
++	if (!(flags & UFS_METACKHASH))
++		return;
++	usb3->fs_un2.fs_44.fs_flags = cpu_to_fs32(sb, flags & ~UFS_METACKHASH);
++	ubh_mark_buffer_dirty(USPI_UBH(uspi));
++}
++
++/* Mark the superblock dirty, with its check-hash brought up to date. */
++void ufs_mark_usb_dirty(struct super_block *sb)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++
++	if (ufs_ckhash_kept(sb, UFS_CK_SUPERBLOCK))
++		*ufs_ubh_field(USPI_UBH(uspi), uspi->s_fsize,
++			       UFS_SB_CKHASH_OFFSET) =
++			cpu_to_fs32(sb, ufs_sb_ckhash(sb));
++	ubh_mark_buffer_dirty(USPI_UBH(uspi));
++}
++
++/* Mark a cylinder group dirty, with its check-hash brought up to date. */
++void ufs_mark_cg_dirty(struct super_block *sb, struct ufs_cg_private_info *ucpi)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct ufs_buffer_head *ubh = UCPI_UBH(ucpi);
++
++	if (ufs_ckhash_kept(sb, UFS_CK_CYLGRP))
++		*ufs_ubh_field(ubh, uspi->s_fsize, UFS_CG_CKHASH_OFFSET) =
++			cpu_to_fs32(sb, ufs_cg_ckhash(sb, ubh));
++	ubh_mark_buffer_dirty(ubh);
++}
++
++/* Verify a cylinder group that has just been read in full. */
++void ufs_ckhash_check_cg(struct super_block *sb, struct ufs_buffer_head *ubh,
++			 unsigned int cgno)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	u32 ckhash;
++
++	if (!ufs_ckhash_kept(sb, UFS_CK_CYLGRP))
++		return;
++	ckhash = fs32_to_cpu(sb, *ufs_ubh_field(ubh, uspi->s_fsize,
++						 UFS_CG_CKHASH_OFFSET));
++	if (ckhash != ufs_cg_ckhash(sb, ubh))
++		ufs_ckhash_mismatch(sb, "cylinder group", cgno);
++}
++
++/*
++ * Bring the check-hash of a UFS2 inode up to date.  FreeBSD keeps none
++ * for an inode whose mode is zero.
++ */
++void ufs_ckhash_set_inode(struct super_block *sb, struct ufs2_inode *ui)
++{
++	if (ufs_ckhash_kept(sb, UFS_CK_INODE) && ui->ui_mode)
++		ui->ui_ckhash = cpu_to_fs32(sb, ufs_inode_ckhash(ui));
++}
++
++/* Verify a UFS2 inode that has just been read. */
++void ufs_ckhash_check_inode(struct super_block *sb, struct ufs2_inode *ui,
++			    u64 ino)
++{
++	if (!ufs_ckhash_kept(sb, UFS_CK_INODE) || !ui->ui_mode)
++		return;
++	if (fs32_to_cpu(sb, ui->ui_ckhash) != ufs_inode_ckhash(ui))
++		ufs_ckhash_mismatch(sb, "inode", ino);
++}
+--- a/fs/ufs/cylinder.c
++++ b/fs/ufs/cylinder.c
+@@ -50,6 +50,7 @@
+ 		if (!(UCPI_UBH(ucpi)->bh[i] = sb_bread(sb, UCPI_UBH(ucpi)->fragment + i)))
+ 			goto failed;
+ 	sbi->s_cgno[bitmap_nr] = cgno;
++	ufs_ckhash_check_cg(sb, UCPI_UBH(ucpi), cgno);
+ 			
+ 	ucpi->c_cgx	= fs32_to_cpu(sb, ucg->cg_cgx);
+ 	ucpi->c_ncyl	= fs16_to_cpu(sb, ucg->cg_ncyl);
+@@ -119,7 +120,7 @@
+ 	ucg->cg_rotor = cpu_to_fs32(sb, ucpi->c_rotor);
+ 	ucg->cg_frotor = cpu_to_fs32(sb, ucpi->c_frotor);
+ 	ucg->cg_irotor = cpu_to_fs32(sb, ucpi->c_irotor);
+-	ubh_mark_buffer_dirty (UCPI_UBH(ucpi));
++	ufs_mark_cg_dirty(sb, ucpi);
+ 	for (i = 1; i < UCPI_UBH(ucpi)->count; i++) {
+ 		brelse (UCPI_UBH(ucpi)->bh[i]);
+ 	}
+--- a/fs/ufs/ialloc.c
++++ b/fs/ufs/ialloc.c
+@@ -111,8 +111,8 @@
+ 		}
+ 	}
+ 
+-	ubh_mark_buffer_dirty (USPI_UBH(uspi));
+-	ubh_mark_buffer_dirty (UCPI_UBH(ucpi));
++	ufs_mark_usb_dirty(sb);
++	ufs_mark_cg_dirty(sb, ucpi);
+ 	if (sb->s_flags & SB_SYNCHRONOUS)
+ 		ubh_sync_block(UCPI_UBH(ucpi));
+ 	
+@@ -153,7 +153,7 @@
+ 	}
+ 
+ 	fs32_add(sb, &ucg->cg_u.cg_u2.cg_initediblk, uspi->s_inopb);
+-	ubh_mark_buffer_dirty(UCPI_UBH(ucpi));
++	ufs_mark_cg_dirty(sb, ucpi);
+ 	if (sb->s_flags & SB_SYNCHRONOUS)
+ 		ubh_sync_block(UCPI_UBH(ucpi));
+ 
+@@ -297,8 +297,8 @@
+ 		uspi->cs_total.cs_ndir++;
+ 		fs32_add(sb, &sbi->fs_cs(cg).cs_ndir, 1);
+ 	}
+-	ubh_mark_buffer_dirty (USPI_UBH(uspi));
+-	ubh_mark_buffer_dirty (UCPI_UBH(ucpi));
++	ufs_mark_usb_dirty(sb);
++	ufs_mark_cg_dirty(sb, ucpi);
+ 	if (sb->s_flags & SB_SYNCHRONOUS)
+ 		ubh_sync_block(UCPI_UBH(ucpi));
+ 	ufs_mark_sb_dirty(sb);
+@@ -342,6 +342,7 @@
+ 		ktime_get_real_ts64(&ts);
+ 		ufs2_inode->ui_birthtime = cpu_to_fs64(sb, ts.tv_sec);
+ 		ufs2_inode->ui_birthnsec = cpu_to_fs32(sb, ts.tv_nsec);
++		ufs_ckhash_set_inode(sb, ufs2_inode);
+ 		mark_buffer_dirty(bh);
+ 		unlock_buffer(bh);
+ 		if (sb->s_flags & SB_SYNCHRONOUS)
+--- a/fs/ufs/inode.c
++++ b/fs/ufs/inode.c
+@@ -785,8 +785,9 @@
+ 	if ((UFS_SB(sb)->s_flags & UFS_TYPE_MASK) == UFS_TYPE_UFS2) {
+ 		struct ufs2_inode *ufs2_inode = (struct ufs2_inode *)bh->b_data;
+ 
+-		err = ufs2_read_inode(inode,
+-				      ufs2_inode + ufs_inotofsbo(inode->i_ino));
++		ufs2_inode += ufs_inotofsbo(inode->i_ino);
++		ufs_ckhash_check_inode(sb, ufs2_inode, inode->i_ino);
++		err = ufs2_read_inode(inode, ufs2_inode);
+ 	} else {
+ 		struct ufs_inode *ufs_inode = (struct ufs_inode *)bh->b_data;
+ 
+@@ -926,8 +927,9 @@
+ 	if (uspi->fs_magic == UFS2_MAGIC) {
+ 		struct ufs2_inode *ufs2_inode = (struct ufs2_inode *)bh->b_data;
+ 
+-		ufs2_update_inode(inode,
+-				  ufs2_inode + ufs_inotofsbo(inode->i_ino));
++		ufs2_inode += ufs_inotofsbo(inode->i_ino);
++		ufs2_update_inode(inode, ufs2_inode);
++		ufs_ckhash_set_inode(sb, ufs2_inode);
+ 	} else {
+ 		struct ufs_inode *ufs_inode = (struct ufs_inode *) bh->b_data;
+ 
+@@ -1048,6 +1050,7 @@
+ 	owned = ufs2_extattr_owned(inode, extsize, blk);
+ 	ui->ui_extsize = 0;
+ 	memset(ui->ui_extb, 0, sizeof(ui->ui_extb));
++	ufs_ckhash_set_inode(sb, ui);
+ 	mark_buffer_dirty(bh);
+ 	if (inode_needs_sync(inode))
+ 		sync_dirty_buffer(bh);
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -283,7 +283,7 @@
+ 	
+ 	if (!sb_rdonly(sb)) {
+ 		usb1->fs_clean = UFS_FSBAD;
+-		ubh_mark_buffer_dirty(USPI_UBH(uspi));
++		ufs_mark_usb_dirty(sb);
+ 		ufs_mark_sb_dirty(sb);
+ 		sb->s_flags |= SB_RDONLY;
+ 	}
+@@ -317,7 +317,7 @@
+ 	
+ 	if (!sb_rdonly(sb)) {
+ 		usb1->fs_clean = UFS_FSBAD;
+-		ubh_mark_buffer_dirty(USPI_UBH(uspi));
++		ufs_mark_usb_dirty(sb);
+ 		ufs_mark_sb_dirty(sb);
+ 	}
+ 	va_start(args, fmt);
+@@ -500,38 +500,6 @@
+ }
+ 
+ /*
+- * FreeBSD keeps CRC32C check-hashes of the superblock, the cylinder
+- * groups and the inodes when FS_METACKHASH is set in fs_flags, and
+- * names which of them in fs_metackhash.  This driver does not update
+- * them, so after it has written, FreeBSD finds them stale and refuses
+- * to mount the filesystem.  FreeBSD's fs.h asks a kernel that does not
+- * maintain check-hashes to clear FS_METACKHASH; FreeBSD then stops
+- * verifying them on its next mount, and fsck rebuilds them.
+- *
+- * NetBSD uses the same bit for FS_DOQUOTA2 and keeps fs_metackhash as
+- * spare space, which is zero, so the bit is only cleared when
+- * fs_metackhash names a check-hash.
+- */
+-static void ufs_clear_metackhash(struct super_block *sb)
+-{
+-	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
+-	struct ufs_super_block_third *usb3 = ubh_get_usb_third(uspi);
+-	u32 flags;
+-
+-	if ((UFS_SB(sb)->s_flags & UFS_ST_MASK) != UFS_ST_44BSD)
+-		return;
+-	if (!usb3->fs_un2.fs_44.fs_metackhash)
+-		return;
+-	flags = fs32_to_cpu(sb, usb3->fs_un2.fs_44.fs_flags);
+-	if (!(flags & UFS_METACKHASH))
+-		return;
+-	usb3->fs_un2.fs_44.fs_flags = cpu_to_fs32(sb, flags & ~UFS_METACKHASH);
+-	ubh_mark_buffer_dirty(USPI_UBH(uspi));
+-	pr_info("%s: clearing FreeBSD metadata check-hashes; fsck_ffs on FreeBSD rebuilds them\n",
+-		sb->s_id);
+-}
+-
+-/*
+  * Read on-disk structures associated with cylinder groups
+  */
+ static int ufs_read_cylinder_structures(struct super_block *sb)
+@@ -663,7 +631,7 @@
+ 	usb1->fs_cstotal.cs_nifree = cpu_to_fs32(sb, uspi->cs_total.cs_nifree);
+ 	usb1->fs_cstotal.cs_nffree = cpu_to_fs32(sb, uspi->cs_total.cs_nffree);
+ out:
+-	ubh_mark_buffer_dirty(USPI_UBH(uspi));
++	ufs_mark_usb_dirty(sb);
+ 	ufs_print_super_stuff(sb, usb1, usb2, usb3);
+ 	UFSD("EXIT\n");
+ }
+@@ -1331,6 +1299,7 @@
+ 	sb->s_max_links = UFS_LINK_MAX;
+ 
+ 	ufs_setup_cstotal(sb);
++	ufs_ckhash_mount(sb);
+ 	/*
+ 	 * Writes must keep NetBSD's quota2 in step.  If its files cannot be
+ 	 * used, stay read-only; deciding that before the cylinder group
+@@ -1349,11 +1318,9 @@
+ 	/*
+ 	 * Read cylinder group structures
+ 	 */
+-	if (!sb_rdonly(sb)) {
++	if (!sb_rdonly(sb))
+ 		if (!ufs_read_cylinder_structures(sb))
+ 			goto failed;
+-		ufs_clear_metackhash(sb);
+-	}
+ 
+ 	/* create the root dentry last, once UFS_SB(sb) is fully set up */
+ 	inode = ufs_iget(sb, UFS_ROOTINO);
+@@ -1437,7 +1404,7 @@
+ 		  || (flags & UFS_ST_MASK) == UFS_ST_SUNx86) 
+ 			ufs_set_fs_state(sb, usb1, usb3,
+ 				UFS_FSOK - fs32_to_cpu(sb, usb1->fs_time));
+-		ubh_mark_buffer_dirty (USPI_UBH(uspi));
++		ufs_mark_usb_dirty(sb);
+ 		sb->s_flags |= SB_RDONLY;
+ 	} else {
+ 	/*
+@@ -1468,7 +1435,7 @@
+ 			mutex_unlock(&UFS_SB(sb)->s_lock);
+ 			return -EPERM;
+ 		}
+-		ufs_clear_metackhash(sb);
++		ufs_ckhash_remount_rw(sb);
+ 		sb->s_flags &= ~SB_RDONLY;
+ #endif
+ 	}
+--- a/fs/ufs/ufs.h
++++ b/fs/ufs/ufs.h
+@@ -25,6 +25,7 @@
+ 	unsigned s_cgno[UFS_MAX_GROUP_LOADED];
+ 	unsigned short s_cg_loaded;
+ 	unsigned s_mount_opt;
++	u32 s_metackhash;		/* check-hashes kept, see ckhash.c */
+ 	struct super_block *sb;
+ 	int work_queued; /* non-zero if the delayed work is queued */
+ 	struct delayed_work sync_work; /* FS sync delayed work */
+@@ -96,6 +97,17 @@
+ extern u64 ufs_new_fragments(struct inode *, void *, u64, u64,
+ 			     unsigned, int *, struct page *);
+ int ufs_zero_frags_now(struct inode *inode, sector_t beg, unsigned int n);
++
++/* ckhash.c */
++void ufs_ckhash_mount(struct super_block *sb);
++void ufs_ckhash_remount_rw(struct super_block *sb);
++void ufs_mark_usb_dirty(struct super_block *sb);
++void ufs_mark_cg_dirty(struct super_block *sb, struct ufs_cg_private_info *ucpi);
++void ufs_ckhash_check_cg(struct super_block *sb, struct ufs_buffer_head *ubh,
++			 unsigned int cgno);
++void ufs_ckhash_set_inode(struct super_block *sb, struct ufs2_inode *ui);
++void ufs_ckhash_check_inode(struct super_block *sb, struct ufs2_inode *ui,
++			    u64 ino);
+ 
+ /* cylinder.c */
+ extern struct ufs_cg_private_info * ufs_load_cylinder (struct super_block *, unsigned);
+--- a/fs/ufs/ufs_fs.h
++++ b/fs/ufs/ufs_fs.h
+@@ -571,7 +571,9 @@
+ 			__fs32	cg_nclusterblks;/* number of clusters this cg */
+ 			__fs32   cg_niblk; /* number of inode blocks this cg */
+ 			__fs32   cg_initediblk;	/* last initialized inode */
+-			__fs32   cg_sparecon32[3];/* reserved for future use */
++			__fs32   cg_unrefs;	/* number of unreferenced inodes */
++			__fs32   cg_sparecon32[1];/* reserved for future use */
++			__fs32   cg_ckhash;	/* FreeBSD: check-hash of this cg */
+ 			__fs64   cg_time;	/* time last written */
+ 			__fs64	cg_sparecon[3];	/* reserved for future use */
+ 		} cg_u2;
+@@ -682,7 +684,10 @@
+ 		} ui_addr;
+ 	__u8	ui_symlink[2*4*(UFS_NDADDR+UFS_NINDIR)];/* 0x28 fast symlink */
+ 	} ui_u2;
+-	__fs64     ui_spare[3];    /* 232: Reserved; currently unused */
++	__fs64     ui_modrev;      /* 232: FreeBSD: i_modrev for NFSv4 */
++	__fs32     ui_freelink;    /* 240: FreeBSD: SUJ next unlinked inode */
++	__fs32     ui_ckhash;      /* 244: FreeBSD: check-hash if CK_INODE */
++	__fs32     ui_spare[2];    /* 248: Reserved; currently unused */
+ };
+ 
+ 

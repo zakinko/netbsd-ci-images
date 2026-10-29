@@ -84,17 +84,25 @@ run() {	# label
 	note "$(printf '%-22s   seqwrite I/O: %s writes, avg %s KiB' '' $((w1 - w0)) $(( (s1 - s0) / 2 / ((w1 - w0) > 0 ? (w1 - w0) : 1) )))"
 	note "$(printf '%-22s   runs: sw[%s ] sr[%s ] rw[%s ] cp[%s ]' '' "$sw" "$sr" "$rw" "$cp")"
 }
-# perf で書き込みの中身を見る。
+# perf で書き込みと読み込みの中身を見る。system 全体を取ると idle が
+# 6 割を占めて fs の中が見えなかったので、fio のプロセスだけを call
+# graph 付きで取り、子孫を含めた割合 (children) で関数ごとに出す。
+# 書き戻しは end_fsync の fsync から fio 自身の文脈で走る分を数える。
 prof() {	# label
-	drop
-	perf record -q -a -g -o $work/perf.data -- \
-		fio --name=sw --directory=/mnt/b --rw=write --bs=1M --size=256M \
-		--end_fsync=1 > /dev/null 2>&1
-	perf report -q -i $work/perf.data --no-children --sort symbol \
-		--percent-limit 1.5 --stdio 2>/dev/null | grep -E '^ +[0-9]' | head -25 > $out/perf-$1.txt
+	for rw in write read; do
+		drop
+		[ $rw = read ] || rm -f /mnt/b/sw.*
+		perf record -q -g -o $work/perf.data -- \
+			fio --name=sw --directory=/mnt/b --rw=$rw --bs=1M --size=256M \
+			--end_fsync=1 > /dev/null 2>&1
+		perf report -q -i $work/perf.data --children --sort symbol \
+			--percent-limit 0.5 --stdio 2>/dev/null |
+			grep -E '^ +[0-9]' > $out/perf-$1-$rw.txt
+		note "perf $1 $rw (children %, self %):"
+		grep -E 'ufs_|mpage_|block_read_full|__block_write|crc32c|blkdev_issue_zeroout|copy_|memcpy|memset|clear_page|submit_bio' \
+			$out/perf-$1-$rw.txt | head -12 | awk '{ printf "    %7s %7s %s\n", $1, $2, $NF }' | tee -a $sum
+	done
 	rm -f /mnt/b/sw.* $work/perf.data
-	note "perf $1 (self, top):"
-	sed -n '1,12p' $out/perf-$1.txt | sed 's/^/    /' | tee -a $sum
 }
 # 書き込みの bio が、どの関数から出たかを数える。block_bio_queue の
 # 呼び出し履歴を取り、既知の出所の名前が最初に現れた所で分ける。

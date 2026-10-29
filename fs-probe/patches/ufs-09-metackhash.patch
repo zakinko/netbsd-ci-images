@@ -66,7 +66,7 @@
  	ufs_mark_sb_dirty(sb);
 --- a/fs/ufs/ckhash.c
 +++ b/fs/ufs/ckhash.c
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,271 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * FreeBSD's metadata check-hashes.
@@ -123,14 +123,15 @@
 +}
 +
 +/* CRC32C of the first @len bytes of @data, with the 4 bytes at @skip as 0. */
-+static u32 ufs_crc32c_skip(u32 crc, const u8 *data, size_t len, size_t skip)
++static u32 ufs_crc32c_skip(u32 crc, const u8 *data, unsigned int len,
++			   unsigned int skip)
 +{
 +	static const u8 zero[4];
 +
 +	crc = crc32c(crc, data, skip);
 +	crc = crc32c(crc, zero, sizeof(zero));
 +	return crc32c(crc, data + skip + sizeof(zero),
-+		      len - skip - sizeof(zero));
++		      len - skip - (unsigned int)sizeof(zero));
 +}
 +
 +/*
@@ -138,21 +139,21 @@
 + * each hold @bsize bytes.
 + */
 +static u32 ufs_crc32c_ubh(struct ufs_buffer_head *ubh, unsigned int bsize,
-+			  size_t len, size_t skip)
++			  unsigned int len, unsigned int skip)
 +{
 +	u32 crc = ~0U;
 +	unsigned int i;
 +
 +	for (i = 0; i < ubh->count && len; i++) {
-+		size_t n = min_t(size_t, len, bsize);
++		unsigned int n = min(len, bsize);
 +		const u8 *data = (const u8 *)ubh->bh[i]->b_data;
 +
 +		if (skip < n) {
 +			crc = ufs_crc32c_skip(crc, data, n, skip);
-+			skip = SIZE_MAX;	/* skipped; none in later buffers */
++			skip = UINT_MAX;	/* skipped; none in later buffers */
 +		} else {
 +			crc = crc32c(crc, data, n);
-+			if (skip != SIZE_MAX)
++			if (skip != UINT_MAX)
 +				skip -= n;
 +		}
 +		len -= n;
@@ -161,7 +162,7 @@
 +}
 +
 +static __fs32 *ufs_ubh_field(struct ufs_buffer_head *ubh, unsigned int bsize,
-+			     size_t offset)
++			     unsigned int offset)
 +{
 +	return (__fs32 *)(ubh->bh[offset / bsize]->b_data + offset % bsize);
 +}
@@ -184,8 +185,9 @@
 +
 +static u32 ufs_inode_ckhash(struct ufs2_inode *ui)
 +{
-+	return ufs_crc32c_skip(~0U, (const u8 *)ui, sizeof(*ui),
-+			       offsetof(struct ufs2_inode, ui_ckhash));
++	return ufs_crc32c_skip(~0U, (const u8 *)ui, (unsigned int)sizeof(*ui),
++			       (unsigned int)offsetof(struct ufs2_inode,
++						      ui_ckhash));
 +}
 +
 +/* Stop keeping check-hashes; the caller has said why. */
