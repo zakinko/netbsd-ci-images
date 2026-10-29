@@ -168,7 +168,7 @@
 + * holds EOF can have such fragments; blocks wholly past EOF are freed
 + * by truncation.
 + */
-+static int ufs_zero_past_eof(struct inode *inode, loff_t from, loff_t to)
++static int __maybe_unused ufs_zero_past_eof(struct inode *inode, loff_t from, loff_t to)
 +{
 +	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
 +	u64 first = ((u64)from + uspi->s_fsize - 1) >> uspi->s_fshift;
@@ -195,31 +195,11 @@
  static int ufs_writepages(struct address_space *mapping,
  		struct writeback_control *wbc)
  {
-@@ -488,8 +536,14 @@
- 			   loff_t pos, unsigned len,
- 			   struct folio **foliop, void **fsdata)
- {
-+	loff_t size = i_size_read(mapping->host);
- 	int ret;
- 
-+	if (pos > size) {
-+		ret = ufs_zero_past_eof(mapping->host, size, pos);
-+		if (ret)
-+			return ret;
-+	}
- 	ret = block_write_begin(mapping, pos, len, foliop, ufs_getfrag_block);
- 	if (unlikely(ret))
- 		ufs_write_failed(mapping, pos + len);
-@@ -1311,6 +1365,12 @@
+@@ -1311,6 +1359,7 @@
  		return -EINVAL;
  	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
  		return -EPERM;
 +
-+	if (size > i_size_read(inode)) {
-+		err = ufs_zero_past_eof(inode, i_size_read(inode), size);
-+		if (err)
-+			goto out;
-+	}
  
  	err = ufs_alloc_lastblock(inode, size);
  
