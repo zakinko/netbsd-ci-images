@@ -128,6 +128,11 @@ for load in fsx fss; do
 	done > $out/$n.attrs
 	note "zero-size files by \$DATA header: $(wc -l < $out/$n.attrs)"
 	cut -d' ' -f2- $out/$n.attrs | sed -E 's/\([^)]*\)//g' | sort | uniq -c | sort -rn | head -6 | cut -c1-220 | sed 's/^/    /' | tee -a $sum
+	# 非常駐のものは、属性の record そのものを並べる。比べる相手に、
+	# 中身のある一番大きなファイルを一つ足す。
+	big=$(sort -k3,3n $out/$n.inodes | awk '$2 == "f" { i = $1 } END { print i }')
+	python3 -I $here/mftattr.py ${loop}p1 $(grep 'Resident: No' $out/$n.attrs | cut -d' ' -f1 | head -4) $big |
+		cut -c1-400 | sed 's/^/    $DATA /' | tee -a $sum
 	if nmount $drv ${loop}p1 2>> $out/$n.err; then
 		tree > $out/$n.tree2
 		umount /mnt/p
