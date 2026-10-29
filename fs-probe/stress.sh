@@ -20,7 +20,8 @@ note "# stress / kernel $KV"
 
 dnf -y -q install epel-release
 dnf -y -q install patch ntfs-3g ntfsprogs qemu-img gcc make git autoconf \
-	automake libtool libuuid-devel xfsprogs-devel libaio-devel \
+	automake libtool libuuid-devel xfsprogs-devel libaio-devel libacl-devel \
+	libattr-devel \
 	elfutils-libelf-devel rpm cpio xz tar bison flex
 # fsx と fsstress は xfstests の ltp/ に在る。版を固定し、何で測ったかを残す。
 xfstests_tag=v2026.10.15

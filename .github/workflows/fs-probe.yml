@@ -269,11 +269,11 @@ jobs:
       - shell: pwsh
         run: ./fs-probe/win-check.ps1 fsp/alma fsp/check-windows-${{ matrix.kernel }}
       - shell: pwsh
-        if: always()
+        if: always() && hashFiles('fsp/alma/stress/*.vhd') != ''
         run: ./fs-probe/win-check.ps1 fsp/alma/stress fsp/check-windows-${{ matrix.kernel }}/stress
       - shell: pwsh
         if: always()
-        run: Get-Content fsp/check-windows-${{ matrix.kernel }}/*.check, fsp/check-windows-${{ matrix.kernel }}/stress/*.check | Add-Content $env:GITHUB_STEP_SUMMARY
+        run: Get-ChildItem fsp/check-windows-${{ matrix.kernel }} -Recurse -Filter *.check | Get-Content | Add-Content $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
