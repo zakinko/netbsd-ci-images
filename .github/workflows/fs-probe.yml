@@ -120,7 +120,11 @@ jobs:
           fi
       - shell: almalinux {0}
         run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/alma.sh fsp/in fsp/alma-${{ matrix.kernel }}
-      - run: cat fsp/alma-${{ matrix.kernel }}/summary.txt >> $GITHUB_STEP_SUMMARY
+      - shell: almalinux {0}
+        if: always()
+        timeout-minutes: 60
+        run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/stress.sh fsp/alma-${{ matrix.kernel }}/stress
+      - run: cat fsp/alma-${{ matrix.kernel }}/summary.txt fsp/alma-${{ matrix.kernel }}/stress/summary.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
         if: always()
@@ -266,7 +270,10 @@ jobs:
         run: ./fs-probe/win-check.ps1 fsp/alma fsp/check-windows-${{ matrix.kernel }}
       - shell: pwsh
         if: always()
-        run: Get-Content fsp/check-windows-${{ matrix.kernel }}/*.check | Add-Content $env:GITHUB_STEP_SUMMARY
+        run: ./fs-probe/win-check.ps1 fsp/alma/stress fsp/check-windows-${{ matrix.kernel }}/stress
+      - shell: pwsh
+        if: always()
+        run: Get-Content fsp/check-windows-${{ matrix.kernel }}/*.check, fsp/check-windows-${{ matrix.kernel }}/stress/*.check | Add-Content $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
