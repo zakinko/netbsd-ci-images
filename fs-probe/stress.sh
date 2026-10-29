@@ -116,11 +116,16 @@ for load in fsx fss; do
 			[ $st = 0 ] || grep -vE '^[0-9]+\(|^ *$' $out/$n.$seed | head -12 | cut -c1-160 | sed 's/^/    /' | tee -a $sum
 		done ;;
 	fss)
-		timeout 900 $fsstress -d /mnt/p/fss -n 4000 -p 4 -s 1 > $out/$n.log 2>&1
+		# -v は操作を一つずつ記録する。中身が変わったファイルに何が
+		# 起きたかを後で辿る。
+		timeout 900 $fsstress -v -d /mnt/p/fss -n 4000 -p 4 -s 1 > $out/$n.log 2>&1
 		note "fsstress: exit $?" ;;
 	esac
 	sync
 	tree > $out/$n.tree1
+	# remount の前に見えている中身を写しておき、後で byte 単位で比べる。
+	rm -rf $work/before; mkdir -p $work/before
+	(cd /mnt/p && find . -xdev -type f -print0 | cpio -0pdm --quiet $work/before) 2>/dev/null
 	# Windows の chkdsk は file record の番号で言う。ここでは inode 番号が
 	# MFT の record 番号なので、win-check.ps1 が path に引き直せるよう残す。
 	(cd /mnt/p && find . -xdev -printf '%i %y %s %p\n') > $out/$n.inodes
@@ -147,6 +152,24 @@ for load in fsx fss; do
 		tree > $out/$n.tree2
 		umount /mnt/p
 		diff $out/$n.tree1 $out/$n.tree2 | grep '^[<>]' > $out/$n.treediff
+		# 中身の違うファイル: 違う byte の数、最初と最後の offset、
+		# 前後どちらが 0 か、その辺りの 16 進、そのファイルへの操作。
+		nmount $drv ${loop}p1 2>> $out/$n.err &&
+		grep -E '^> [0-9a-f]{64} ' $out/$n.treediff | awk '{ print $3 }' | head -4 | while read f; do
+			cmp -l $work/before/$f /mnt/p/$f > $work/cmp 2>/dev/null
+			first=$(head -1 $work/cmp | awk '{ print $1 - 1 }')
+			last=$(tail -1 $work/cmp | awk '{ print $1 - 1 }')
+			note "  $f: size $(stat -c %s /mnt/p/$f), $(wc -l < $work/cmp) bytes differ, offsets $first..$last; zero before $(awk '$2 == 0' $work/cmp | wc -l), zero after $(awk '$3 == 0' $work/cmp | wc -l)"
+			for side in $work/before /mnt/p; do
+				printf '    %-6s ' ${side##*/}
+				od -An -tx1 -j $first -N 16 $side/$f | tr -s ' ' | tee -a $sum
+			done
+			# 記録の path は各プロセスの fss/pN からの相対で、行頭が N/。
+			pn=$(echo $f | sed -E 's|^\./fss/p([0-9]+)/.*|\1|')
+			rel=$(echo $f | sed -E 's|^\./fss/p[0-9]+/||')
+			grep -E "^$pn/[0-9]+: .*[ /]?$rel([ \[]|\$)" $out/$n.log | tail -10 | cut -c1-150 | sed 's/^/    op /' | tee -a $sum
+		done
+		umount /mnt/p 2>/dev/null
 		note "after remount: differing lines $(wc -l < $out/$n.treediff) of $(wc -l < $out/$n.tree1) ($(kinds $out/$n.treediff))"
 		grep -vE '^[<>] d ' $out/$n.treediff | head -6 | cut -c1-160 | tee -a $sum
 		# ディレクトリの大きさは前後を並べる (path: 前 -> 後、子の数)。
