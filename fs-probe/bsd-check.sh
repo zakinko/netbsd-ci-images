@@ -42,6 +42,9 @@ for f in $in/$pat; do
 			echo "-- check hashes kept: ${ck:-no (FS_METACKHASH clear)}" ;;
 		NetBSD)  dumpfs -s $rdev 2>&1 | grep -iE "^flags|quota|magic" ;;
 		esac
+		# fs_clean: Linux が正しく外した fs は 1 (FreeBSD) / 0x01 (NetBSD)、
+		# mount したままの写し (*-crash) は 0 のはず (ufs-10)。
+		echo "-- clean: $(dumpfs $( [ $(uname -s) = NetBSD ] && echo -s ) $rdev 2>/dev/null | grep '^cgrotor' | sed 's/.*clean[[:space:]]*//')"
 		echo "-- fsck_ffs -n -f"
 		fsck_ffs -n -f $rdev 2>&1 && echo "fsck exit 0" || echo "fsck exit $?"
 		if mount -r $dev /mnt/p; then

@@ -180,6 +180,14 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 			bench "ufs:$n" /mnt/p
 			df -k /mnt/p | tail -1 >> $sum
 		fi
+		# 書いている最中に落ちた fs の代わりに、mount したままの写しを
+		# 残す。BSD の fsck が飛ばさないよう fs_clean が 0 のはずで
+		# (ufs-10)、bsd-check.sh が dumpfs で見る。
+		case $n in
+		netbsd-ffs2|freebsd-ufs2)
+			sync
+			cp --sparse=always $work/$n.img $out/$n-crash.img ;;
+		esac
 		umount /mnt/p
 		drop
 		if mount -t ufs -o ro,ufstype=$t $loop /mnt/p 2>>$out/$n.err; then
@@ -200,6 +208,17 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	# 計算か欄の位置が違う (FreeBSD の作った image では 0 のはず)。
 	note "check-hash mismatches while reading and writing: $(cat $out/$n.ro.dmesg $out/$n.rw.dmesg | grep -c 'check-hash of .* does not match')"
 	losetup -d $loop
+	if [ -e $out/$n-crash.img ]; then
+		# Linux 自身も、clean でない fs を rw にしてはいけない。
+		cl=$(losetup -f --show $out/$n-crash.img)
+		mount -t ufs -o rw,ufstype=$t $cl /mnt/p 2>/dev/null
+		note "crash copy: rw mount gives $(awk '$2 == "/mnt/p" { print $4 }' /proc/mounts | cut -d, -f1) (expect ro)"
+		mount -o remount,rw /mnt/p 2>/dev/null
+		note "crash copy: remount,rw exit $? (expect non-zero); mount says $(awk '$2 == "/mnt/p" { print $4 }' /proc/mounts | cut -d, -f1)"
+		umount /mnt/p 2>/dev/null
+		losetup -d $cl
+		dmesg -c > $out/$n-crash.dmesg
+	fi
 	cp --sparse=always $work/$n.img $out/$n.img
 	cp $in/$n.manifest $out/$n.manifest
 	cp $in/$n.ea-expect $out/ 2>/dev/null

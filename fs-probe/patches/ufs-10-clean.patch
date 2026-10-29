@@ -1,0 +1,83 @@
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -576,6 +576,27 @@
+ 	UFSD("EXIT\n");
+ }
+ 
++/*
++ * FreeBSD and NetBSD keep fs_clean at 0 (NetBSD: 2, FS_WASCLEAN) while
++ * a filesystem is mounted read-write and set it back to 1 when it is
++ * unmounted, so that after a crash their fsck checks the filesystem
++ * instead of passing it as clean.  This driver used to leave it at 1.
++ */
++static void ufs_44bsd_set_clean(struct super_block *sb, bool clean)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct ufs_super_block_first *usb1 = ubh_get_usb_first(uspi);
++
++	if ((UFS_SB(sb)->s_flags & UFS_ST_MASK) != UFS_ST_44BSD ||
++	    usb1->fs_clean == UFS_FSBAD)
++		return;
++	usb1->fs_clean = clean ? UFS_FSCLEAN : UFS_FSACTIVE;
++	ufs_mark_usb_dirty(sb);
++	/* FreeBSD's ffs_mountfs() writes it with MNT_WAIT. */
++	if (!clean)
++		ubh_sync_block(USPI_UBH(uspi));
++}
++
+ /**
+  * ufs_put_super_internal() - put on-disk intrenal structures
+  * @sb: pointer to super_block structure
+@@ -592,6 +613,7 @@
+ 	
+ 	UFSD("ENTER\n");
+ 
++	ufs_44bsd_set_clean(sb, true);
+ 	ufs_put_cstotal(sb);
+ 	size = uspi->s_cssize;
+ 	blks = (size + uspi->s_fsize - 1) >> uspi->s_fshift;
+@@ -1089,6 +1111,12 @@
+ 			UFSD("fs is clean\n");
+ 			break;
+ 		case UFS_FSSTABLE:
++			/* NetBSD's FS_WASCLEAN: mounted, or not unmounted */
++			if ((flags & UFS_ST_MASK) == UFS_ST_44BSD) {
++				pr_err("%s(): fs is active\n", __func__);
++				sb->s_flags |= SB_RDONLY;
++				break;
++			}
+ 			UFSD("fs is stable\n");
+ 			break;
+ 		case UFS_FSLOG:
+@@ -1263,6 +1291,8 @@
+ 		ret = -ENOMEM;
+ 		goto failed;
+ 	}
++	if (!sb_rdonly(sb))
++		ufs_44bsd_set_clean(sb, false);
+ 
+ 	UFSD("EXIT\n");
+ 	return 0;
+@@ -1339,6 +1369,14 @@
+ 			mutex_unlock(&UFS_SB(sb)->s_lock);
+ 			return -EINVAL;
+ 		}
++		/* ufs_fill_super() stays read-only on such a filesystem too. */
++		if ((UFS_SB(sb)->s_flags & UFS_ST_MASK) == UFS_ST_44BSD &&
++		    usb1->fs_clean != UFS_FSCLEAN) {
++			pr_err("fs is not clean (fs_clean %d), staying read-only\n",
++			       usb1->fs_clean);
++			mutex_unlock(&UFS_SB(sb)->s_lock);
++			return -EROFS;
++		}
+ 		if (ufs_quota2_load(sb)) {
+ 			pr_err("cannot use the quota2 files, staying read-only\n");
+ 			mutex_unlock(&UFS_SB(sb)->s_lock);
+@@ -1352,6 +1390,7 @@
+ 		}
+ 		ufs_ckhash_remount_rw(sb);
+ 		sb->s_flags &= ~SB_RDONLY;
++		ufs_44bsd_set_clean(sb, false);
+ #endif
+ 	}
+ 	UFS_SB(sb)->s_on_err = ctx->on_err;
