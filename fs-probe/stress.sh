@@ -40,15 +40,24 @@ if [ ! -x $fsx ] || [ ! -x $fsstress ]; then
 	exit 1
 fi
 
-if [ "${FS_PATCH:-0}" = 1 ]; then
-	. $here/ksrc.sh
-	fs_build ntfs3 $out/ntfs3-build.log
-	note "ntfs3 build+insmod exit $?"
-fi
+# 当て物の ntfs3 は alma.sh が同じ VM で建てて insmod してある。ここで
+# 建て直すと、modprobe -r で外した後に当て済みの木への当て直しで失敗し、
+# 出荷の ntfs3 が読み込まれて、それを測っていた (run 40848746640)。
+# 建て直さず、読み込まれているのが自分で建てたもの (out-of-tree で
+# taint に O が付く) かを確かめる。
 drivers=ntfs-3g
 for m in ntfs3 ntfs; do
-	modprobe $m 2>/dev/null && drivers="$drivers $m"
+	[ -d /sys/module/$m ] || modprobe $m 2>/dev/null
+	[ -d /sys/module/$m ] && drivers="$drivers $m"
 done
+if [ "${FS_PATCH:-0}" = 1 ]; then
+	t=$(cat /sys/module/ntfs3/taint 2>/dev/null)
+	note "ntfs3 taint: '$t'"
+	case $t in
+	*O*) ;;
+	*)   note "!! FS_PATCH=1 but the loaded ntfs3 is not the patched build"; exit 1 ;;
+	esac
+fi
 note "ntfs drivers: $drivers"
 dmesg -c > /dev/null
 
