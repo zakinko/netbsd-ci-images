@@ -1,0 +1,23 @@
+--- a/fs/ntfs3/attrib.c
++++ b/fs/ntfs3/attrib.c
+@@ -727,8 +727,19 @@
+ 
+ 			le = (struct ATTR_LIST_ENTRY *)((u8 *)le - le_sz);
+ 		} else {
++			/*
++			 * Every cluster goes.  Setting evcn alone left the old
++			 * mapping pairs behind it: Linux reads no run past
++			 * evcn, but Windows' chkdsk reports such an attribute
++			 * record as corrupt.  Pack the empty run list, which
++			 * is the terminating zero byte.  mi_pack_runs() works
++			 * evcn out in CLST, which wraps to 0xffffffff here,
++			 * so set it after.
++			 */
++			err = mi_pack_runs(mi, attr, run, 0);
++			if (err)
++				goto out;
+ 			attr->nres.evcn = cpu_to_le64((u64)vcn - 1);
+-			mi->dirty = true;
+ 		}
+ 
+ 		attr_b->nres.alloc_size = cpu_to_le64(new_alloc_tmp);

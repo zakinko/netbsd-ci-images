@@ -31,5 +31,13 @@ for ino in map(int, sys.argv[2:]):
         if atype == 0xffffffff or alen == 0:
             break
         if atype == 0x80:
-            print(ino, 'len=%#x' % alen, rec[off:off + alen].hex(' '))
+            # A non-resident attribute with no clusters (evcn -1) has an
+            # empty run list: its mapping pairs start with the zero byte
+            # that ends them.
+            stale = ''
+            if rec[off + 8]:
+                evcn, run_off = struct.unpack_from('<qH', rec, off + 0x18)
+                if evcn == -1 and rec[off + run_off]:
+                    stale = ' STALE-RUNS'
+            print(ino, 'len=%#x%s' % (alen, stale), rec[off:off + alen].hex(' '))
         off += alen
