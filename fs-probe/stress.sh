@@ -149,7 +149,13 @@ for load in fsx fss; do
 		diff $out/$n.tree1 $out/$n.tree2 | grep '^[<>]' > $out/$n.treediff
 		note "after remount: differing lines $(wc -l < $out/$n.treediff) of $(wc -l < $out/$n.tree1) ($(kinds $out/$n.treediff))"
 		grep -vE '^[<>] d ' $out/$n.treediff | head -6 | cut -c1-160 | tee -a $sum
-		grep -E '^[<>] d ' $out/$n.treediff | head -4 | cut -c1-160 | tee -a $sum
+		# ディレクトリの大きさは前後を並べる (path: 前 -> 後、子の数)。
+		awk '$1 == "d" { print $3, $2 }' $out/$n.tree1 | sort > $out/$n.d1
+		awk '$1 == "d" { print $3, $2 }' $out/$n.tree2 | sort > $out/$n.d2
+		join $out/$n.d1 $out/$n.d2 | awk '$2 != $3' | head -6 | while read d a b; do
+			printf '    %s: %s -> %s (%s entries)\n' "$d" $a $b \
+				"$(grep -c "^. [0-9]* $d/[^/]*\$" $out/$n.tree1)"
+		done | tee -a $sum
 	else
 		note "!! remount failed: $(tail -1 $out/$n.err)"
 	fi
