@@ -114,7 +114,9 @@ fs_build1() {	# fs logfile
 	if [ "${FS_PATCH:-0}" = 1 ]; then
 		fs_warnings $log.base > $log.w-base
 		fs_warnings $log > $log.w-patched
-		comm -13 $log.w-base $log.w-patched > $log.w-new
+		# 新しく include した kernel の header が持ち込む警告は数えない。
+		# 測るのは当て物で書いたコードだけ。
+		comm -13 $log.w-base $log.w-patched | grep -v "^/usr/src/kernels/" > $log.w-new
 		echo "$fs W=123+sparse warnings: before $(wc -l < $log.w-base), after $(wc -l < $log.w-patched), new $(wc -l < $log.w-new)"
 		cat $log.w-new
 		[ -s $log.w-new ] && return 1

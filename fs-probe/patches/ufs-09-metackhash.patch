@@ -42,7 +42,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  
-@@ -614,8 +614,8 @@
+@@ -620,8 +620,8 @@
  	fs32_sub(sb, &UFS_SB(sb)->fs_cs(cgno).cs_nffree, count);
  	uspi->cs_total.cs_nffree -= count;
  	
@@ -53,7 +53,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  	ufs_mark_sb_dirty(sb);
-@@ -735,8 +735,8 @@
+@@ -741,8 +741,8 @@
  		fs32_add(sb, &ucg->cg_frsum[allocsize - count], 1);
  
  succed:
@@ -395,7 +395,7 @@
  		if (sb->s_flags & SB_SYNCHRONOUS)
 --- a/fs/ufs/inode.c
 +++ b/fs/ufs/inode.c
-@@ -735,8 +735,9 @@
+@@ -736,8 +736,9 @@
  	if ((UFS_SB(sb)->s_flags & UFS_TYPE_MASK) == UFS_TYPE_UFS2) {
  		struct ufs2_inode *ufs2_inode = (struct ufs2_inode *)bh->b_data;
  
@@ -407,7 +407,7 @@
  	} else {
  		struct ufs_inode *ufs_inode = (struct ufs_inode *)bh->b_data;
  
-@@ -876,8 +877,9 @@
+@@ -877,8 +878,9 @@
  	if (uspi->fs_magic == UFS2_MAGIC) {
  		struct ufs2_inode *ufs2_inode = (struct ufs2_inode *)bh->b_data;
  
@@ -419,7 +419,7 @@
  	} else {
  		struct ufs_inode *ufs_inode = (struct ufs_inode *) bh->b_data;
  
-@@ -998,6 +1000,7 @@
+@@ -999,6 +1001,7 @@
  	owned = ufs2_extattr_owned(inode, extsize, blk);
  	ui->ui_extsize = 0;
  	memset(ui->ui_extb, 0, sizeof(ui->ui_extb));
@@ -536,14 +536,14 @@
  	}
 --- a/fs/ufs/ufs.h
 +++ b/fs/ufs/ufs.h
-@@ -32,6 +32,7 @@
- 	spinlock_t work_lock; /* protects sync_work and work_queued */
- 	struct mutex s_lock;
- 	struct inode *s_q2_inode[2];	/* NetBSD quota2 files, see quota2.c */
+@@ -26,6 +26,7 @@
+ 	unsigned short s_cg_loaded;
+ 	unsigned s_flavour;
+ 	unsigned s_on_err;
 +	u32 s_metackhash;		/* check-hashes kept, see ckhash.c */
- 	struct mutex s_q2_lock;		/* serializes quota2 updates */
- };
- 
+ 	struct super_block *sb;
+ 	int work_queued; /* non-zero if the delayed work is queued */
+ 	struct delayed_work sync_work; /* FS sync delayed work */
 @@ -91,6 +92,17 @@
  u64 ufs_new_fragments(struct inode *, void *, u64 fragment, u64 goal,
  		unsigned count, int *err, struct folio *);

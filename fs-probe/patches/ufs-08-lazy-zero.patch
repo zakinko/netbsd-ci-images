@@ -25,49 +25,55 @@
  {
  	struct super_block *sb = inode->i_sb;
  	unsigned int shift = UFS_SB(sb)->s_uspi->s_nspfshift;
-@@ -335,14 +330,47 @@
+@@ -335,14 +330,53 @@
  				    (sector_t)n << shift, GFP_NOFS, 0);
  }
  
 +/*
-+ * How many of the @n fragments of @inode from file fragment @fragment lie
-+ * before EOF.
++ * How many of the @n new fragments of @inode from file fragment
++ * @fragment, taken for @folio, have to be zeroed on the device now: those
++ * before EOF, as when a hole is filled, and those before @folio, which
++ * EOF passes once @folio is written.  The rest are in @folio or past it,
++ * and past EOF; see ufs_clear_frags().
 + */
-+static unsigned int ufs_frags_before_eof(struct inode *inode, u64 fragment,
-+					 unsigned int n)
++static unsigned int ufs_frags_to_zero(struct inode *inode, u64 fragment,
++				      unsigned int n, struct folio *folio)
 +{
 +	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
 +	u64 eof = ((u64)i_size_read(inode) + uspi->s_fsize - 1) >>
 +		  uspi->s_fshift;
++	u64 limit = max(eof, (u64)folio_pos(folio) >> uspi->s_fshift);
 +
-+	if (fragment >= eof)
++	if (fragment >= limit)
 +		return 0;
-+	return (unsigned int)min_t(u64, n, eof - fragment);
++	return (unsigned int)min_t(u64, n, limit - fragment);
 +}
 +
 +/*
 + * Clear the @n new fragments from @beg, which hold file fragments from
-+ * @fragment on.  A data block taken for @locked_folio (@data set) is
-+ * larger than the page when the block is, and its other fragments would
-+ * be read back from the device as they are.  Those before EOF, as when
-+ * a hole is filled, are zeroed on the device now.  Those past EOF are
-+ * left: ufs_getfrag_block() hands them to a writer as new, so that
-+ * __block_write_begin() zeroes what the write does not cover, and
-+ * ufs_zero_past_eof() zeroes them before EOF moves past them otherwise.
-+ * Zeroing them here as well was a synchronous write for every block of
-+ * a growing file, and most of the time spent writing it.
++ * @fragment on.  A data block taken for @locked_folio is larger than the
++ * page when the block is, and its other fragments would be read back
++ * from the device as they are.  Those that ufs_frags_to_zero() names are
++ * zeroed on the device now.  The others are left:
++ * ufs_getfrag_block() hands those in a folio being written to the writer
++ * as new, so that __block_write_begin() zeroes what the write does not
++ * cover, and ufs_zero_past_eof() and ufs_alloc_lastblock() zero the rest
++ * before EOF moves past them.  Zeroing them here as well was a
++ * synchronous write for every block of a growing file, and most of the
++ * time spent writing it.
 + */
  static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
 -			    int sync)
-+			    u64 fragment, int data)
++			    u64 fragment, struct folio *locked_folio)
  {
  	struct buffer_head *bh;
 -	sector_t end = beg + n;
 +	sector_t end;
++	bool data = locked_folio != NULL;
  
 -	if ((IS_SYNC(inode) || sync) && !ufs_zero_frags_now(inode, beg, n))
 +	if (data)
-+		n = ufs_frags_before_eof(inode, fragment, n);
++		n = ufs_frags_to_zero(inode, fragment, n, locked_folio);
 +	if (!n)
  		return;
 +	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
@@ -76,7 +82,7 @@
  	for (; beg < end; ++beg) {
  		bh = sb_getblk(inode->i_sb, beg);
  		lock_buffer(bh);
-@@ -350,7 +378,7 @@
+@@ -350,7 +384,7 @@
  		set_buffer_uptodate(bh);
  		mark_buffer_dirty(bh);
  		unlock_buffer(bh);
@@ -85,31 +91,31 @@
  			sync_dirty_buffer(bh);
  		brelse(bh);
  	}
-@@ -443,7 +471,8 @@
+@@ -443,7 +477,8 @@
  		result = ufs_alloc_fragments (inode, cgno, goal, count, err);
  		if (result) {
  			ufs_clear_frags(inode, result + oldcount,
 -					newcount - oldcount, locked_folio != NULL);
 +					newcount - oldcount, fragment,
-+					locked_folio != NULL);
++					locked_folio);
  			*err = 0;
  			write_seqlock(&UFS_I(inode)->meta_lock);
  			ufs_cpu_to_data_ptr(sb, p, result);
-@@ -467,7 +496,7 @@
+@@ -467,7 +502,7 @@
  						fragment + count);
  		read_sequnlock_excl(&UFS_I(inode)->meta_lock);
  		ufs_clear_frags(inode, result + oldcount, newcount - oldcount,
 -				locked_folio != NULL);
-+				fragment, locked_folio != NULL);
++				fragment, locked_folio);
  		mutex_unlock(&UFS_SB(sb)->s_lock);
  		UFSD("EXIT, result %llu\n", (unsigned long long)result);
  		return result;
-@@ -488,7 +517,7 @@
+@@ -488,7 +523,7 @@
  	result = ufs_alloc_fragments (inode, cgno, goal, request, err);
  	if (result) {
  		ufs_clear_frags(inode, result + oldcount, newcount - oldcount,
 -				locked_folio != NULL);
-+				fragment, locked_folio != NULL);
++				fragment, locked_folio);
  		mutex_unlock(&UFS_SB(sb)->s_lock);
  		ufs_change_blocknr(inode, fragment - oldcount, oldcount,
  				   uspi->s_sbbase + tmp,
@@ -148,7 +154,7 @@
  			set_buffer_new(bh_result);
  	}
  	mutex_unlock(&UFS_I(inode)->truncate_mutex);
-@@ -445,11 +459,45 @@
+@@ -445,11 +459,46 @@
  	return err;
  
  done:
@@ -165,8 +171,10 @@
 + * @inode is to grow from @from to @to bytes with nothing written in
 + * between.  Zero on the device the fragments that the new size takes in
 + * and that ufs_new_fragments() left as they were.  Only the block that
-+ * holds EOF can have such fragments; blocks wholly past EOF are freed
-+ * by truncation.
++ * holds EOF can have such fragments, as blocks wholly past EOF are freed
++ * by truncation, and only as far as i_lastfrag: a short file's last
++ * block is allocated a fragment at a time, and the fragments after it
++ * belong to someone else.
 + */
 +static int ufs_zero_past_eof(struct inode *inode, loff_t from, loff_t to)
 +{
@@ -178,13 +186,12 @@
 +	u64 phys64;
 +
 +	last = min(last, (first | uspi->s_fpbmask) + 1);
-+	if (first >= last)
-+		return 0;
 +	depth = ufs_block_to_path(inode, first >> uspi->s_fpbshift, offsets);
 +	if (!depth)
 +		return 0;
 +	mutex_lock(&UFS_I(inode)->truncate_mutex);
-+	phys64 = ufs_frag_map(inode, offsets, depth);
++	last = min(last, UFS_I(inode)->i_lastfrag);
++	phys64 = first < last ? ufs_frag_map(inode, offsets, depth) : 0;
 +	mutex_unlock(&UFS_I(inode)->truncate_mutex);
 +	if (!phys64)
 +		return 0;
@@ -195,7 +202,7 @@
  static int ufs_writepages(struct address_space *mapping,
  		struct writeback_control *wbc)
  {
-@@ -488,8 +536,14 @@
+@@ -488,8 +537,14 @@
  			   loff_t pos, unsigned len,
  			   struct folio **foliop, void **fsdata)
  {
@@ -210,7 +217,52 @@
  	ret = block_write_begin(mapping, pos, len, foliop, ufs_getfrag_block);
  	if (unlikely(ret))
  		ufs_write_failed(mapping, pos + len);
-@@ -1311,6 +1365,12 @@
+@@ -1163,6 +1218,36 @@
+ 	ubh_brelse(ubh);
+ }
+ 
++/*
++ * The fragments of @folio from the current EOF up to @lastfrag, which
++ * ufs_new_fragments() may have just taken without zeroing them on the
++ * device, are about to come inside EOF.  @folio was read at the current
++ * size and holds zeroes for them; write those out.
++ */
++static void ufs_dirty_past_eof(struct folio *folio, sector_t lastfrag)
++{
++	struct inode *inode = folio->mapping->host;
++	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
++	u64 eof = ((u64)i_size_read(inode) + uspi->s_fsize - 1) >>
++		  uspi->s_fshift;
++	sector_t frag = (sector_t)folio->index <<
++			(PAGE_SHIFT - inode->i_blkbits);
++	struct buffer_head *head = folio_buffers(folio), *bh = head;
++	bool dirtied = false;
++
++	do {
++		if (frag >= eof && frag < lastfrag) {
++			set_buffer_uptodate(bh);
++			mark_buffer_dirty(bh);
++			dirtied = true;
++		}
++		frag++;
++		bh = bh->b_this_page;
++	} while (bh != head);
++	if (dirtied)
++		folio_mark_dirty(folio);
++}
++
+ static int ufs_alloc_lastblock(struct inode *inode, loff_t size)
+ {
+ 	int err = 0;
+@@ -1210,6 +1295,7 @@
+ 	       mark_buffer_dirty(bh);
+ 		folio_mark_dirty(folio);
+        }
++	ufs_dirty_past_eof(folio, lastfrag);
+ 
+        if (lastfrag >= UFS_IND_FRAGMENT) {
+ 	       end = uspi->s_fpb - ufs_fragnum(lastfrag) - 1;
+@@ -1311,6 +1397,12 @@
  		return -EINVAL;
  	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
  		return -EPERM;
