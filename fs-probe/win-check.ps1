@@ -32,6 +32,11 @@ foreach ($f in Get-ChildItem -LiteralPath $In -Filter *.vhd) {
 		foreach ($rec in $recs) {
 			$hit = Get-Content $map | Where-Object { $_ -like "$rec *" } | Select-Object -First 1
 			$log += "-- record $('{0:X}' -f $rec) ($rec): $(if ($hit) { $hit } else { 'not in the Linux inode list' })"
+			$attrs = Join-Path $In "$name.attrs"
+			if (Test-Path $attrs) {
+				$a = Get-Content $attrs | Where-Object { $_ -like "$rec *" } | Select-Object -First 1
+				if ($a) { $log += "   `$DATA: $a" }
+			}
 		}
 	}
 

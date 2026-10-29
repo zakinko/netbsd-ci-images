@@ -96,8 +96,11 @@ for load in fsx fss; do
 	fsx)
 		# 三つの種で、mmap も含めて。fallocate、punch hole、zero range、
 		# collapse/insert range はドライバが受けるかを fsx 自身が確かめる。
+		# ntfs-3g は XFS_IOC_EXCHANGE_RANGE の下見を通した後に EINVAL を
+		# 返し (EOPNOTSUPP でなく)、fsx はそれを失敗として止まる。
+		xo=; [ $drv = ntfs-3g ] && xo=-0
 		for seed in 1 2 3; do
-			timeout 900 $fsx -q -N 30000 -S $seed -l 8388608 /mnt/p/fsx.$seed \
+			timeout 900 $fsx -q $xo -N 30000 -S $seed -l 8388608 /mnt/p/fsx.$seed \
 				> $out/$n.$seed 2>&1
 			st=$?
 			note "fsx seed $seed: exit $st"
@@ -113,7 +116,18 @@ for load in fsx fss; do
 	# MFT の record 番号なので、win-check.ps1 が path に引き直せるよう残す。
 	(cd /mnt/p && find . -xdev -printf '%i %y %s %p\n') > $out/$n.inodes
 	umount /mnt/p
-	echo 3 > /proc/sys/vm/drop_caches
+	# 大きさ 0 のファイルの $DATA 属性の頭。ntfs3 の fsstress の後、
+	# Windows の chkdsk がそういうファイルの $DATA を壊れていると言った。
+	# 一行一ファイルで残し、形ごとの数を出す。
+	awk '$2 == "f" && $3 == 0 { print $1 }' $out/$n.inodes | while read ino; do
+		printf '%s %s\n' $ino "$(ntfsinfo -v -i $ino ${loop}p1 2>/dev/null |
+			awk '/Dumping attribute \$DATA/ { p = 1; next }
+			     /Dumping attribute/ { p = 0 }
+			     p && /Resident|VCN|[Ss]ize|Flags|Compression unit|Mapping pairs/ {
+				gsub(/[ \t]+/, " "); printf "%s;", $0 }')"
+	done > $out/$n.attrs
+	note "zero-size files by \$DATA header: $(wc -l < $out/$n.attrs)"
+	cut -d' ' -f2- $out/$n.attrs | sed -E 's/\([^)]*\)//g' | sort | uniq -c | sort -rn | head -6 | cut -c1-220 | sed 's/^/    /' | tee -a $sum
 	if nmount $drv ${loop}p1 2>> $out/$n.err; then
 		tree > $out/$n.tree2
 		umount /mnt/p
