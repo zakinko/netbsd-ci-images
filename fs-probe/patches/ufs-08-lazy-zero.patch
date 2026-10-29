@@ -123,7 +123,7 @@
 + * Is file fragment @fragment of @inode past EOF?  ufs_new_fragments()
 + * leaves such fragments of a data block unzeroed on the device.
 + */
-+static bool ufs_frag_past_eof(struct inode *inode, sector_t fragment)
++static bool __maybe_unused ufs_frag_past_eof(struct inode *inode, sector_t fragment)
 +{
 +	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
 +
@@ -139,24 +139,13 @@
   */
  
  static int ufs_getfrag_block(struct inode *inode, sector_t fragment, struct buffer_head *bh_result, int create)
-@@ -437,7 +451,7 @@
- 	if (phys64) {
- 		phys64 += frag;
- 		map_bh(bh_result, sb, phys64);
--		if (new)
-+		if (new || ufs_frag_past_eof(inode, fragment))
- 			set_buffer_new(bh_result);
- 	}
- 	mutex_unlock(&UFS_I(inode)->truncate_mutex);
-@@ -445,11 +459,45 @@
+@@ -445,11 +459,43 @@
  	return err;
  
  done:
 -	if (phys64)
 +	if (phys64) {
  		map_bh(bh_result, sb, phys64 + frag);
-+		if (create && ufs_frag_past_eof(inode, fragment))
-+			set_buffer_new(bh_result);
 +	}
  	return 0;
  }
@@ -195,7 +184,7 @@
  static int ufs_writepages(struct address_space *mapping,
  		struct writeback_control *wbc)
  {
-@@ -488,8 +536,14 @@
+@@ -488,8 +534,14 @@
  			   loff_t pos, unsigned len,
  			   struct folio **foliop, void **fsdata)
  {
@@ -210,7 +199,7 @@
  	ret = block_write_begin(mapping, pos, len, foliop, ufs_getfrag_block);
  	if (unlikely(ret))
  		ufs_write_failed(mapping, pos + len);
-@@ -1311,6 +1365,12 @@
+@@ -1311,6 +1363,12 @@
  		return -EINVAL;
  	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
  		return -EPERM;
