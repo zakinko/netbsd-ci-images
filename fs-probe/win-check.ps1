@@ -23,6 +23,17 @@ foreach ($f in Get-ChildItem -LiteralPath $In -Filter *.vhd) {
 	$log += "-- chkdsk $d (read-only)"
 	$log += (chkdsk $d 2>&1 | Out-String)
 	$log += "chkdsk exit $LASTEXITCODE"
+	# chkdsk は file record の番号 (16 進) で言う。Linux 側が残した
+	# inode 番号と path の表 (stress.sh) があれば、path に引き直す。
+	$map = Join-Path $In "$name.inodes"
+	if (Test-Path $map) {
+		$recs = [regex]::Matches(($log -join "`n"), 'file record segment ([0-9A-Fa-f]+)') |
+			ForEach-Object { [Convert]::ToInt64($_.Groups[1].Value, 16) } | Sort-Object -Unique
+		foreach ($rec in $recs) {
+			$hit = Get-Content $map | Where-Object { $_ -like "$rec *" } | Select-Object -First 1
+			$log += "-- record $('{0:X}' -f $rec) ($rec): $(if ($hit) { $hit } else { 'not in the Linux inode list' })"
+		}
+	}
 
 	$root = "$d\linux"
 	$m = Join-Path $In "$name.linux.manifest"

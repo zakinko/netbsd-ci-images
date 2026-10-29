@@ -66,51 +66,71 @@ nmount() {	# driver dev
 tree() { (cd /mnt/p && find . -xdev ! -name . -printf '%y %s %p\n' | LC_ALL=C sort &&
 	find . -xdev -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) 2>&1; }
 
+# remount の前後の差を種類ごとに数える。d はディレクトリの行 (大きさ)、
+# f/l はファイルの型と大きさ、hash は中身。
+kinds() {	# diff of two tree() outputs
+	printf 'dir %s, file %s, hash %s' \
+		"$(grep -cE '^[<>] d ' "$1")" \
+		"$(grep -cE '^[<>] [flcbps] [0-9]' "$1")" \
+		"$(grep -cE '^[<>] [0-9a-f]{64} ' "$1")"
+}
+
+# 一つの image に一つの負荷。どちらで壊れたかを分けるため。
 for drv in $drivers; do
+for load in fsx fss; do
+	n=stress-$drv-$load
 	note ""
-	note "### $drv"
-	raw=$work/stress-$drv.raw
+	note "### $n"
+	raw=$work/$n.raw
 	rm -f $raw
 	truncate -s 2G $raw
 	echo 'type=7' | sfdisk -q $raw
 	loop=$(losetup -f -P --show $raw)
-	mkntfs -Q -L STRESS ${loop}p1 > $out/stress-$drv.mkntfs 2>&1
-	if ! nmount $drv ${loop}p1 2> $out/stress-$drv.err; then
-		note "!! mount failed: $(tail -1 $out/stress-$drv.err)"
+	mkntfs -Q -L STRESS ${loop}p1 > $out/$n.mkntfs 2>&1
+	if ! nmount $drv ${loop}p1 2> $out/$n.err; then
+		note "!! mount failed: $(tail -1 $out/$n.err)"
 		losetup -d $loop
 		continue
 	fi
-	# fsx: 三つの種で、mmap も含めて。fallocate、punch hole、zero range、
-	# collapse/insert range はドライバが受けるかを fsx 自身が確かめて使う。
-	for seed in 1 2 3; do
-		f=/mnt/p/fsx.$seed
-		timeout 900 $fsx -q -N 30000 -S $seed -l 8388608 $f \
-			> $out/stress-$drv.fsx$seed 2>&1
-		st=$?
-		note "fsx seed $seed: exit $st $(grep -E 'ops|LOG DUMP|READ BAD|Size error|error' $out/stress-$drv.fsx$seed | head -2 | tr '\n' ';')"
-	done
-	# fsstress: 4 本並行。終わったら中身を取り、remount してもう一度取る。
-	timeout 900 $fsstress -d /mnt/p/fss -n 4000 -p 4 -s 1 \
-		> $out/stress-$drv.fsstress 2>&1
-	note "fsstress: exit $?"
+	case $load in
+	fsx)
+		# 三つの種で、mmap も含めて。fallocate、punch hole、zero range、
+		# collapse/insert range はドライバが受けるかを fsx 自身が確かめる。
+		for seed in 1 2 3; do
+			timeout 900 $fsx -q -N 30000 -S $seed -l 8388608 /mnt/p/fsx.$seed \
+				> $out/$n.$seed 2>&1
+			st=$?
+			note "fsx seed $seed: exit $st"
+			[ $st = 0 ] || grep -vE '^[0-9]+\(|^ *$' $out/$n.$seed | head -12 | cut -c1-160 | sed 's/^/    /' | tee -a $sum
+		done ;;
+	fss)
+		timeout 900 $fsstress -d /mnt/p/fss -n 4000 -p 4 -s 1 > $out/$n.log 2>&1
+		note "fsstress: exit $?" ;;
+	esac
 	sync
-	tree > $out/stress-$drv.tree1
+	tree > $out/$n.tree1
+	# Windows の chkdsk は file record の番号で言う。ここでは inode 番号が
+	# MFT の record 番号なので、win-check.ps1 が path に引き直せるよう残す。
+	(cd /mnt/p && find . -xdev -printf '%i %y %s %p\n') > $out/$n.inodes
 	umount /mnt/p
 	echo 3 > /proc/sys/vm/drop_caches
-	if nmount $drv ${loop}p1 2>> $out/stress-$drv.err; then
-		tree > $out/stress-$drv.tree2
+	if nmount $drv ${loop}p1 2>> $out/$n.err; then
+		tree > $out/$n.tree2
 		umount /mnt/p
-		note "after remount: differing lines $(diff $out/stress-$drv.tree1 $out/stress-$drv.tree2 | grep -c '^[<>]') of $(wc -l < $out/stress-$drv.tree1)"
-		diff $out/stress-$drv.tree1 $out/stress-$drv.tree2 | grep '^[<>]' | head -6 | cut -c1-160 | tee -a $sum
+		diff $out/$n.tree1 $out/$n.tree2 | grep '^[<>]' > $out/$n.treediff
+		note "after remount: differing lines $(wc -l < $out/$n.treediff) of $(wc -l < $out/$n.tree1) ($(kinds $out/$n.treediff))"
+		grep -vE '^[<>] d ' $out/$n.treediff | head -6 | cut -c1-160 | tee -a $sum
+		grep -E '^[<>] d ' $out/$n.treediff | head -4 | cut -c1-160 | tee -a $sum
 	else
-		note "!! remount failed: $(tail -1 $out/stress-$drv.err)"
+		note "!! remount failed: $(tail -1 $out/$n.err)"
 	fi
-	ntfsfix -n ${loop}p1 > $out/stress-$drv.ntfsfix 2>&1
+	ntfsfix -n ${loop}p1 > $out/$n.ntfsfix 2>&1
 	note "ntfsfix -n exit $?"
-	dmesg -c > $out/stress-$drv.dmesg
-	note "dmesg: $(grep -ciE 'warning|bug|error|corrupt|oops|call trace' $out/stress-$drv.dmesg) suspicious lines"
-	grep -iE 'warning|bug|error|corrupt|oops|call trace' $out/stress-$drv.dmesg | head -8 | cut -c1-200 | sed 's/^/    /' | tee -a $sum
+	dmesg -c > $out/$n.dmesg
+	note "dmesg: $(grep -ciE 'warning|bug|error|corrupt|oops|call trace' $out/$n.dmesg) suspicious lines"
+	grep -iE 'warning|bug|error|corrupt|oops|call trace' $out/$n.dmesg | head -8 | cut -c1-200 | sed 's/^/    /' | tee -a $sum
 	losetup -d $loop
-	qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on $raw $out/stress-$drv.vhd
+	qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on $raw $out/$n.vhd
 	rm -f $raw
+done
 done
