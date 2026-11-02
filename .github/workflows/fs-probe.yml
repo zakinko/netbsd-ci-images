@@ -109,7 +109,7 @@ jobs:
       - name: 再起動から戻るのを待ち、走っている kernel を確かめる
         run: |
           printf 'uname -r\n' > $RUNNER_TEMP/u.sh
-          if [ ${{ matrix.kernel }} = ml ]; then sleep 45; fi
+          sleep 45
           for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
       - shell: almalinux {0}
         run: |
@@ -121,6 +121,8 @@ jobs:
           # VM ごと応答しなくなったとき (run 41480691322 の rhel)、残るのは
           # host 側の serial.log だけなので、kernel の声を全部そこへ出す。
           cat /proc/cmdline
+          grep -qw nousershstk /proc/cmdline
+          if grep -qw user_shstk /proc/cpuinfo; then exit 1; fi
           dmesg -n 8
       - shell: almalinux {0}
         run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/alma.sh fsp/in fsp/alma-${{ matrix.kernel }}
@@ -185,7 +187,7 @@ jobs:
       - name: 再起動から戻るのを待ち、走っている kernel を確かめる
         run: |
           printf 'uname -r\n' > $RUNNER_TEMP/u.sh
-          if [ ${{ matrix.kernel }} = ml ]; then sleep 45; fi
+          sleep 45
           for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
       - shell: almalinux {0}
         run: |
@@ -197,6 +199,8 @@ jobs:
           # VM ごと応答しなくなったとき (run 41480691322 の rhel)、残るのは
           # host 側の serial.log だけなので、kernel の声を全部そこへ出す。
           cat /proc/cmdline
+          grep -qw nousershstk /proc/cmdline
+          if grep -qw user_shstk /proc/cpuinfo; then exit 1; fi
           dmesg -n 8
       - shell: almalinux {0}
         run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/bench.sh fsp/in fsp/bench-${{ matrix.kernel }}
