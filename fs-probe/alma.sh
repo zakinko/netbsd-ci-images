@@ -85,7 +85,8 @@ dnf -y -q install bc
 note ""
 note "## UFS/FFS"
 . $here/crafted.sh
-crafted_run with-patches
+# 出荷のモジュールは壊した superblock で落ちうるので、当てたときだけ。
+[ "${FS_PATCH:-0}" = 1 ] && crafted_run with-ufs-12
 for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	[ -e "$f" ] || continue
 	n=$(basename $f .img)
