@@ -118,12 +118,19 @@ jobs:
           if [ ${{ matrix.kernel }} = ml ]; then
             test "$(uname -r)" = "$(cat /var/tmp/want-kernel)"
           fi
+          # VM ごと応答しなくなったとき (run 41480691322 の rhel)、残るのは
+          # host 側の serial.log だけなので、kernel の声を全部そこへ出す。
+          cat /proc/cmdline
+          dmesg -n 8
       - shell: almalinux {0}
         run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/alma.sh fsp/in fsp/alma-${{ matrix.kernel }}
       - shell: almalinux {0}
         if: always()
         timeout-minutes: 60
         run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/stress.sh fsp/alma-${{ matrix.kernel }}/stress
+      - name: VM の serial console の末尾
+        if: failure()
+        run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 60000 {} \;
       - run: cat fsp/alma-${{ matrix.kernel }}/summary.txt fsp/alma-${{ matrix.kernel }}/stress/summary.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
@@ -187,8 +194,15 @@ jobs:
           if [ ${{ matrix.kernel }} = ml ]; then
             test "$(uname -r)" = "$(cat /var/tmp/want-kernel)"
           fi
+          # VM ごと応答しなくなったとき (run 41480691322 の rhel)、残るのは
+          # host 側の serial.log だけなので、kernel の声を全部そこへ出す。
+          cat /proc/cmdline
+          dmesg -n 8
       - shell: almalinux {0}
         run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/bench.sh fsp/in fsp/bench-${{ matrix.kernel }}
+      - name: VM の serial console の末尾
+        if: failure()
+        run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 60000 {} \;
       - run: cat fsp/bench-${{ matrix.kernel }}/bench.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
