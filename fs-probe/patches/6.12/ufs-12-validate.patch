@@ -1,0 +1,225 @@
+--- a/fs/ufs/ckhash.c
++++ b/fs/ufs/ckhash.c
+@@ -162,6 +162,13 @@
+ 	/* FreeBSD's dinode.h: 256 bytes, di_ckhash at 244 */
+ 	BUILD_BUG_ON(sizeof(struct ufs2_inode) != 256);
+ 	BUILD_BUG_ON(offsetof(struct ufs2_inode, ui_ckhash) != 244);
++	/*
++	 * ufs_fill_super() refuses a superblock shorter than three sectors
++	 * and a cylinder group shorter than a fragment, of at least one
++	 * sector; both fields lie inside what has been read.
++	 */
++	BUILD_BUG_ON(UFS_SB_CKHASH_OFFSET + 4 > 3 * UFS_SECTOR_SIZE);
++	BUILD_BUG_ON(UFS_CG_CKHASH_OFFSET + 4 > UFS_SECTOR_SIZE);
+ 
+ 	UFS_SB(sb)->s_metackhash = 0;
+ 	if ((UFS_SB(sb)->s_flags & UFS_ST_MASK) != UFS_ST_44BSD)
+@@ -171,16 +178,6 @@
+ 	if (!(flags & UFS_METACKHASH) || !metackhash)
+ 		return;
+ 	UFS_SB(sb)->s_metackhash = metackhash & UFS_CK_SUPPORTED;
+-	/*
+-	 * A cylinder group is read in whole fragments.  FreeBSD's newfs
+-	 * rounds fs_cgsize up to one; do not guess at one that is not.
+-	 */
+-	if (uspi->s_cgsize % uspi->s_fsize) {
+-		pr_warn("%s: cylinder group size %u is not a whole number of fragments\n",
+-			sb->s_id, uspi->s_cgsize);
+-		ufs_ckhash_give_up(sb);
+-		return;
+-	}
+ 	if (!ufs_ckhash_kept(sb, UFS_CK_SUPERBLOCK))
+ 		return;
+ 	ckhash = fs32_to_cpu(sb, *ufs_ubh_field(USPI_UBH(uspi), uspi->s_fsize,
+--- a/fs/ufs/quota2.c
++++ b/fs/ufs/quota2.c
+@@ -183,11 +183,45 @@
+ 	return err;
+ }
+ 
+-static int ufs_q2_read_header(struct inode *qi, struct ufs_q2_header *h)
++/* Where the hash table ends and the entries may start. */
++static u64 ufs_q2_table_end(const struct ufs_q2_header *h)
+ {
+-	return ufs_q2_read(qi, 0, h, sizeof(*h));
++	return offsetof(struct ufs_q2_header, q2h_entries) +
++	       ((u64)sizeof(h->q2h_entries[0]) << h->q2h_hash_shift);
+ }
+ 
++/*
++ * The header is read again for every update, and an entry offset taken
++ * from the file could have pointed back into it, so check it each time
++ * rather than only at load: q2h_hash_shift becomes a shift count.
++ */
++static int ufs_q2_read_header(struct super_block *sb, struct inode *qi,
++			      int type, struct ufs_q2_header *h)
++{
++	int err;
++
++	err = ufs_q2_read(qi, 0, h, sizeof(*h));
++	if (err)
++		return err;
++	if (fs32_to_cpu(sb, h->q2h_magic_number) != UFS_Q2_HEAD_MAGIC ||
++	    h->q2h_type != type || h->q2h_hash_shift > 15 ||
++	    fs16_to_cpu(sb, h->q2h_hash_size) != 1U << h->q2h_hash_shift)
++		return -EIO;
++	if (ufs_q2_size(qi) < ufs_q2_table_end(h))
++		return -EIO;
++	return 0;
++}
++
++/*
++ * An entry offset read from the file, from a hash chain or the free
++ * list.  One inside the header or the hash table would have the next
++ * write land there.
++ */
++static int ufs_q2_check_entry_pos(const struct ufs_q2_header *h, u64 pos)
++{
++	return pos < ufs_q2_table_end(h) ? -EIO : 0;
++}
++
+ static int ufs_q2_write_free(struct inode *qi, const struct ufs_q2_header *h)
+ {
+ 	return ufs_q2_write(qi, offsetof(struct ufs_q2_header, q2h_free),
+@@ -237,6 +271,9 @@
+ 	     pos = fs64_to_cpu(sb, e.q2e_next)) {
+ 		if (!max_steps--)
+ 			return -EIO;
++		err = ufs_q2_check_entry_pos(h, pos);
++		if (err)
++			return err;
+ 		err = ufs_q2_read(qi, pos, &e, sizeof(e));
+ 		if (err)
+ 			return err;
+@@ -299,6 +336,9 @@
+ 			return err;
+ 	}
+ 	pos = fs64_to_cpu(sb, h->q2h_free);
++	err = ufs_q2_check_entry_pos(h, pos);
++	if (err)
++		return err;
+ 	err = ufs_q2_read(qi, pos, &e, sizeof(e));
+ 	if (err)
+ 		return err;
+@@ -330,13 +370,13 @@
+  * @create is set, as getinoquota2() does for an increase.  *@off is 0
+  * when there is none and none was made.
+  */
+-static int ufs_q2_lookup(struct super_block *sb, struct inode *qi, u32 id,
+-			 bool create, u64 *off)
++static int ufs_q2_lookup(struct super_block *sb, struct inode *qi, int type,
++			 u32 id, bool create, u64 *off)
+ {
+ 	struct ufs_q2_header h;
+ 	int err;
+ 
+-	err = ufs_q2_read_header(qi, &h);
++	err = ufs_q2_read_header(sb, qi, type, &h);
+ 	if (err)
+ 		return err;
+ 	err = ufs_q2_find(sb, qi, &h, id, off);
+@@ -360,7 +400,7 @@
+ 
+ 	if (!qi || !delta)
+ 		return 0;
+-	err = ufs_q2_lookup(sb, qi, id, delta > 0, &off);
++	err = ufs_q2_lookup(sb, qi, type, id, delta > 0, &off);
+ 	if (err || !off)
+ 		return err;
+ 
+@@ -406,7 +446,7 @@
+ 
+ 	if (!qi || !change)
+ 		return 0;
+-	err = ufs_q2_lookup(sb, qi, id, true, &off);
++	err = ufs_q2_lookup(sb, qi, type, id, true, &off);
+ 	if (err)
+ 		return err;
+ 	pos = ufs_q2_val_pos(off, ql);
+@@ -640,25 +680,12 @@
+ static int ufs_q2_check(struct super_block *sb, struct inode *qi, int type)
+ {
+ 	struct ufs_q2_header h;
+-	u64 table_end;
+-	int err;
+ 
+ 	if (!S_ISREG(qi->i_mode) || !qi->i_nlink)
+ 		return -EIO;
+ 	if (ufs_q2_size(qi) < sizeof(h))
+ 		return -EIO;
+-	err = ufs_q2_read_header(qi, &h);
+-	if (err)
+-		return err;
+-	if (fs32_to_cpu(sb, h.q2h_magic_number) != UFS_Q2_HEAD_MAGIC ||
+-	    h.q2h_type != type || h.q2h_hash_shift > 15 ||
+-	    fs16_to_cpu(sb, h.q2h_hash_size) != 1U << h.q2h_hash_shift)
+-		return -EIO;
+-	table_end = offsetof(struct ufs_q2_header, q2h_entries) +
+-		    ((u64)sizeof(h.q2h_entries[0]) << h.q2h_hash_shift);
+-	if (ufs_q2_size(qi) < table_end)
+-		return -EIO;
+-	return 0;
++	return ufs_q2_read_header(sb, qi, type, &h);
+ }
+ 
+ /*
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -1145,6 +1145,26 @@
+ 		       __func__, uspi->s_bsize / uspi->s_fsize);
+ 		goto failed;
+ 	}
++	/*
++	 * The superblock is read again below with these, and fs_fshift
++	 * and fs_fmask go into every fragment and buffer index after
++	 * that, so they have to agree with fs_fsize.  The superblock
++	 * also has to cover the three sectors that usb1 to usb3 point
++	 * into.  FreeBSD's validate_sblock() refuses the same.
++	 */
++	if (uspi->s_fshift != ilog2(uspi->s_fsize) ||
++	    uspi->s_fmask != ~(uspi->s_fsize - 1)) {
++		pr_err("%s(): fshift %u or fmask 0x%x does not match fragment size %u\n",
++		       __func__, uspi->s_fshift, uspi->s_fmask, uspi->s_fsize);
++		goto failed;
++	}
++	if (uspi->s_sbsize < 3 * UFS_SECTOR_SIZE ||
++	    uspi->s_sbsize > UFS_SBSIZE ||
++	    uspi->s_sbsize % UFS_SECTOR_SIZE) {
++		pr_err("%s(): bad superblock size %u\n",
++		       __func__, uspi->s_sbsize);
++		goto failed;
++	}
+ 	if (uspi->s_fsize < logical_size) {
+ 		pr_err("%s(): fragment size %u is smaller than the device's logical block size %u\n",
+ 		       __func__, uspi->s_fsize, logical_size);
+@@ -1275,6 +1295,30 @@
+ 	uspi->s_nrpos = fs32_to_cpu(sb, usb3->fs_nrpos);
+ 	uspi->s_postbloff = fs32_to_cpu(sb, usb3->fs_postbloff);
+ 	uspi->s_rotbloff = fs32_to_cpu(sb, usb3->fs_rotbloff);
++
++	/*
++	 * The rest of the geometry has to agree with the block and
++	 * fragment sizes checked above: the bitmaps are indexed by
++	 * fs_frag and fs_fragshift, and a cylinder group is read into
++	 * at most one block of fragment buffers.  As FreeBSD's
++	 * validate_sblock().
++	 */
++	if (uspi->s_bshift != ilog2(uspi->s_bsize) ||
++	    uspi->s_bmask != ~(uspi->s_bsize - 1) ||
++	    uspi->s_fpb != uspi->s_bsize / uspi->s_fsize ||
++	    uspi->s_fpbshift != ilog2(uspi->s_fpb)) {
++		pr_err("%s(): bshift %u, bmask 0x%x, frag %u or fragshift %u does not match block size %u\n",
++		       __func__, uspi->s_bshift, uspi->s_bmask, uspi->s_fpb,
++		       uspi->s_fpbshift, uspi->s_bsize);
++		goto failed;
++	}
++	if (uspi->s_cgsize < uspi->s_fsize ||
++	    uspi->s_cgsize > uspi->s_bsize ||
++	    uspi->s_cgsize % uspi->s_fsize) {
++		pr_err("%s(): bad cylinder group size %u\n",
++		       __func__, uspi->s_cgsize);
++		goto failed;
++	}
+ 
+ 	uspi->s_root_blocks = mul_u64_u32_div(uspi->s_dsize,
+ 					      uspi->s_minfree, 100);

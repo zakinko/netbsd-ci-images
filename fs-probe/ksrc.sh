@@ -75,13 +75,14 @@ fs_sparse() {
 }
 
 # FS_PATCH=1 なら fs-probe/patches/<fs>-*.patch を当ててから建てる。
+# FS_PATCH_OMIT に名前の頭 (ufs-12 など) を置くと、それだけ外す。
 # 当て物は mainline 向けに書く。古い kernel で当たらない所があれば、
 # patches/<major.minor>/ に合わせた組を置き、そちらを使う。6.12 は
 # remount がまだ fs_context になっていない。
 fs_patches() {	# fs
 	d=$here/patches/$(echo $KV | cut -d. -f1,2)
 	ls $d/$1-*.patch > /dev/null 2>&1 || d=$here/patches
-	ls $d/$1-*.patch 2>/dev/null
+	ls $d/$1-*.patch 2>/dev/null | grep -v "/${FS_PATCH_OMIT:-^}"
 }
 # 当たらなければ建てない (当たらないまま測ると、直した物を測った
 # ことにならない)。建てたものは、同じ名前の出荷のモジュールと差し替える。

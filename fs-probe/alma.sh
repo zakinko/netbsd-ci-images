@@ -28,6 +28,7 @@ rpm -q ntfs-3g ntfs-3g-system-compression | tee -a $sum
 
 . $here/ksrc.sh
 note "fs source: $ksrc"
+cp -a $ksrc/ufs $work/ufs.orig
 fs_build ufs $out/ufs-build.log
 note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings, FS_PATCH=${FS_PATCH:-0})"
 # 当て物を試すときは、ntfs3 も当てたものをソースから建てて差し替える。
@@ -83,6 +84,8 @@ dnf -y -q install bc
 # --- UFS / FFS --------------------------------------------------------------
 note ""
 note "## UFS/FFS"
+. $here/crafted.sh
+crafted_run with-patches
 for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	[ -e "$f" ] || continue
 	n=$(basename $f .img)
@@ -439,6 +442,21 @@ for m in $out/*.linux.manifest; do
 	grep '^>' $out/$n.vs-xfs | sed -n '1,12p' | sed 's/^/    /' | tee -a $sum
 done
 dmesg > $out/dmesg-end.txt
+
+# 壊した superblock を、mount 時の検査 (ufs-12) を外したものにも見せる。
+# 直す前に何が起きていたかの記録で、カーネルが落ちうるので最後に置く。
+# 後の stress のために、全部当てたものに建て直しておく。
+if [ "${FS_PATCH:-0}" = 1 ]; then
+	note ""
+	rebuild_ufs() {	# omit log
+		rm -rf $ksrc/ufs && cp -a $work/ufs.orig $ksrc/ufs &&
+			FS_PATCH_OMIT=$1 fs_build ufs $2 > $2.out 2>&1
+		note "ufs rebuilt without ${1:-nothing}: exit $?"
+	}
+	rebuild_ufs ufs-12 $out/ufs-build-no12.log
+	crafted_run without-ufs-12
+	rebuild_ufs "" $out/ufs-build-again.log
+fi
 ls -ls $out
 
 # 当て物を当てて建てられなかったら、試験は出荷のモジュールで進んでいる。
