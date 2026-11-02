@@ -541,14 +541,14 @@
  	}
 --- a/fs/ufs/ufs.h
 +++ b/fs/ufs/ufs.h
-@@ -25,6 +25,7 @@
- 	unsigned s_cgno[UFS_MAX_GROUP_LOADED];
- 	unsigned short s_cg_loaded;
+@@ -27,6 +27,7 @@
  	unsigned s_mount_opt;
  	struct super_block *sb;
  	int work_queued; /* non-zero if the delayed work is queued */
 +	u32 s_metackhash;		/* check-hashes kept, see ckhash.c */
  	struct delayed_work sync_work; /* FS sync delayed work */
+ 	spinlock_t work_lock; /* protects sync_work and work_queued */
+ 	struct mutex s_lock;
 @@ -96,6 +97,17 @@
  extern u64 ufs_new_fragments(struct inode *, void *, u64, u64,
  			     unsigned, int *, struct page *);
