@@ -545,9 +545,9 @@
  	unsigned s_cgno[UFS_MAX_GROUP_LOADED];
  	unsigned short s_cg_loaded;
  	unsigned s_mount_opt;
-+	u32 s_metackhash;		/* check-hashes kept, see ckhash.c */
  	struct super_block *sb;
  	int work_queued; /* non-zero if the delayed work is queued */
++	u32 s_metackhash;		/* check-hashes kept, see ckhash.c */
  	struct delayed_work sync_work; /* FS sync delayed work */
 @@ -96,6 +97,17 @@
  extern u64 ufs_new_fragments(struct inode *, void *, u64, u64,

@@ -100,7 +100,7 @@ prof() {	# label
 			grep -E '^ +[0-9]' > $out/perf-$1-$rw.txt
 		note "perf $1 $rw (children %, self %):"
 		grep -E 'ufs_|mpage_|block_read_full|__block_write|crc32c|blkdev_issue_zeroout|copy_|memcpy|memset|clear_page|submit_bio' \
-			$out/perf-$1-$rw.txt | head -12 | awk '{ printf "    %7s %7s %s\n", $1, $2, $NF }' | tee -a $sum
+			$out/perf-$1-$rw.txt | head -12 | awk '{ printf "    %7s %7s %s\n", $1, $2, $4 }' | tee -a $sum
 	done
 	rm -f /mnt/b/sw.* $work/perf.data
 }
