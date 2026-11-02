@@ -16,6 +16,25 @@ sum=$out/summary.txt
 note() { printf '%s\n' "$*" | tee -a $sum; }
 KV=$(uname -r)
 
+# 番犬。記録が 5 分伸びなければ、止まっているタスクのスタックと dmesg を
+# CI のログへ出す (run 41459105676 の rhel は ffs2-ea の remount の辺りで
+# 2 時間止まり、何も残さず時間切れになった)。10 分ごとに繰り返す。
+echo 1 > /proc/sys/kernel/sysrq
+(
+	last=0
+	while sleep 60; do
+		idle=$(( $(date +%s) - $(stat -c %Y $sum) ))
+		[ $idle -ge 300 ] || continue
+		[ $(( $(date +%s) - last )) -ge 600 ] || continue
+		last=$(date +%s)
+		echo "!! watchdog: $sum idle ${idle}s"
+		echo w > /proc/sysrq-trigger
+		dmesg | tail -200
+	done
+) >&2 &
+wdog=$!
+trap 'kill $wdog 2>/dev/null' EXIT
+
 note "# $(cat /etc/almalinux-release) / kernel $KV"
 grep -E 'CONFIG_(NTFS3?|UFS)_FS[ =]' /lib/modules/$KV/config | tee -a $sum
 
