@@ -35,6 +35,12 @@ note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings,
 if [ "${FS_PATCH:-0}" = 1 ]; then
 	fs_build ntfs3 $out/ntfs3-build.log
 	note "ntfs3 build+insmod exit $?"
+	# 7.1 で戻った新しい ntfs は Alma の 6.12 には無く、ソースが在る
+	# kernel-ml でだけ建てる。
+	if [ -d $ksrc/ntfs ] && ls $here/patches/ntfs-*.patch > /dev/null 2>&1; then
+		fs_build ntfs $out/ntfs-build.log
+		note "ntfs build+insmod exit $?"
+	fi
 fi
 # NTFS はカーネルに在るものを全部試す。7.1 で戻った新しい ntfs と ntfs3。
 drivers=ntfs-3g

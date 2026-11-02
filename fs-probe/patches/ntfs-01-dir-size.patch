@@ -1,0 +1,35 @@
+--- a/fs/ntfs/namei.c
++++ b/fs/ntfs/namei.c
+@@ -589,6 +589,13 @@
+ 		err = ntfs_attr_open(ni, AT_INDEX_ROOT, I30, 4);
+ 		if (err)
+ 			goto err_out;
++		/*
++		 * ntfs_attr_open() sets data_size to the length of the new
++		 * $INDEX_ROOT, as ntfs_read_locked_inode() does with i_size
++		 * too.  i_size stayed at the 0 set above, so stat() gave 0
++		 * until the directory was read back from disk.
++		 */
++		i_size_write(vi, ni->data_size);
+ 	} else {
+ 		/* Add DATA attribute to inode. */
+ 		err = ntfs_attr_add(ni, AT_DATA, AT_UNNAMED, 0, NULL, 0);
+--- a/fs/ntfs/index.c
++++ b/fs/ntfs/index.c
+@@ -1346,6 +1347,8 @@
+ 		icx->idx_ni->data_size = ix_root_size;
+ 		icx->idx_ni->initialized_size = ix_root_size;
+ 		icx->idx_ni->allocated_size = (ix_root_size + 7) & ~7;
++		/* As ntfs_ir_truncate() does; i_size kept the old length. */
++		i_size_write(VFS_I(icx->idx_ni), ix_root_size);
+ 	}
+ 
+ 	ntfs_ir_nill(ir);
+@@ -1367,6 +1370,7 @@
+ 		icx->idx_ni->data_size = ix_root_size;
+ 		icx->idx_ni->initialized_size = ix_root_size;
+ 		icx->idx_ni->allocated_size = (ix_root_size + 7) & ~7;
++		i_size_write(VFS_I(icx->idx_ni), ix_root_size);
+ 	}
+ 	ntfs_ie_set_vcn(ie, new_ib_vcn);
+ 	goto err_out;

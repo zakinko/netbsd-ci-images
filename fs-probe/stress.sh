@@ -51,12 +51,17 @@ for m in ntfs3 ntfs; do
 	[ -d /sys/module/$m ] && drivers="$drivers $m"
 done
 if [ "${FS_PATCH:-0}" = 1 ]; then
-	t=$(cat /sys/module/ntfs3/taint 2>/dev/null)
-	note "ntfs3 taint: '$t'"
-	case $t in
-	*O*) ;;
-	*)   note "!! FS_PATCH=1 but the loaded ntfs3 is not the patched build"; exit 1 ;;
-	esac
+	for m in ntfs3 ntfs; do
+		[ -d /sys/module/$m ] || continue
+		t=$(cat /sys/module/$m/taint)
+		note "$m taint: '$t'"
+		case $t in
+		*O*) ;;
+		*)   # 当て物が無いものは出荷のままでよい
+		     ls $here/patches/$m-*.patch > /dev/null 2>&1 || continue
+		     note "!! FS_PATCH=1 but the loaded $m is not the patched build"; exit 1 ;;
+		esac
+	done
 fi
 note "ntfs drivers: $drivers"
 dmesg -c > /dev/null
