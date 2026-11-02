@@ -1,18 +1,23 @@
 #!/bin/sh
 # 測るカーネルを選ぶ。
-#   kernel.sh rhel   Alma 10 のまま。起動の引数だけ足して再起動する。
+#   kernel.sh shstk  user shadow stack を切って再起動する。最初に一度。
+#   kernel.sh rhel   Alma 10 のまま (何もしない)
 #   kernel.sh ml     ELRepo の kernel-ml (kernel.org の最新 stable) を入れて
 #                    既定にし、再起動する。戻ったら uname -r で確かめること。
 set -e
-# 入れ子の AMD KVM の上では、user shadow stack の xsave 状態が揃わない。
-# run 41490343394 の rhel で、fwupd の fork が fpu_clone と ssp_get で WARN
-# を出し、続いて systemd、sshd ほかが control protection で死んで、VM に
-# 入れなくなった。測る物と関係が無いので、どちらの kernel でも切る。
-grubby --update-kernel=ALL --args=nousershstk
 case $1 in
+shstk)
+	# 入れ子の AMD KVM の上では、user shadow stack の xsave 状態が揃わない。
+	# run 41490343394 の rhel で、fwupd の fork が fpu_clone と ssp_get で
+	# WARN を出し、続いて systemd、sshd ほかが control protection で死んで、
+	# VM に入れなくなった。測る物と関係が無いので切る。kernel-ml を入れる
+	# 前に再起動まで済ませる: 入れている最中に起きて、dnf のまま 2 時間
+	# 止まった (run 41505536241)。
+	grubby --update-kernel=ALL --args=nousershstk
+	setsid sh -c "sleep 30; systemctl reboot" < /dev/null > /dev/null 2>&1 &
+	;;
 rhel)
 	uname -r
-	setsid sh -c "sleep 30; systemctl reboot" < /dev/null > /dev/null 2>&1 &
 	;;
 ml)
 	# elrepo.org は VM の中の resolver から引けない (run 36250762248 と

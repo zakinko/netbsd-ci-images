@@ -105,8 +105,17 @@ jobs:
         with:
           release: "10"
           mem: 8192
-          run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
+          run: sh fs-probe/kernel.sh shstk
+      - name: user shadow stack を切った再起動から戻るのを待つ
+        run: |
+          printf 'uname -r\n' > $RUNNER_TEMP/u.sh
+          sleep 45
+          for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+      - shell: almalinux {0}
+        timeout-minutes: 20
+        run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
       - name: 再起動から戻るのを待ち、走っている kernel を確かめる
+        if: matrix.kernel == 'ml'
         run: |
           printf 'uname -r\n' > $RUNNER_TEMP/u.sh
           sleep 45
@@ -131,7 +140,7 @@ jobs:
         timeout-minutes: 60
         run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/stress.sh fsp/alma-${{ matrix.kernel }}/stress
       - name: VM の serial console の末尾
-        if: failure()
+        if: failure() || cancelled()
         run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 60000 {} \;
       - run: cat fsp/alma-${{ matrix.kernel }}/summary.txt fsp/alma-${{ matrix.kernel }}/stress/summary.txt >> $GITHUB_STEP_SUMMARY
         if: always()
@@ -183,8 +192,17 @@ jobs:
         with:
           release: "10"
           mem: 8192
-          run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
+          run: sh fs-probe/kernel.sh shstk
+      - name: user shadow stack を切った再起動から戻るのを待つ
+        run: |
+          printf 'uname -r\n' > $RUNNER_TEMP/u.sh
+          sleep 45
+          for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+      - shell: almalinux {0}
+        timeout-minutes: 20
+        run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
       - name: 再起動から戻るのを待ち、走っている kernel を確かめる
+        if: matrix.kernel == 'ml'
         run: |
           printf 'uname -r\n' > $RUNNER_TEMP/u.sh
           sleep 45
@@ -205,7 +223,7 @@ jobs:
       - shell: almalinux {0}
         run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/bench.sh fsp/in fsp/bench-${{ matrix.kernel }}
       - name: VM の serial console の末尾
-        if: failure()
+        if: failure() || cancelled()
         run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 60000 {} \;
       - run: cat fsp/bench-${{ matrix.kernel }}/bench.txt >> $GITHUB_STEP_SUMMARY
         if: always()
