@@ -176,7 +176,7 @@
 +	 * also has to cover the three sectors that usb1 to usb3 point
 +	 * into.  FreeBSD's validate_sblock() refuses the same.
 +	 */
-+	if (uspi->s_fshift != ilog2(uspi->s_fsize) ||
++	if (uspi->s_fshift != (u32)ilog2(uspi->s_fsize) ||
 +	    uspi->s_fmask != ~(uspi->s_fsize - 1)) {
 +		pr_err("%s(): fshift %u or fmask 0x%x does not match fragment size %u\n",
 +		       __func__, uspi->s_fshift, uspi->s_fmask, uspi->s_fsize);
@@ -204,10 +204,10 @@
 +	 * at most one block of fragment buffers.  As FreeBSD's
 +	 * validate_sblock().
 +	 */
-+	if (uspi->s_bshift != ilog2(uspi->s_bsize) ||
++	if (uspi->s_bshift != (u32)ilog2(uspi->s_bsize) ||
 +	    uspi->s_bmask != ~(uspi->s_bsize - 1) ||
 +	    uspi->s_fpb != uspi->s_bsize / uspi->s_fsize ||
-+	    uspi->s_fpbshift != ilog2(uspi->s_fpb)) {
++	    uspi->s_fpbshift != (u32)ilog2(uspi->s_fpb)) {
 +		pr_err("%s(): bshift %u, bmask 0x%x, frag %u or fragshift %u does not match block size %u\n",
 +		       __func__, uspi->s_bshift, uspi->s_bmask, uspi->s_fpb,
 +		       uspi->s_fpbshift, uspi->s_bsize);

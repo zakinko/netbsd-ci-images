@@ -86,7 +86,8 @@ note ""
 note "## UFS/FFS"
 . $here/crafted.sh
 # 出荷のモジュールは壊した superblock で落ちうるので、当てたときだけ。
-[ "${FS_PATCH:-0}" = 1 ] && crafted_run with-ufs-12
+[ "${FS_PATCH:-0}" = 1 ] && ! grep -qx ufs $out/build-failed 2>/dev/null &&
+	crafted_run with-ufs-12
 for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	[ -e "$f" ] || continue
 	n=$(basename $f .img)
@@ -452,10 +453,12 @@ if [ "${FS_PATCH:-0}" = 1 ]; then
 	rebuild_ufs() {	# omit log
 		rm -rf $ksrc/ufs && cp -a $work/ufs.orig $ksrc/ufs &&
 			FS_PATCH_OMIT=$1 fs_build ufs $2 > $2.out 2>&1
-		note "ufs rebuilt without ${1:-nothing}: exit $?"
+		r=$?
+		note "ufs rebuilt without ${1:-nothing}: exit $r"
+		return $r
 	}
-	rebuild_ufs ufs-12 $out/ufs-build-no12.log
-	crafted_run without-ufs-12
+	rebuild_ufs ufs-12 $out/ufs-build-no12.log &&
+		crafted_run without-ufs-12
 	rebuild_ufs "" $out/ufs-build-again.log
 fi
 ls -ls $out
