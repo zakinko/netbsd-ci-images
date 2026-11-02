@@ -1,6 +1,7 @@
 # . で読む。superblock の値を一つずつ壊した image を mount して、断られる
 # か、カーネルが落ちる (Oops や UBSAN を出す) かを並べる。
 # 使い方: crafted_run ラベル
+# CRAFTED_SKIP に名前を並べると、その場合は mount しない。
 # 欄の位置は FreeBSD の sys/ufs/ffs/fs.h による (fs/ufs/ufs_fs.h の
 # offsetof でも同じ): fs_bsize 48, fs_fsize 52, fs_frag 56, fs_fmask 76,
 # fs_fshift 84, fs_sbsize 104, fs_cgsize 160。UFS2 の superblock は 65536。
@@ -25,6 +26,9 @@ crafted_run() {	# label
 	note "crafted superblocks ($1): mount exit, then what the kernel said"
 	echo "$crafted_cases" | while read img name pokes; do
 		[ -n "$img" ] && [ -e $in/$img.img ] || continue
+		case " ${CRAFTED_SKIP:-} " in *" $name "*)
+			note "  $img $name: skipped"; continue ;;
+		esac
 		c=$work/crafted.img
 		cp --sparse=always $in/$img.img $c
 		crafted_poke $c $pokes

@@ -35,7 +35,8 @@ def sb(path):
 
 
 off, b = sb(sys.argv[1])
-stored, flags = struct.unpack_from('<II', b, 1304)
+stored = struct.unpack_from('<I', b, 1304)[0]
+flags = struct.unpack_from('<I', b, 1312)[0]
 calc = crc32c(0xffffffff, b[:1304] + b'\0' * 4 + b[1308:])
 print('sb at %d size %d flags 0x%x ckhash stored 0x%08x computed 0x%08x %s'
       % (off, len(b), flags, stored, calc,

@@ -49,16 +49,16 @@
  			UFSD("fs is stable\n");
  			break;
  		case UFS_FSLOG:
-@@ -1333,6 +1361,8 @@
- 		ret = -ENOMEM;
- 		goto failed;
- 	}
+@@ -1332,6 +1360,8 @@
+ 	if (!sb_rdonly(sb))
+ 		if (!ufs_read_cylinder_structures(sb))
+ 			goto failed;
 +	if (!sb_rdonly(sb))
 +		ufs_44bsd_set_clean(sb, false);
  
  	UFSD("EXIT\n");
  	return 0;
-@@ -1424,6 +1454,14 @@
+@@ -1423,6 +1453,14 @@
  			mutex_unlock(&UFS_SB(sb)->s_lock);
  			return -EINVAL;
  		}
@@ -73,7 +73,7 @@
  		if (ufs_quota2_load(sb)) {
  			pr_err("cannot use the quota2 files, staying read-only\n");
  			mutex_unlock(&UFS_SB(sb)->s_lock);
-@@ -1437,6 +1475,7 @@
+@@ -1436,6 +1474,7 @@
  		}
  		ufs_ckhash_remount_rw(sb);
  		sb->s_flags &= ~SB_RDONLY;
