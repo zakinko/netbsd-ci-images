@@ -451,6 +451,13 @@ dmesg > $out/dmesg-end.txt
 if [ "${FS_PATCH:-0}" = 1 ]; then
 	note ""
 	rebuild_ufs() {	# omit log
+		# fs_build1 の modprobe -r が黙って失敗すると、insmod が
+		# File exists で断る (rhel、2026-11-02)。何が掴んでいるかを出す。
+		if grep -qw ufs /proc/modules && ! rmmod ufs 2>>$sum; then
+			note "    ufs still loaded: $(grep -w '^ufs' /proc/modules)"
+			note "    ufs mounts: $(awk '$3 == "ufs"' /proc/mounts | tr '\n' ' ')"
+			note "    loops: $(losetup -a | tr '\n' ' ')"
+		fi
 		rm -rf $ksrc/ufs && cp -a $work/ufs.orig $ksrc/ufs &&
 			FS_PATCH_OMIT=$1 fs_build ufs $2 > $2.out 2>&1
 		r=$?
