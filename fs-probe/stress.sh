@@ -91,7 +91,12 @@ kinds() {	# diff of two tree() outputs
 
 # 一つの image に一つの負荷。どちらで壊れたかを分けるため。
 for drv in $drivers; do
-for load in fsx fss; do
+# ntfs-3g だけ、fsstress を操作を一種類ずつ外して回し、page cache と
+# ディスクの食い違い (run 41528261707: drop_caches の後に 6 本の中身が
+# 変わり、remount 後と一致した) を作る操作を絞る。
+loads="fsx fss"
+[ $drv = ntfs-3g ] && loads="$loads fss-nocopy fss-nodio fss-nodc fss-nosplice"
+for load in $loads; do
 	n=stress-$drv-$load
 	note ""
 	note "### $n"
@@ -120,10 +125,17 @@ for load in fsx fss; do
 			note "fsx seed $seed: exit $st"
 			[ $st = 0 ] || grep -vE '^[0-9]+\(|^ *$' $out/$n.$seed | head -12 | cut -c1-160 | sed 's/^/    /' | tee -a $sum
 		done ;;
-	fss)
+	fss*)
+		case $load in
+		fss-nocopy)   fo='-f copyrange=0' ;;
+		fss-nodio)    fo='-f dwrite=0 -f awrite=0 -f dread=0 -f aread=0' ;;
+		fss-nodc)     fo='-f write_dontcache=0 -f read_dontcache=0' ;;
+		fss-nosplice) fo='-f splice=0' ;;
+		*)            fo= ;;
+		esac
 		# -v は操作を一つずつ記録する。中身が変わったファイルに何が
 		# 起きたかを後で辿る。
-		timeout 900 $fsstress -v -d /mnt/p/fss -n 4000 -p 4 -s 1 > $out/$n.log 2>&1
+		timeout 900 $fsstress -v $fo -d /mnt/p/fss -n 4000 -p 4 -s 1 > $out/$n.log 2>&1
 		note "fsstress: exit $?" ;;
 	esac
 	sync
@@ -218,7 +230,11 @@ for load in fsx fss; do
 	note "dmesg: $(grep -ciE 'warning|bug|error|corrupt|oops|call trace' $out/$n.dmesg) suspicious lines"
 	grep -iE 'warning|bug|error|corrupt|oops|call trace' $out/$n.dmesg | head -8 | cut -c1-200 | sed 's/^/    /' | tee -a $sum
 	losetup -d $loop
-	qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on $raw $out/$n.vhd
+	# 操作を外した版は絞り込みのためだけなので、Windows へは渡さない
+	# (2G の fixed VHD が一つずつ増える)。
+	case $load in fsx|fss)
+	qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on $raw $out/$n.vhd ;;
+	esac
 	rm -f $raw
 done
 done
