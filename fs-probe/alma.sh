@@ -455,6 +455,7 @@ if [ "${FS_PATCH:-0}" = 1 ]; then
 			FS_PATCH_OMIT=$1 fs_build ufs $2 > $2.out 2>&1
 		r=$?
 		note "ufs rebuilt without ${1:-nothing}: exit $r"
+		[ $r = 0 ] || tail -15 $2.out | sed 's/^/    /' | tee -a $sum
 		return $r
 	}
 	# sbsize-1k-of-8k-1k は、ufs-12 が無いと kernel-ml の VM ごと応答
