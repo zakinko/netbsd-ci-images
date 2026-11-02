@@ -128,6 +128,13 @@ for load in fsx fss; do
 	esac
 	sync
 	tree > $out/$n.tree1
+	# ntfs-3g の fsstress の後、tree1 の hash だけが、直後の写しとも
+	# remount 後とも合わないファイルが出る (run 41480691322)。mount した
+	# まま読み直すと変わるのか、page cache を捨てると変わるのかを分ける。
+	tree > $out/$n.tree1b
+	sync; echo 3 > /proc/sys/vm/drop_caches
+	tree > $out/$n.tree1c
+	note "re-read while mounted: differing lines $(diff $out/$n.tree1 $out/$n.tree1b | grep -c '^[<>]'), after drop_caches $(diff $out/$n.tree1b $out/$n.tree1c | grep -c '^[<>]')"
 	# remount の前に見えている中身を写しておき、後で byte 単位で比べる。
 	rm -rf $work/before; mkdir -p $work/before
 	(cd /mnt/p && find . -xdev -type f -print0 | cpio -0pdm --quiet $work/before) 2>/dev/null
