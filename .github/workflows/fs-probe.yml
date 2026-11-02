@@ -287,8 +287,13 @@ jobs:
       - shell: pwsh
         run: ./fs-probe/win-check.ps1 fsp/alma fsp/check-windows-${{ matrix.kernel }}
       - shell: pwsh
-        if: always() && hashFiles('fsp/alma/stress/*.vhd') != ''
-        run: ./fs-probe/win-check.ps1 fsp/alma/stress fsp/check-windows-${{ matrix.kernel }}/stress
+        if: always()
+        # hashFiles() は存在を見るためだけに数 GB の vhd を全部読み、120 秒で
+        # 打ち切られてジョブごと落ちた (run 41497418790)。名前だけ見る。
+        run: |
+          if (Test-Path fsp/alma/stress/*.vhd) {
+            ./fs-probe/win-check.ps1 fsp/alma/stress fsp/check-windows-${{ matrix.kernel }}/stress
+          }
       - shell: pwsh
         if: always()
         run: Get-ChildItem fsp/check-windows-${{ matrix.kernel }} -Recurse -Filter *.check | Get-Content | Add-Content $env:GITHUB_STEP_SUMMARY
