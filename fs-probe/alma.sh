@@ -105,8 +105,10 @@ note ""
 note "## UFS/FFS"
 . $here/crafted.sh
 # 出荷のモジュールは壊した superblock で落ちうるので、当てたときだけ。
-[ "${FS_PATCH:-0}" = 1 ] && ! grep -qx ufs $out/build-failed 2>/dev/null &&
+[ "${FS_PATCH:-0}" = 1 ] && ! grep -qx ufs $out/build-failed 2>/dev/null && {
 	crafted_run with-ufs-12
+	crafted_q2_run with-ufs-12
+}
 for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	[ -e "$f" ] || continue
 	n=$(basename $f .img)
@@ -487,7 +489,8 @@ if [ "${FS_PATCH:-0}" = 1 ]; then
 	# sbsize-1k-of-8k-1k は、ufs-12 が無いと kernel-ml の VM ごと応答
 	# しなくなり (2026-11-02 に二度)、後の試験が全部失われる。
 	rebuild_ufs ufs-12 $out/ufs-build-no12.log &&
-		CRAFTED_SKIP=sbsize-1k-of-8k-1k crafted_run without-ufs-12
+		{ CRAFTED_SKIP=sbsize-1k-of-8k-1k crafted_run without-ufs-12
+		  crafted_q2_run without-ufs-12; }
 	rebuild_ufs "" $out/ufs-build-again.log
 fi
 ls -ls $out
