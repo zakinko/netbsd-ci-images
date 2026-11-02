@@ -1,0 +1,55 @@
+--- a/fs/ufs/inode.c
++++ b/fs/ufs/inode.c
+@@ -379,6 +379,28 @@
+ 	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
+ 
+ 	return (u64)fragment << uspi->s_fshift >= (u64)i_size_read(inode);
++}
++
++/*
++ * How many fragments from file fragment @fragment of @inode, which lies
++ * in an allocated block, can be mapped at once, up to @want.  The
++ * fragments of a block are contiguous on the device, but a short file's
++ * last block is allocated only as far as i_lastfrag.
++ */
++static unsigned int ufs_frags_contiguous(struct inode *inode,
++					 sector_t fragment, unsigned int want)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
++	u64 end = (fragment | uspi->s_fpbmask) + 1;
++	u64 lastfrag;
++
++	read_seqlock_excl(&UFS_I(inode)->meta_lock);
++	lastfrag = UFS_I(inode)->i_lastfrag;
++	read_sequnlock_excl(&UFS_I(inode)->meta_lock);
++	end = min(end, lastfrag);
++	if (end <= fragment)
++		return 1;
++	return (unsigned int)min_t(u64, want, end - fragment);
+ }
+ 
+ /**
+@@ -398,6 +420,7 @@
+ 	int depth = ufs_block_to_path(inode, fragment >> uspi->s_fpbshift, offsets);
+ 	u64 phys64 = 0;
+ 	unsigned frag = fragment & uspi->s_fpbmask;
++	unsigned int want = (unsigned int)(bh_result->b_size >> inode->i_blkbits);
+ 
+ 	phys64 = ufs_frag_map(inode, offsets, depth);
+ 	if (!create)
+@@ -463,6 +486,15 @@
+ 		map_bh(bh_result, sb, phys64 + frag);
+ 		if (create && ufs_frag_past_eof(inode, fragment))
+ 			set_buffer_new(bh_result);
++		/*
++		 * mpage_readahead() asks for many fragments at a time.  Mapping
++		 * one per call walked the block pointers once per fragment,
++		 * which with 2K fragments cost about as much as copying the
++		 * data out.
++		 */
++		if (!create && want > 1)
++			bh_result->b_size = (size_t)ufs_frags_contiguous(inode,
++					fragment, want) << inode->i_blkbits;
+ 	}
+ 	return 0;
+ }
