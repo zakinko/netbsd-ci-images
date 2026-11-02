@@ -164,15 +164,33 @@ for load in fsx fss; do
 			cmp -l $work/before/$f /mnt/p/$f > $work/cmp 2>/dev/null
 			first=$(head -1 $work/cmp | awk '{ print $1 - 1 }')
 			last=$(tail -1 $work/cmp | awk '{ print $1 - 1 }')
-			note "  $f: size $(stat -c %s /mnt/p/$f), $(wc -l < $work/cmp) bytes differ, offsets $first..$last; zero before $(awk '$2 == 0' $work/cmp | wc -l), zero after $(awk '$3 == 0' $work/cmp | wc -l)"
-			for side in $work/before /mnt/p; do
-				printf '    %-6s ' ${side##*/}
-				od -An -tx1 -j $first -N 16 $side/$f | tr -s ' ' | tee -a $sum
-			done
-			# 記録の path は各プロセスの fss/pN からの相対で、行頭が N/。
-			pn=$(echo $f | sed -E 's|^\./fss/p([0-9]+)/.*|\1|')
-			rel=$(echo $f | sed -E 's|^\./fss/p[0-9]+/||')
-			grep -E "^$pn/[0-9]+: .*[ /]?$rel([ \[]|\$)" $out/$n.log | tail -10 | cut -c1-150 | sed 's/^/    op /' | tee -a $sum
+			note "  $f: size $(stat -c %s /mnt/p/$f), $(wc -l < $work/cmp) bytes differ, offsets ${first:-none}..${last:-none}; zero before $(awk '$2 == 0' $work/cmp | wc -l), zero after $(awk '$3 == 0' $work/cmp | wc -l)"
+			# remount 前に取った hash と、その直後に写した中身の hash。
+			# 違えば、mount したまま読むたびに中身が変わっていた。
+			h1=$(awk -v p="$f" '$2 == p && length($1) == 64 { print $1 }' $out/$n.tree1)
+			hb=$(sha256sum < $work/before/$f | cut -d' ' -f1)
+			note "    hash before umount $([ "$h1" = "$hb" ] && echo matches || echo DIFFERS from) the copy taken right after it"
+			if [ -n "$first" ]; then
+				for side in $work/before /mnt/p; do
+					printf '    %-6s ' ${side##*/}
+					od -An -tx1 -j $first -N 16 $side/$f | tr -s ' ' | tee -a $sum
+				done
+			fi
+			# fsstress の記録は各操作に [inode ...] を書く。rename で名前が
+			# 変わっても追えるよう、inode 番号でそのファイルへの操作を全部
+			# 出し、違う範囲 [first, last] に重なる [offset,len] に * を付ける。
+			ino=$(awk -v p="$f" '$4 == p { print $1 }' $out/$n.inodes)
+			grep -E "\[$ino [0-9]+ " $out/$n.log > $out/$n.ops-$ino
+			note "    ops on inode $ino: $(wc -l < $out/$n.ops-$ino)"
+			awk -v ino=$ino -v a=${first:--1} -v b=${last:--1} '{
+				m = " "
+				s = $0
+				while (match(s, /\[[0-9]+,[0-9]+\]/)) {
+					split(substr(s, RSTART + 1, RLENGTH - 2), r, ",")
+					if (a >= 0 && r[1] <= b && r[1] + r[2] > a) m = "*"
+					s = substr(s, RSTART + RLENGTH)
+				}
+				print "    " m " " $0 }' $out/$n.ops-$ino | cut -c1-400 | tail -25 | tee -a $sum
 		done
 		umount /mnt/p 2>/dev/null
 		note "after remount: differing lines $(wc -l < $out/$n.treediff) of $(wc -l < $out/$n.tree1) ($(kinds $out/$n.treediff))"
