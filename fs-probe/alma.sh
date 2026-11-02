@@ -195,6 +195,11 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 			cp --sparse=always $work/$n.img $out/$n-crash.img ;;
 		esac
 		umount /mnt/p
+		# 書いた後の superblock の check-hash を外から計算し直す。
+		case $n in freebsd-*)
+			note "sbck before: $(python3 -I $here/sbck.py $f)"
+			python3 -I $here/sbck.py $work/$n.img $f | sed 's/^/sbck after: /' | tee -a $sum ;;
+		esac
 		drop
 		if mount -t ufs -o ro,ufstype=$t $loop /mnt/p 2>>$out/$n.err; then
 			[ -d /mnt/p/linux ] && {
