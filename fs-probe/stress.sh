@@ -95,7 +95,7 @@ for drv in $drivers; do
 # ディスクの食い違い (run 41528261707: drop_caches の後に 6 本の中身が
 # 変わり、remount 後と一致した) を作る操作を絞る。
 loads="fsx fss"
-[ $drv = ntfs-3g ] && loads="$loads fss-nocopy fss-nodio fss-nodc fss-nosplice"
+[ $drv = ntfs-3g ] && loads="$loads fss-nommap fss-notrunc fss-nofalloc fss-nowritev"
 for load in $loads; do
 	n=stress-$drv-$load
 	note ""
@@ -127,10 +127,12 @@ for load in $loads; do
 		done ;;
 	fss*)
 		case $load in
-		fss-nocopy)   fo='-f copyrange=0' ;;
-		fss-nodio)    fo='-f dwrite=0 -f awrite=0 -f dread=0 -f aread=0' ;;
-		fss-nodc)     fo='-f write_dontcache=0 -f read_dontcache=0' ;;
-		fss-nosplice) fo='-f splice=0' ;;
+		# copyrange、dio、dontcache、splice は外しても消えなかった
+		# (run 41539207653)。
+		fss-nommap)   fo='-f mwrite=0 -f mread=0' ;;
+		fss-notrunc)  fo='-f truncate=0' ;;
+		fss-nofalloc) fo='-f allocsp=0 -f freesp=0 -f resvsp=0 -f unresvsp=0 -f fallocate=0 -f punch=0 -f zero=0 -f collapse=0 -f insert=0' ;;
+		fss-nowritev) fo='-f writev=0' ;;
 		*)            fo= ;;
 		esac
 		# -v は操作を一つずつ記録する。中身が変わったファイルに何が
