@@ -10,6 +10,10 @@ on:
       iterations:
         type: string
         default: '30'
+      kernel:
+        description: 'rhel か debug (kernel-debug)'
+        type: string
+        default: rhel
 
 concurrency:
   group: ntfs3-panic-${{ github.run_id }}
@@ -40,9 +44,21 @@ jobs:
           sleep 45
           for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
       - shell: almalinux {0}
+        if: inputs.kernel == 'debug'
+        timeout-minutes: 20
+        run: sh fs-probe/kernel.sh debug
+      - name: kernel-debug の再起動から戻るのを待つ
+        if: inputs.kernel == 'debug'
+        run: |
+          printf 'uname -r\n' > $RUNNER_TEMP/u.sh
+          sleep 45
+          for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+      - shell: almalinux {0}
         timeout-minutes: 100
         run: |
+          uname -r
           grep -qw nousershstk /proc/cmdline
+          dmesg -n 8
           FS_PATCH=${{ matrix.patch }} FS_PATCH_OMIT=${{ matrix.omit }} sh fs-probe/ra-panic.sh fsp/ra ${{ inputs.iterations }}
       - name: VM の serial console の末尾
         if: failure() || cancelled()

@@ -19,6 +19,22 @@ shstk)
 rhel)
 	uname -r
 	;;
+debug)
+	# 動いている版と同じ版の kernel-debug。AppStream の devel は vault にも在る。
+	v=$(uname -r); v=${v%.x86_64}
+	rel=$(echo $v | sed -n 's/.*\.el10_\([0-9]*\)$/10.\1/p')
+	for u in https://vault.almalinux.org/$rel https://repo.almalinux.org/almalinux/$rel; do
+		dnf -y -q install $u/BaseOS/x86_64/os/Packages/kernel-debug-core-$v.x86_64.rpm \
+			$u/BaseOS/x86_64/os/Packages/kernel-debug-modules-core-$v.x86_64.rpm \
+			$u/AppStream/x86_64/os/Packages/kernel-debug-devel-$v.x86_64.rpm && break
+	done
+	k=$v.x86_64+debug
+	grubby --set-default /boot/vmlinuz-$k
+	grubby --update-kernel=/boot/vmlinuz-$k --args=nousershstk
+	grep -E 'CONFIG_(KASAN|KASAN_STACK|DEBUG_LIST|LOCKDEP)=' /boot/config-$k
+	echo "$k" > /var/tmp/want-kernel
+	setsid sh -c "sleep 30; systemctl reboot" < /dev/null > /dev/null 2>&1 &
+	;;
 ml)
 	# elrepo.org は VM の中の resolver から引けない (run 36250762248 と
 	# 36251789374 で、EPEL や vault は引けるのにこの名前だけ落ちた)。

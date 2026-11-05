@@ -61,6 +61,7 @@ fs_build ntfs3 $out/ntfs3-build.log
 st=$?
 note "ntfs3 build+insmod exit $st"
 [ $st = 0 ] && [ -d /sys/module/ntfs3 ] || exit 1
+grep -n 'blk_start_plug\|blk_finish_plug\|bio_chain\|submit_bio' $ksrc/ntfs3/*.c | sed 's/^/PLUG /'
 note "ntfs3 taint: '$(cat /sys/module/ntfs3/taint)'"
 modprobe -q xfs
 grep -E '^(ntfs3|xfs) ' /proc/modules | tee -a $sum

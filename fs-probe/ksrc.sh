@@ -15,8 +15,11 @@ case $KV in
 	;;
 *)
 	rel=$(echo $KV | sed -n 's/.*\.el10_\([0-9]*\)\..*/10.\1/p')
-	v=${KV%.x86_64}
-	if ! dnf -y -q install kernel-devel-$KV; then
+	base=${KV%+debug}
+	v=${base%.x86_64}
+	if [ "$base" != "$KV" ]; then
+		rpm -q kernel-debug-devel-$v > /dev/null
+	elif ! dnf -y -q install kernel-devel-$KV; then
 		for u in https://vault.almalinux.org/$rel/AppStream/x86_64/os/Packages \
 		         https://repo.almalinux.org/almalinux/$rel/AppStream/x86_64/os/Packages; do
 			rpm -ivh --nodeps $u/kernel-devel-$v.x86_64.rpm && break
