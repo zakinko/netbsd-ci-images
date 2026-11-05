@@ -142,7 +142,7 @@
  
  	sbi->s_flavour = ctx->flavour;
  	sbi->s_on_err = ctx->on_err;
-+	sbi->s_lazyzero = ctx->lazyzero;
++	sbi->s_lazyzero = !!ctx->lazyzero;
  
  	if (!sbi->s_flavour) {
  		if (!silent)
@@ -150,7 +150,7 @@
  
  	if ((bool)(fc->sb_flags & SB_RDONLY) == sb_rdonly(sb)) {
  		UFS_SB(sb)->s_on_err = ctx->on_err;
-+		UFS_SB(sb)->s_lazyzero = ctx->lazyzero;
++		UFS_SB(sb)->s_lazyzero = !!ctx->lazyzero;
  		mutex_unlock(&UFS_SB(sb)->s_lock);
  		return 0;
  	}
@@ -158,7 +158,7 @@
  #endif
  	}
  	UFS_SB(sb)->s_on_err = ctx->on_err;
-+	UFS_SB(sb)->s_lazyzero = ctx->lazyzero;
++	UFS_SB(sb)->s_lazyzero = !!ctx->lazyzero;
  	mutex_unlock(&UFS_SB(sb)->s_lock);
  	return 0;
  }
