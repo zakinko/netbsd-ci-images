@@ -46,6 +46,6 @@ jobs:
           FS_PATCH=${{ matrix.patch }} FS_PATCH_OMIT=${{ matrix.omit }} sh fs-probe/ra-panic.sh fsp/ra ${{ inputs.iterations }}
       - name: VM の serial console の末尾
         if: failure() || cancelled()
-        run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 20000 {} \;
+        run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 30000 {} \;
       - run: cat fsp/ra/summary.txt >> $GITHUB_STEP_SUMMARY
         if: always()
