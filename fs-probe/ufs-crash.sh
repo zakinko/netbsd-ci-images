@@ -16,9 +16,14 @@ sum=$out/crash.txt
 note() { printf '%s\n' "$*" | tee -a $sum; }
 note "# ufs-crash / kernel $(uname -r) FS_PATCH=${FS_PATCH:-0} OMIT=${FS_PATCH_OMIT:-}"
 dnf -y -q install epel-release
-dnf -y -q install fio patch gcc make elfutils-libelf-devel rpm cpio xz tar bc kernel-headers \
-	device-mapper kernel-modules-extra-$(uname -r) ||
-	dnf -y -q install https://vault.almalinux.org/$(uname -r | sed -n 's/.*\.el10_\([0-9]*\)\..*/10.\1/p')/BaseOS/x86_64/os/Packages/kernel-modules-extra-$(uname -r).rpm
+dnf -y -q install fio patch gcc make elfutils-libelf-devel rpm cpio xz tar bc \
+	kernel-headers device-mapper
+# kernel-ml は kernel-ml-modules-extra を kernel.sh が入れている。
+case $(uname -r) in
+*elrepo*) ;;
+*)	dnf -y -q install kernel-modules-extra-$(uname -r) ||
+	dnf -y -q install https://vault.almalinux.org/$(uname -r | sed -n 's/.*\.el10_\([0-9]*\)\..*/10.\1/p')/BaseOS/x86_64/os/Packages/kernel-modules-extra-$(uname -r).rpm ;;
+esac
 modprobe dm-log-writes || { note "!! no dm-log-writes"; exit 1; }
 . $here/ksrc.sh
 fs_build ufs $out/ufs-build.log

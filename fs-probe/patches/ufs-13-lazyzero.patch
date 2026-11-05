@@ -146,16 +146,15 @@
  
  	if (!sbi->s_flavour) {
  		if (!silent)
-@@ -1377,6 +1382,8 @@
+@@ -1377,6 +1382,7 @@
  
  	if ((bool)(fc->sb_flags & SB_RDONLY) == sb_rdonly(sb)) {
  		UFS_SB(sb)->s_on_err = ctx->on_err;
-+	UFS_SB(sb)->s_lazyzero = ctx->lazyzero;
 +		UFS_SB(sb)->s_lazyzero = ctx->lazyzero;
  		mutex_unlock(&UFS_SB(sb)->s_lock);
  		return 0;
  	}
-@@ -1438,6 +1445,7 @@
+@@ -1438,6 +1444,7 @@
  #endif
  	}
  	UFS_SB(sb)->s_on_err = ctx->on_err;
@@ -163,7 +162,7 @@
  	mutex_unlock(&UFS_SB(sb)->s_lock);
  	return 0;
  }
-@@ -1458,6 +1466,8 @@
+@@ -1458,6 +1465,8 @@
  	while (tp->value && tp->value != mval)
  		++tp;
  	seq_printf(seq, ",onerror=%s", tp->name);
@@ -172,7 +171,7 @@
  
  	return 0;
  }
-@@ -1586,6 +1596,7 @@
+@@ -1586,6 +1595,7 @@
  
  		ctx->flavour = sbi->s_flavour;
  		ctx->on_err = sbi->s_on_err;
@@ -182,11 +181,11 @@
  		ctx->on_err = UFS_MOUNT_ONERROR_LOCK;
 --- a/fs/ufs/ufs.h
 +++ b/fs/ufs/ufs.h
-@@ -26,6 +26,7 @@
+@@ -24,6 +24,7 @@
+ 	struct ufs_cg_private_info * s_ucpi[UFS_MAX_GROUP_LOADED];
+ 	unsigned s_cgno[UFS_MAX_GROUP_LOADED];
  	unsigned short s_cg_loaded;
++	unsigned short s_lazyzero;
  	unsigned s_flavour;
  	unsigned s_on_err;
-+	unsigned s_lazyzero;
  	u32 s_metackhash;		/* check-hashes kept, see ckhash.c */
- 	struct super_block *sb;
- 	int work_queued; /* non-zero if the delayed work is queued */
