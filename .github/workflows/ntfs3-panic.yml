@@ -1,0 +1,51 @@
+name: ntfs3 の readahead の panic を数える
+
+# RSP が奇数のまま ret して落ちた panic (run 41539207653) は一度しか
+# 出ていない。fs-probe.yml の全部を回さず、読み直しだけを繰り返して、
+# 当て物の有無で比べる。
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        type: string
+        default: '30'
+
+concurrency:
+  group: ntfs3-panic-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  loop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: stock, patch: 0, omit: '' }
+          - { name: patched, patch: 1, omit: '' }
+          - { name: no-empty-runs, patch: 1, omit: ntfs3-03 }
+    name: loop (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/almalinux-vm@v1
+        with:
+          release: "10"
+          mem: 8192
+          run: sh fs-probe/kernel.sh shstk
+      - name: user shadow stack を切った再起動から戻るのを待つ
+        run: |
+          printf 'uname -r\n' > $RUNNER_TEMP/u.sh
+          sleep 45
+          for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+      - shell: almalinux {0}
+        timeout-minutes: 100
+        run: |
+          grep -qw nousershstk /proc/cmdline
+          FS_PATCH=${{ matrix.patch }} FS_PATCH_OMIT=${{ matrix.omit }} sh fs-probe/ra-panic.sh fsp/ra ${{ inputs.iterations }}
+      - name: VM の serial console の末尾
+        if: failure() || cancelled()
+        run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 20000 {} \;
+      - run: cat fsp/ra/summary.txt >> $GITHUB_STEP_SUMMARY
+        if: always()
