@@ -44,15 +44,14 @@ map=/usr/src/kernels/$(uname -r)/System.map
 ret=$(awk '$2 ~ /[tT]/ && $3 == "page_cache_ra_unbounded" { print $1 }' $map)
 note "page_cache_ra_unbounded in System.map: $ret"
 sh /usr/src/kernels/$(uname -r)/scripts/extract-vmlinux /boot/vmlinuz-$(uname -r) > $work/vmlinux
-a=$(printf '%d' 0x$ret)
-objdump -d --no-show-raw-insn --start-address=$a --stop-address=$((a + 0x200)) $work/vmlinux |
+objdump -d --no-show-raw-insn --start-address=0x$ret --stop-address=0x$(printf %x $((0x$ret + 0x200))) $work/vmlinux |
 	tee $out/ra-unbounded.dis | sed 's/^/DIS /'
 # ntfs_readahead は mpage_readahead へ tail call なので、ret を実行したのは
 # mpage_readahead である。
 for f in mpage_readahead do_mpage_readpage; do
 	l=$(awk -v f=$f '$3 == f { print $1 }' $map)
-	a=$(printf '%d' 0x$l)
-	objdump -d --no-show-raw-insn --start-address=$a --stop-address=$((a + 0x900)) $work/vmlinux |
+	# 番地は 64 bit の上位が立っていて、printf %d では飽和する。16 進のまま渡す。
+	objdump -d --no-show-raw-insn --start-address=0x$l --stop-address=0x$(printf %x $((0x$l + 0x900))) $work/vmlinux |
 		awk -v f=$f 'NR > 6 && /\tint3/ { exit } { print f " " $0 }' | sed 's/^/DISV /'
 done
 objdump -dr --no-show-raw-insn $ksrc/ntfs3/ntfs3.ko |
