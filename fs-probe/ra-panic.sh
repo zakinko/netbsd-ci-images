@@ -47,6 +47,14 @@ sh /usr/src/kernels/$(uname -r)/scripts/extract-vmlinux /boot/vmlinuz-$(uname -r
 a=$(printf '%d' 0x$ret)
 objdump -d --no-show-raw-insn --start-address=$a --stop-address=$((a + 0x200)) $work/vmlinux |
 	tee $out/ra-unbounded.dis | sed 's/^/DIS /'
+# ntfs_readahead は mpage_readahead へ tail call なので、ret を実行したのは
+# mpage_readahead である。
+for f in mpage_readahead do_mpage_readpage; do
+	l=$(awk -v f=$f '$3 == f { print $1 }' $map)
+	a=$(printf '%d' 0x$l)
+	objdump -d --no-show-raw-insn --start-address=$a --stop-address=$((a + 0x900)) $work/vmlinux |
+		awk -v f=$f 'NR > 6 && /\tint3/ { exit } { print f " " $0 }' | sed 's/^/DISV /'
+done
 objdump -dr --no-show-raw-insn $ksrc/ntfs3/ntfs3.ko |
 	awk '/^[0-9a-f]+ <(ntfs_readahead|ntfs_get_block|ntfs_get_block_vbo|ntfs_read_folio)[^>]*>:$/ { p = 1 }
 	     /^$/ { p = 0 } p' | sed 's/^/DISM /'
