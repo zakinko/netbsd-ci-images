@@ -31,6 +31,11 @@ fsstress=$work/xfstests/ltp/fsstress
 
 . $here/ksrc.sh
 fs_sparse || exit 1
+# read_pages は RSP を RBP から戻す (lea -0x18(%rbp),%rsp)。落ちた RSP は
+# 本来の値より 1 少なかった。mpage_readahead から戻った時点で RBP が既に
+# ずれているのかを分ける。
+sed -i 's|^\tmpage_readahead(rac, ntfs_get_block);|\t{ unsigned long b, a; asm volatile("mov %%rbp,%0" : "=r"(b)); mpage_readahead(rac, ntfs_get_block); asm volatile("mov %%rbp,%0" : "=r"(a)); if (a != b) pr_emerg("ra-panic: rbp %lx -> %lx ino %lx\\n", b, a, inode->i_ino); }|' $ksrc/ntfs3/inode.c
+grep -c 'ra-panic: rbp' $ksrc/ntfs3/inode.c | tee -a $sum
 fs_build ntfs3 $out/ntfs3-build.log
 st=$?
 note "ntfs3 build+insmod exit $st"
