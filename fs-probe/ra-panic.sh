@@ -34,8 +34,29 @@ fs_sparse || exit 1
 # read_pages は RSP を RBP から戻す (lea -0x18(%rbp),%rsp)。落ちた RSP は
 # 本来の値より 1 少なかった。mpage_readahead から戻った時点で RBP が既に
 # ずれているのかを分ける。
-sed -i 's|^\tmpage_readahead(rac, ntfs_get_block);|\t{ unsigned long b, a; asm volatile("mov %%rbp,%0" : "=r"(b)); mpage_readahead(rac, ntfs_get_block); asm volatile("mov %%rbp,%0" : "=r"(a)); if (a != b) pr_emerg("ra-panic: rbp %lx -> %lx ino %lx\\n", b, a, inode->i_ino); }|' $ksrc/ntfs3/inode.c
-grep -c 'ra-panic: rbp' $ksrc/ntfs3/inode.c | tee -a $sum
+cat > $work/rbp.h <<'EOH'
+/* volatile のメモリに取る。レジスタに取ると RBP 同士を比べてしまう
+ * (run 41987982347)。自分で RBP を積むだけで read_pages へ届かなくなり、
+ * ずれは出口で消される。死んだ下のフレームごと出す。 */
+#define RA_CHECK(call, inode) do {					\
+	volatile unsigned long ra_b, ra_a;				\
+	unsigned long ra_sp;						\
+	asm volatile("mov %%rbp,%0" : "=m"(ra_b));			\
+	call;								\
+	asm volatile("mov %%rbp,%0" : "=m"(ra_a));			\
+	asm volatile("mov %%rsp,%0" : "=r"(ra_sp));			\
+	if (ra_a != ra_b) {						\
+		pr_emerg("ra-panic: rbp %lx -> %lx sp %lx ino %lx\n",	\
+			 ra_b, ra_a, ra_sp, (inode)->i_ino);		\
+		print_hex_dump(KERN_EMERG, "ra-stack ", DUMP_PREFIX_ADDRESS, \
+			       32, 8, (void *)(ra_sp - 0x200), 0x300, false); \
+		panic("ra-panic");					\
+	}								\
+} while (0)
+EOH
+sed -i "1i #include \"$work/rbp.h\"" $ksrc/ntfs3/inode.c
+sed -i 's|^\tmpage_readahead(rac, ntfs_get_block);|\tRA_CHECK(mpage_readahead(rac, ntfs_get_block), inode);|' $ksrc/ntfs3/inode.c
+grep -c 'RA_CHECK(mpage' $ksrc/ntfs3/inode.c | tee -a $sum
 fs_build ntfs3 $out/ntfs3-build.log
 st=$?
 note "ntfs3 build+insmod exit $st"
