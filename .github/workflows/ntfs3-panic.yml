@@ -27,9 +27,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: stock, wait: 0 }
-          - { name: wait-a, wait: 1 }
-          - { name: wait-b, wait: 1 }
+          - { name: stock, patch: 0 }
+          - { name: fixed-a, patch: 1 }
+          - { name: fixed-b, patch: 1 }
     name: loop (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +59,7 @@ jobs:
           uname -r
           grep -qw nousershstk /proc/cmdline
           dmesg -n 8
-          RA_WAIT=${{ matrix.wait }} sh fs-probe/ra-panic.sh fsp/ra ${{ inputs.iterations }}
+          FS_PATCH=${{ matrix.patch }} sh fs-probe/ra-panic.sh fsp/ra ${{ inputs.iterations }}
       - name: VM の serial console の末尾
         if: failure() || cancelled()
         run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 40000 {} \;

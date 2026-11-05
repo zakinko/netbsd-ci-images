@@ -1,0 +1,35 @@
+--- a/fs/ntfs3/inode.c
++++ b/fs/ntfs3/inode.c
+@@ -736,6 +736,17 @@
+ 		return err;
+ 	}
+ 
++	/*
++	 * ntfs_get_block_vbo() reads a block across 'valid' through the
++	 * buffer_head it is given, and mpage passes one on its stack.
++	 * end_buffer_read_sync() drops its reference after unlocking, so
++	 * the decrement can land on the frame of whatever runs after
++	 * mpage has returned.  Use the folio's own buffers instead.
++	 */
++	if (ni->i_valid >= folio_pos(folio) &&
++	    ni->i_valid < folio_pos(folio) + folio_size(folio))
++		return block_read_full_folio(folio, ntfs_get_block);
++
+ 	/* Normal + sparse files. */
+ 	return mpage_read_folio(folio, ntfs_get_block);
+ }
+@@ -761,9 +772,11 @@
+ 	valid = ni->i_valid;
+ 	pos = readahead_pos(rac);
+ 
+-	if (valid < i_size_read(inode) && pos <= valid &&
+-	    valid < pos + readahead_length(rac)) {
+-		/* Range cross 'valid'. Read it page by page. */
++	if (pos <= valid && valid < pos + readahead_length(rac)) {
++		/*
++		 * Range cross 'valid', which it also does when 'valid' is the
++		 * unaligned end of the file.  Read it page by page.
++		 */
+ 		return;
+ 	}
+ 
