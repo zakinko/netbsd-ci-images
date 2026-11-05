@@ -17,7 +17,7 @@ sum=$out/crash.txt
 note() { printf '%s\n' "$*" | tee -a $sum; }
 note "# ufs-crash / kernel $(uname -r) FS_PATCH=${FS_PATCH:-0} OMIT=${FS_PATCH_OMIT:-}"
 dnf -y -q install epel-release
-dnf -y -q install patch gcc make elfutils-libelf-devel rpm cpio xz tar bc \
+dnf -y -q install patch gcc make elfutils-libelf-devel rpm cpio xz tar bc kernel-headers \
 	device-mapper kernel-modules-extra-$(uname -r) ||
 	dnf -y -q install https://vault.almalinux.org/$(uname -r | sed -n 's/.*\.el10_\([0-9]*\)\..*/10.\1/p')/BaseOS/x86_64/os/Packages/kernel-modules-extra-$(uname -r).rpm
 modprobe dm-log-writes || { note "!! no dm-log-writes"; exit 1; }
@@ -25,8 +25,8 @@ modprobe dm-log-writes || { note "!! no dm-log-writes"; exit 1; }
 fs_build ufs $out/ufs-build.log
 note "ufs build+insmod exit $?"
 
-scenario() {	# image ufstype scenario
-	n=$1 t=$2 s=$3
+scenario() {	# image ufstype scenario off len
+	n=$1 t=$2 s=$3 woff=$4 wlen=$5
 	rm -f $work/*.img $work/log.raw
 	cp --sparse=always $in/$n.img $work/u.img
 	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
@@ -41,7 +41,10 @@ try:
 except OSError:
 	pass'
 	sync; rm -f /mnt/b/fill; sync
-	bs=$(python3 -I -c 'import os; print(os.statvfs("/mnt/b").f_bsize)')
+	# statvfs の f_bsize は fragment なので、superblock の fs_bsize を読む。
+	bs=$(python3 -I -c '
+import struct, sys
+print(struct.unpack("<i", open(sys.argv[1], "rb").read(65536 + 52)[65536 + 48:])[0])' $u)
 	truncate -s 16M /mnt/b/hole
 	sync; umount /mnt/b; losetup -d $u
 	cp --sparse=never $work/u.img $work/base.img
@@ -50,16 +53,21 @@ except OSError:
 	l=$(losetup -f --show --direct-io=on -b 512 $work/log.raw)
 	dmsetup create lw --table "0 $(blockdev --getsz $u) log-writes $u $l"
 	mount -t ufs -o rw,ufstype=$t /dev/mapper/lw /mnt/b || { note "!! mount lw"; exit 1; }
-	# 直接 block と間接 block の両方に当たるよう、block ごとに 8K の所へ。
+	# 直接 block と間接 block の両方に当たるよう、block ごとに同じ位置へ。
 	python3 -I -c '
 import os, sys
-bs = int(sys.argv[1])
+bs, off, n = map(int, sys.argv[1:4])
 fd = os.open("/mnt/b/hole", os.O_WRONLY)
 for i in range(0, 200):
-	os.pwrite(fd, b"D" * 4096, i * bs + 8192)
-if sys.argv[2] == "fsync":
+	os.pwrite(fd, b"D" * n, i * bs + off)
+if sys.argv[4] == "fsync":
 	os.fsync(fd)
-os.close(fd)' $bs $s
+os.close(fd)' $bs $woff $wlen $s
+	live=$(grep -c SENTINEL /mnt/b/hole)
+	echo 3 > /proc/sys/vm/drop_caches
+	cold=$(python3 -I -c '
+b = open("/mnt/b/hole", "rb").read()
+print(sum(b"SENTINEL" in b[i:i + 4096] for i in range(0, len(b), 4096)))')
 	if [ $s = background ]; then
 		sysctl -q vm.dirty_writeback_centisecs=20 vm.dirty_expire_centisecs=50
 		sleep 8
@@ -68,12 +76,14 @@ os.close(fd)' $bs $s
 	sync; umount /mnt/b
 	dmsetup remove lw
 	losetup -d $u
-	note "$n $s bsize $bs: $(python3 -I $here/ufs-crash.py $work/base.img $l $t hole $bs | tee -a $out/$n-$s.log | tail -1)"
+	note "$n $s off $woff len $wlen bsize $bs live-lines $live cold-pages $cold: $(python3 -I $here/ufs-crash.py $work/base.img $l $t hole $bs $woff $wlen | tee -a $out/$n-$s-$woff.log | tail -1)"
 	losetup -d $l
 }
 for n in netbsd-ffs2 freebsd-ufs2; do
 	for s in sync fsync background; do
-		scenario $n ufs2 $s
+		scenario $n ufs2 $s 8192 4096
+		scenario $n ufs2 $s 1000 100
+		scenario $n ufs2 $s 2048 4096
 	done
 done
 rm -f $work/*.img $work/log.raw

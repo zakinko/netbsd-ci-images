@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # dm-log-writes の記録を一件ずつ base へ足し、各時点で mount して、途中で
 # 電源が落ちた場合に file から古い disk の中身が読めるかを数える。
-#   ufs-crash.py <base.img> <log dev> <ufstype> <file> <bsize>
-# 印は書き込みの page の中と、同じ block の残りとに分けて数える。
+#   ufs-crash.py <base.img> <log dev> <ufstype> <file> <bsize> <off> <len>
+# block ごとに off から len byte 書いた file を見る。印は書き込みが触れた
+# page の中と、同じ block の残りとに分けて数える。
 # 形式: Documentation/admin-guide/device-mapper/log-writes.rst
 import os, struct, subprocess, sys
 
-base, logdev, ufstype, name, bsize = sys.argv[1:6]
-bsize = int(bsize)
+base, logdev, ufstype, name, bsize, woff, wlen = sys.argv[1:8]
+bsize, woff, wlen = int(bsize), int(woff), int(wlen)
 MNT = "/mnt/c"
 MARK = b"SENTINEL"
 SS = 512
@@ -26,6 +27,7 @@ def scan():
 		sh("losetup", "-d", loop)
 		return False, 0, 0
 	inpage = rest = 0
+	where.clear()
 	try:
 		with open(os.path.join(MNT, name), "rb") as f:
 			off = 0
@@ -34,10 +36,12 @@ def scan():
 				if not b:
 					break
 				if MARK in b:
-					if (off & (bsize - 1)) == 8192:
+					o = off & (bsize - 1)
+					if o < woff + wlen and woff < o + 4096:
 						inpage += 1
 					else:
 						rest += 1
+					where.append(off)
 				off += 4096
 	except OSError:
 		pass
@@ -46,6 +50,7 @@ def scan():
 	return True, inpage, rest
 
 
+where = []
 log = os.open(logdev, os.O_RDONLY)
 magic, ver, nr, sectorsize = struct.unpack("<QQQI", os.pread(log, 28, 0))
 if magic != 0x6a736677736872 or ver != 1 or sectorsize != SS:
@@ -71,5 +76,5 @@ for i in range(nr):
 		worst = [max(worst[0], a), max(worst[1], b)]
 m, a, b = scan()
 print("entries %d, unmountable points %d, points with old contents %d, "
-      "worst written-page %d, worst rest-of-block %d, final %d %d"
-      % (nr, nowhere, hit, worst[0], worst[1], a, b))
+      "worst written-page %d, worst rest-of-block %d, final %d %d %s"
+      % (nr, nowhere, hit, worst[0], worst[1], a, b, where[:8]))
