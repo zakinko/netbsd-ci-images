@@ -131,7 +131,7 @@ for load in $loads; do
 		# (run 41539207653)。
 		fss-nommap)   fo='-f mwrite=0 -f mread=0' ;;
 		fss-notrunc)  fo='-f truncate=0' ;;
-		fss-nofalloc) fo='-f allocsp=0 -f freesp=0 -f resvsp=0 -f unresvsp=0 -f fallocate=0 -f punch=0 -f zero=0 -f collapse=0 -f insert=0' ;;
+		fss-nofalloc) fo='-f fallocate=0 -f punch=0 -f zero=0 -f collapse=0 -f insert=0' ;;
 		fss-nowritev) fo='-f writev=0' ;;
 		*)            fo= ;;
 		esac
