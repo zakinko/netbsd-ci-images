@@ -48,6 +48,12 @@ objdump -d --no-show-raw-insn --start-address=0x$ret --stop-address=0x$(printf %
 	tee $out/ra-unbounded.dis | sed 's/^/DIS /'
 # ntfs_readahead は mpage_readahead へ tail call なので、ret を実行したのは
 # mpage_readahead である。
+# 戻り先の直前の call は read_pages で、壊れた R12 もその呼び出し元が
+# 積んだ値だった。read_pages を生の byte ごと出す。
+for f in read_pages; do
+	l=$(awk -v f=$f '$3 == f { print $1 }' $map)
+	objdump -d --start-address=0x$l --stop-address=0x$(printf %x $((0x$l + 0x200))) $work/vmlinux | sed 's/^/DISR /'
+done
 for f in mpage_readahead do_mpage_readpage; do
 	l=$(awk -v f=$f '$3 == f { print $1 }' $map)
 	# 番地は 64 bit の上位が立っていて、printf %d では飽和する。16 進のまま渡す。

@@ -89,17 +89,19 @@ run() {	# label
 # graph 付きで取り、子孫を含めた割合 (children) で関数ごとに出す。
 # 書き戻しは end_fsync の fsync から fio 自身の文脈で走る分を数える。
 prof() {	# label
-	for rw in write read; do
+	for rw in write read randwrite; do
 		drop
 		[ $rw = read ] || rm -f /mnt/b/sw.*
+		bs=1M size=256M
+		[ $rw = randwrite ] && bs=4k size=64M
 		perf record -q -g -o $work/perf.data -- \
-			fio --name=sw --directory=/mnt/b --rw=$rw --bs=1M --size=256M \
+			fio --name=sw --directory=/mnt/b --rw=$rw --bs=$bs --size=$size \
 			--end_fsync=1 > /dev/null 2>&1
 		perf report -q -i $work/perf.data --children --sort symbol \
 			--percent-limit 0.5 --stdio 2>/dev/null |
 			grep -E '^ +[0-9]' > $out/perf-$1-$rw.txt
 		note "perf $1 $rw (children %, self %):"
-		grep -E 'ufs_|mpage_|block_read_full|__block_write|crc32c|blkdev_issue_zeroout|copy_|memcpy|memset|clear_page|submit_bio' \
+		grep -E 'ufs_|mpage_|block_read_full|__block_write|__bread|sb_getblk|__find_get_block|mark_buffer_dirty|crc32c|blkdev_issue_zeroout|copy_|memcpy|memset|clear_page|submit_bio' \
 			$out/perf-$1-$rw.txt | head -12 | awk '{ printf "    %7s %7s %s\n", $1, $2, $4 }' | tee -a $sum
 	done
 	rm -f /mnt/b/sw.* $work/perf.data
