@@ -1,0 +1,154 @@
+--- a/fs/ufs/balloc.c
++++ b/fs/ufs/balloc.c
+@@ -18,6 +18,7 @@
+ #include <linux/bitops.h>
+ #include <linux/bio.h>
+ #include <linux/blkdev.h>
++#include <linux/pagemap.h>
+ #include <asm/byteorder.h>
+ 
+ #include "ufs_fs.h"
+@@ -368,6 +369,84 @@
+  * synchronous write for every block of a growing file, and most of the
+  * time spent writing it.
+  */
++/*
++ * With -o lazyzero, zero the @n new fragments from file fragment @fragment
++ * in the page cache rather than on the device, so that a hole filled by a
++ * small write does not wait for a synchronous write of the rest of its
++ * block.  Writeback puts the zeroes on the device, in no order with the
++ * block pointer: a crash can leave old disk contents in the block, which
++ * is what the option asks to accept.
++ *
++ * The folio being written holds fragments the write does not cover when a
++ * fragment is smaller than a page.  __block_write_begin() does not prepare
++ * those, and they would be read from the device, so zero them here.
++ *
++ * The caller holds s_lock, and writeback holds a folio lock when it takes
++ * s_lock, so a folio that is not free right now is not waited for.  Pages
++ * that the new fragments do not cover whole are left to the caller, as they
++ * can hold data of older fragments that are not in the cache.
++ */
++static void ufs_zero_frags_in_folio(struct folio *folio, u64 fragment, u64 end,
++				    unsigned int fshift)
++{
++	struct buffer_head *head, *bh;
++	u64 frag = (u64)folio->index << (PAGE_SHIFT - fshift);
++	size_t off = 0;
++
++	if (!folio_buffers(folio))
++		create_empty_buffers(folio, 1 << fshift, 0);
++	bh = head = folio_buffers(folio);
++	do {
++		if (frag >= fragment && frag < end && !buffer_uptodate(bh)) {
++			folio_zero_range(folio, off, bh->b_size);
++			set_buffer_uptodate(bh);
++			mark_buffer_dirty(bh);
++		}
++		frag++;
++		off += bh->b_size;
++		bh = bh->b_this_page;
++	} while (bh != head);
++}
++
++static bool ufs_zero_frags_cached(struct inode *inode, u64 fragment,
++				  unsigned int n, struct page *locked_page)
++{
++	struct address_space *mapping = inode->i_mapping;
++	unsigned int fshift = UFS_SB(inode->i_sb)->s_uspi->s_fshift;
++	unsigned int shift = PAGE_SHIFT - fshift;
++	u64 end = fragment + n;
++	pgoff_t index;
++
++	if (fshift > PAGE_SHIFT)
++		return false;
++	for (index = fragment >> shift; (u64)index << shift < end; index++) {
++		struct folio *folio;
++
++		if (index == locked_page->index) {
++			ufs_zero_frags_in_folio(page_folio(locked_page), fragment, end, fshift);
++			continue;
++		}
++		if ((u64)index << shift < fragment ||
++		    (u64)(index + 1) << shift > end)
++			return false;
++		folio = __filemap_get_folio(mapping, index,
++				FGP_LOCK | FGP_CREAT | FGP_NOWAIT,
++				mapping_gfp_constraint(mapping, GFP_NOFS));
++		if (IS_ERR(folio))
++			return false;
++		if (!folio_test_uptodate(folio)) {
++			folio_zero_range(folio, 0, folio_size(folio));
++			folio_mark_uptodate(folio);
++		}
++		if (!folio_buffers(folio))
++			create_empty_buffers(folio, 1 << inode->i_blkbits, 0);
++		block_dirty_folio(mapping, folio);
++		folio_unlock(folio);
++		folio_put(folio);
++	}
++	return true;
++}
++
+ static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
+ 			    u64 fragment, struct page *locked_page)
+ {
+@@ -378,6 +457,9 @@
+ 	if (data)
+ 		n = ufs_frags_to_zero(inode, fragment, n, locked_page);
+ 	if (!n)
++		return;
++	if (data && !IS_SYNC(inode) && ufs_test_opt(UFS_SB(inode->i_sb)->s_mount_opt, LAZYZERO) &&
++	    ufs_zero_frags_cached(inode, fragment, n, locked_page))
+ 		return;
+ 	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
+ 		return;
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -358,6 +358,7 @@
+        Opt_onerror_lock = UFS_MOUNT_ONERROR_LOCK,
+        Opt_onerror_umount = UFS_MOUNT_ONERROR_UMOUNT,
+        Opt_onerror_repair = UFS_MOUNT_ONERROR_REPAIR,
++       Opt_lazyzero = UFS_MOUNT_LAZYZERO,
+        Opt_err
+ };
+ 
+@@ -378,6 +379,7 @@
+ 	{Opt_onerror_lock, "onerror=lock"},
+ 	{Opt_onerror_umount, "onerror=umount"},
+ 	{Opt_onerror_repair, "onerror=repair"},
++	{Opt_lazyzero, "lazyzero"},
+ 	{Opt_err, NULL}
+ };
+ 
+@@ -455,6 +457,9 @@
+ 			ufs_clear_opt (*mount_options, ONERROR);
+ 			ufs_set_opt (*mount_options, ONERROR_REPAIR);
+ 			break;
++		case Opt_lazyzero:
++			ufs_set_opt(*mount_options, LAZYZERO);
++			break;
+ 		default:
+ 			pr_err("Invalid option: \"%s\" or missing value\n", p);
+ 			return 0;
+@@ -1542,6 +1547,9 @@
+ 		++tp;
+ 	BUG_ON(tp->token == Opt_err);
+ 	seq_printf(seq, ",%s", tp->pattern);
++
++	if (ufs_test_opt(sbi->s_mount_opt, LAZYZERO))
++		seq_puts(seq, ",lazyzero");
+ 
+ 	return 0;
+ }
+--- a/fs/ufs/ufs.h
++++ b/fs/ufs/ufs.h
+@@ -74,6 +74,8 @@
+ #define UFS_MOUNT_UFSTYPE_UFS2		0x00001000
+ #define UFS_MOUNT_UFSTYPE_SUNOS		0x00002000
+ 
++#define UFS_MOUNT_LAZYZERO		0x00010000
++
+ #define ufs_clear_opt(o,opt)	o &= ~UFS_MOUNT_##opt
+ #define ufs_set_opt(o,opt)	o |= UFS_MOUNT_##opt
+ #define ufs_test_opt(o,opt)	((o) & UFS_MOUNT_##opt)

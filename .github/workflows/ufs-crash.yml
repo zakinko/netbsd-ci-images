@@ -20,8 +20,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: without-ufs-13, omit: 'ufs-13-hole-zero-cached' }
-          - { name: with-ufs-13, omit: '' }
+          - { name: default, opts: '' }
+          - { name: lazyzero, opts: lazyzero }
     name: order (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
           for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
       - shell: almalinux {0}
         timeout-minutes: 45
-        run: FS_PATCH=1 FS_PATCH_OMIT='${{ matrix.omit }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
+        run: FS_PATCH=1 UFS_OPTS='${{ matrix.opts }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
       - run: cat fsp/crash/crash.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4

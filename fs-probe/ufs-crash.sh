@@ -1,10 +1,9 @@
 #!/bin/sh
-# ufs-13 は穴の残りの 0 埋めを同期書き込みから page cache へ移した。割り
-# 当てより先に 0 が disk に届く保証が消えたかを、書き込みの順序を実際に
-# 記録して確かめる。
+# ufs-13 の -o lazyzero は穴の残りの 0 埋めを同期書き込みから page cache へ
+# 移す。既定と lazyzero で、走行中と途中の時点に古い中身が見えるかを、書き
+# 込みの順序を実際に記録して確かめる。UFS_OPTS に mount option を置く。
 #   ufs-crash.sh <indir> <outdir>
-# 空き領域を全部印で埋めて消してから、穴に 4K ずつ書く。FS_PATCH_OMIT で
-# ufs-13 を抜いた物と比べる。
+# 空き領域を全部印で埋めて消してから、穴に書く。
 set -u
 in=$(cd "$1" && pwd)
 mkdir -p "$2"
@@ -17,7 +16,7 @@ sum=$out/crash.txt
 note() { printf '%s\n' "$*" | tee -a $sum; }
 note "# ufs-crash / kernel $(uname -r) FS_PATCH=${FS_PATCH:-0} OMIT=${FS_PATCH_OMIT:-}"
 dnf -y -q install epel-release
-dnf -y -q install patch gcc make elfutils-libelf-devel rpm cpio xz tar bc kernel-headers \
+dnf -y -q install fio patch gcc make elfutils-libelf-devel rpm cpio xz tar bc kernel-headers \
 	device-mapper kernel-modules-extra-$(uname -r) ||
 	dnf -y -q install https://vault.almalinux.org/$(uname -r | sed -n 's/.*\.el10_\([0-9]*\)\..*/10.\1/p')/BaseOS/x86_64/os/Packages/kernel-modules-extra-$(uname -r).rpm
 modprobe dm-log-writes || { note "!! no dm-log-writes"; exit 1; }
@@ -52,7 +51,7 @@ print(struct.unpack("<i", open(sys.argv[1], "rb").read(65536 + 52)[65536 + 48:])
 	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
 	l=$(losetup -f --show --direct-io=on -b 512 $work/log.raw)
 	dmsetup create lw --table "0 $(blockdev --getsz $u) log-writes $u $l"
-	mount -t ufs -o rw,ufstype=$t /dev/mapper/lw /mnt/b || { note "!! mount lw"; exit 1; }
+	mount -t ufs -o rw,ufstype=$t${UFS_OPTS:+,$UFS_OPTS} /dev/mapper/lw /mnt/b || { note "!! mount lw"; exit 1; }
 	# 直接 block と間接 block の両方に当たるよう、block ごとに同じ位置へ。
 	python3 -I -c '
 import os, sys
@@ -85,6 +84,21 @@ for n in netbsd-ffs2 freebsd-ufs2; do
 		scenario $n ufs2 $s 1000 100
 		scenario $n ufs2 $s 2048 4096
 	done
+done
+for n in netbsd-ffs2 freebsd-ufs2; do
+	rm -f $work/u.img
+	cp --sparse=always $in/$n.img $work/u.img
+	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
+	mount -t ufs -o rw,ufstype=ufs2${UFS_OPTS:+,$UFS_OPTS} $u /mnt/b
+	note "$(findmnt -no OPTIONS /mnt/b)"
+	rm -rf /mnt/b/src; sync
+	for i in 1 2 3; do
+		fio --name=rw --directory=/mnt/b --rw=randwrite --bs=4k --size=64M \
+		    --end_fsync=1 --output-format=json > $work/rw.json
+		note "$n rand4k $(python3 -I -c 'import json,sys;print(round(json.load(open(sys.argv[1]))["jobs"][0]["write"]["iops"]))' $work/rw.json)"
+		rm -f /mnt/b/rw.*; sync; echo 3 > /proc/sys/vm/drop_caches
+	done
+	umount /mnt/b; losetup -d $u
 done
 rm -f $work/*.img $work/log.raw
 if [ -s $out/build-failed ]; then
