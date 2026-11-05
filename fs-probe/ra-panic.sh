@@ -102,8 +102,12 @@ while [ $i -lt $n ]; do
 	truncate -s 2G $raw
 	echo 'type=7' | sfdisk -q $raw
 	loop=$(losetup -f -P --show $raw)
-	mkntfs -Q -L STRESS ${loop}p1 > /dev/null 2>&1
-	mount -i -t ntfs3 ${loop}p1 /mnt/p || { note "!! mount failed"; exit 1; }
+	case ${RA_FS:-ntfs3} in
+	ntfs3)	mkntfs -Q -L STRESS ${loop}p1 > /dev/null 2>&1
+		mount -i -t ntfs3 ${loop}p1 /mnt/p || { note "!! mount failed"; exit 1; } ;;
+	ext4)	mkfs.ext4 -q ${loop}p1
+		mount ${loop}p1 /mnt/p || { note "!! mount failed"; exit 1; } ;;
+	esac
 	timeout 300 $fsstress -d /mnt/p/fss -n 4000 -p 4 -s $i > /dev/null 2>&1
 	sync
 	for r in 1 2 3; do
@@ -111,7 +115,7 @@ while [ $i -lt $n ]; do
 		# 落ちたファイルが serial に残るよう、一本ずつ読む。
 		(cd /mnt/p && find . -xdev -type f -printf '%i %s %p\n') | while read ino size f; do
 			echo "ra-panic: read $ino $size $f" > /dev/kmsg
-			(cd /mnt/p && sha256sum "$f") > /dev/null 2>&1
+			(cd /mnt/p && ${RA_READER:-sha256sum} "$f") > /dev/null 2>&1
 		done
 	done
 	umount /mnt/p
