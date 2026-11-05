@@ -161,6 +161,16 @@ for n in netbsd-ffs2 netbsd-ffs1 freebsd-ufs2 freebsd-ufs1; do
 		run "ufs $n"
 		prof "ufs-$n"
 		bioprof "ufs-$n"
+		python3 -I $here/holeck.py write /mnt/b/hc && drop
+		note "holes after small writes, $n: $(python3 -I $here/holeck.py check /mnt/b/hc)"
+		rm -f /mnt/b/hc
+		fio --name=v --directory=/mnt/b --rw=randwrite --bs=4k --size=64M \
+		    --verify=crc32c --do_verify=0 > /dev/null 2>>$out/fio.err
+		drop
+		fio --name=v --directory=/mnt/b --rw=randread --bs=4k --size=64M \
+		    --verify=crc32c --verify_only=1 > $work/v.txt 2>>$out/fio.err
+		note "fio verify after drop_caches, $n: exit $?, errors $(grep -c 'verify:' $work/v.txt)"
+		rm -f /mnt/b/v.*
 	}
 	umount /mnt/b; losetup -d $loop; rm -f $work/u.img
 done
