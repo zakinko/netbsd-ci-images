@@ -120,3 +120,4 @@ while [ $i -lt $n ]; do
 done
 dmesg > $out/dmesg.txt
 note "all $n iterations finished; oops lines: $(grep -cE 'Oops|BUG:' $out/dmesg.txt)"
+grep -n -A45 -E 'Oops|BUG:' $out/dmesg.txt | head -120 | cut -c1-150 | sed 's/^/OOPS /'
