@@ -1,0 +1,54 @@
+name: ufs の穴の 0 埋めと電源断の順序を数える
+
+on:
+  workflow_dispatch:
+    inputs:
+      images_run:
+        description: 'src-*bsd の artifact を持つ fs-probe の run'
+        type: string
+        required: true
+
+concurrency:
+  group: ufs-crash-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  order:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: without-ufs-13, omit: 'ufs-13-hole-zero-cached' }
+          - { name: with-ufs-13, omit: '' }
+    name: order (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: src-*bsd
+          path: fsp/in
+          merge-multiple: true
+          run-id: ${{ inputs.images_run }}
+          github-token: ${{ github.token }}
+      - uses: vmactions/almalinux-vm@v1
+        with:
+          release: "10"
+          mem: 8192
+          run: sh fs-probe/kernel.sh shstk
+      - name: user shadow stack を切った再起動から戻るのを待つ
+        run: |
+          printf 'uname -r\n' > $RUNNER_TEMP/u.sh
+          sleep 45
+          for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+      - shell: almalinux {0}
+        timeout-minutes: 45
+        run: FS_PATCH=1 FS_PATCH_OMIT='${{ matrix.omit }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
+      - run: cat fsp/crash/crash.txt >> $GITHUB_STEP_SUMMARY
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crash-${{ matrix.name }}
+          path: fsp/crash
