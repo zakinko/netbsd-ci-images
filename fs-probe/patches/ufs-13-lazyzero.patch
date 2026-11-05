@@ -114,7 +114,7 @@
  
  static const struct constant_table ufs_param_ufstype[] = {
  	{"old",		UFS_MOUNT_UFSTYPE_OLD},
-@@ -371,11 +371,13 @@
+@@ -371,11 +371,12 @@
  static const struct fs_parameter_spec ufs_param_spec[] = {
  	fsparam_enum	("ufstype",	Opt_type, ufs_param_ufstype),
  	fsparam_enum	("onerror",	Opt_onerror, ufs_param_onerror),
@@ -123,22 +123,22 @@
  };
  
  struct ufs_fs_context {
- 	unsigned int flavour, on_err;
-+	bool lazyzero;
+-	unsigned int flavour, on_err;
++	unsigned int flavour, on_err, lazyzero;
  };
  
  static int ufs_parse_param(struct fs_context *fc, struct fs_parameter *param)
-@@ -407,6 +409,9 @@
+@@ -407,6 +408,9 @@
  	case Opt_onerror:
  		ctx->on_err = result.uint_32;
  		break;
 +	case Opt_lazyzero:
-+		ctx->lazyzero = true;
++		ctx->lazyzero = 1;
 +		break;
  	default:
  		return -EINVAL;
  	}
-@@ -784,6 +789,7 @@
+@@ -784,6 +788,7 @@
  
  	sbi->s_flavour = ctx->flavour;
  	sbi->s_on_err = ctx->on_err;
@@ -146,7 +146,7 @@
  
  	if (!sbi->s_flavour) {
  		if (!silent)
-@@ -1377,6 +1383,8 @@
+@@ -1377,6 +1382,8 @@
  
  	if ((bool)(fc->sb_flags & SB_RDONLY) == sb_rdonly(sb)) {
  		UFS_SB(sb)->s_on_err = ctx->on_err;
@@ -155,7 +155,7 @@
  		mutex_unlock(&UFS_SB(sb)->s_lock);
  		return 0;
  	}
-@@ -1438,6 +1446,7 @@
+@@ -1438,6 +1445,7 @@
  #endif
  	}
  	UFS_SB(sb)->s_on_err = ctx->on_err;
@@ -163,7 +163,7 @@
  	mutex_unlock(&UFS_SB(sb)->s_lock);
  	return 0;
  }
-@@ -1458,6 +1467,8 @@
+@@ -1458,6 +1466,8 @@
  	while (tp->value && tp->value != mval)
  		++tp;
  	seq_printf(seq, ",onerror=%s", tp->name);
@@ -172,7 +172,7 @@
  
  	return 0;
  }
-@@ -1586,6 +1597,7 @@
+@@ -1586,6 +1596,7 @@
  
  		ctx->flavour = sbi->s_flavour;
  		ctx->on_err = sbi->s_on_err;
@@ -186,7 +186,7 @@
  	unsigned short s_cg_loaded;
  	unsigned s_flavour;
  	unsigned s_on_err;
-+	bool s_lazyzero;
++	unsigned s_lazyzero;
  	u32 s_metackhash;		/* check-hashes kept, see ckhash.c */
  	struct super_block *sb;
  	int work_queued; /* non-zero if the delayed work is queued */

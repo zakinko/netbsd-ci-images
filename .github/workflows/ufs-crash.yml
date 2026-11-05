@@ -20,8 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: default, opts: '' }
-          - { name: lazyzero, opts: lazyzero }
+          - { name: rhel-default, kernel: rhel, opts: '' }
+          - { name: rhel-lazyzero, kernel: rhel, opts: lazyzero }
+          - { name: ml-default, kernel: ml, opts: '' }
+          - { name: ml-lazyzero, kernel: ml, opts: lazyzero }
     name: order (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +34,31 @@ jobs:
           merge-multiple: true
           run-id: ${{ inputs.images_run }}
           github-token: ${{ github.token }}
+      - name: kernel-ml の rpm を host で落とす
+        if: matrix.kernel == 'ml'
+        run: |
+          set -e
+          # elrepo.org の DNS は落ちることがある (2026-09-27、runner からも
+          # 手元からも NS が時間切れ)。同じ中身のミラーへ順に回す。
+          got=
+          for m in https://elrepo.org/linux https://mirrors.coreix.net/elrepo \
+                   https://mirror.rackspace.com/elrepo https://mirrors.tuna.tsinghua.edu.cn/elrepo; do
+            b=$m/kernel/el10/x86_64/RPMS
+            v=$(curl -fsSL -m 30 $b/ | grep -oE 'kernel-ml-core-[0-9][^"<>]*\.rpm' | sed 's/kernel-ml-core-//; s/\.x86_64\.rpm//' | sort -V | tail -1) || continue
+            [ -n "$v" ] || continue
+            r=$(curl -fsSL -m 30 $m/elrepo/el10/x86_64/RPMS/ | grep -oE 'elrepo-release-[0-9][^"<>]*\.rpm' | sort -V | tail -1) || continue
+            mkdir -p fsp/rpms
+            curl -fsSL -o fsp/rpms/$r $m/elrepo/el10/x86_64/RPMS/$r || continue
+            ok=1
+            for p in kernel-ml kernel-ml-core kernel-ml-modules kernel-ml-modules-extra kernel-ml-devel; do
+              curl -fsSL -o fsp/rpms/$p-$v.x86_64.rpm $b/$p-$v.x86_64.rpm || { ok=; break; }
+            done
+            [ -n "$ok" ] && { got=$m; break; }
+            rm -rf fsp/rpms
+          done
+          [ -n "$got" ] || { echo "!! kernel-ml を取れる所が無い"; exit 1; }
+          echo "kernel-ml $v from $got"
+          ls -l fsp/rpms
       - uses: vmactions/almalinux-vm@v1
         with:
           release: "10"
@@ -42,6 +69,17 @@ jobs:
           printf 'uname -r\n' > $RUNNER_TEMP/u.sh
           sleep 45
           for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+      - shell: almalinux {0}
+        timeout-minutes: 20
+        run: sh fs-probe/kernel.sh ${{ matrix.kernel }}
+      - name: 再起動から戻るのを待ち、走っている kernel を確かめる
+        if: matrix.kernel == 'ml'
+        run: |
+          printf 'uname -r\n' > $RUNNER_TEMP/u.sh
+          sleep 45
+          for i in $(seq 60); do almalinux $RUNNER_TEMP/u.sh && break; sleep 5; done
+          printf 'test "$(uname -r)" = "$(cat /var/tmp/want-kernel)"\n' > $RUNNER_TEMP/k.sh
+          almalinux $RUNNER_TEMP/k.sh
       - shell: almalinux {0}
         timeout-minutes: 45
         run: FS_PATCH=1 UFS_OPTS='${{ matrix.opts }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
