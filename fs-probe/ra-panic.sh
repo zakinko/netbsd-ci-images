@@ -31,32 +31,26 @@ fsstress=$work/xfstests/ltp/fsstress
 
 . $here/ksrc.sh
 fs_sparse || exit 1
-# read_pages は RSP を RBP から戻す (lea -0x18(%rbp),%rsp)。落ちた RSP は
-# 本来の値より 1 少なかった。mpage_readahead から戻った時点で RBP が既に
-# ずれているのかを分ける。
-cat > $work/rbp.h <<'EOH'
-/* volatile のメモリに取る。レジスタに取ると RBP 同士を比べてしまう
- * (run 41987982347)。自分で RBP を積むだけで read_pages へ届かなくなり、
- * ずれは出口で消される。死んだ下のフレームごと出す。 */
-#define RA_CHECK(call, inode) do {					\
-	volatile unsigned long ra_b, ra_a;				\
-	unsigned long ra_sp;						\
-	asm volatile("mov %%rbp,%0" : "=m"(ra_b));			\
-	call;								\
-	asm volatile("mov %%rbp,%0" : "=m"(ra_a));			\
-	asm volatile("mov %%rsp,%0" : "=r"(ra_sp));			\
-	if (ra_a != ra_b) {						\
-		pr_emerg("ra-panic: rbp %lx -> %lx sp %lx ino %lx\n",	\
-			 ra_b, ra_a, ra_sp, (inode)->i_ino);		\
-		print_hex_dump(KERN_EMERG, "ra-stack ", DUMP_PREFIX_ADDRESS, \
-			       32, 8, (void *)(ra_sp - 0x200), 0x300, false); \
-		panic("ra-panic");					\
-	}								\
-} while (0)
+# ntfs_get_block_vbo は valid をまたぐ読み出しで、mpage のスタック上の
+# map_bh に bh_read() する。end_buffer_read_sync は unlock_buffer の後で
+# put_bh するので、待ちが解けた呼び出し側が先に戻ると、再利用された
+# スタックが 1 減る。その分岐を通った数を数え、RA_WAIT=1 なら b_count が
+# 戻るまで待って panic が消えるかを見る。
+cat > $work/rawait.h <<EOH
+static inline int ra_bh_read(struct buffer_head *bh)
+{
+	int c = atomic_read(&bh->b_count), r = bh_read(bh, 0);
+
+	pr_info_ratelimited("ra-panic: across valid\n");
+	if (${RA_WAIT:-0})
+		while (atomic_read(&bh->b_count) != c)
+			cpu_relax();
+	return r;
+}
 EOH
-sed -i "1i #include \"$work/rbp.h\"" $ksrc/ntfs3/inode.c
-sed -i 's|^\tmpage_readahead(rac, ntfs_get_block);|\tRA_CHECK(mpage_readahead(rac, ntfs_get_block), inode);|' $ksrc/ntfs3/inode.c
-grep -c 'RA_CHECK(mpage' $ksrc/ntfs3/inode.c | tee -a $sum
+sed -i '/^#include "ntfs_fs.h"/a #include "'$work'/rawait.h"' $ksrc/ntfs3/inode.c
+sed -i 's|if (bh_read(bh, 0) < 0) {|if (ra_bh_read(bh) < 0) {|' $ksrc/ntfs3/inode.c
+grep -c ra_bh_read $ksrc/ntfs3/inode.c | tee -a $sum
 fs_build ntfs3 $out/ntfs3-build.log
 st=$?
 note "ntfs3 build+insmod exit $st"
