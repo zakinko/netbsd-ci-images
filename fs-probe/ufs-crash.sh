@@ -57,6 +57,11 @@ print(struct.unpack("<i", open(sys.argv[1], "rb").read(65536 + 52)[65536 + 48:])
 	l=$(losetup -f --show --direct-io=on -b 512 $work/log.raw)
 	dmsetup create lw --table "0 $(blockdev --getsz $u) log-writes $u $l"
 	mount -t ufs -o rw,ufstype=$t${UFS_OPTS:+,$UFS_OPTS} /dev/mapper/lw /mnt/b || { note "!! mount lw"; exit 1; }
+	# race は flusher を書き込みに重ねる。fsync の途中で一度だけ順序が崩れた
+	# ことがあり (6.12、4 回に 1 回)、待っていては再現しない。
+	if [ $s = race ]; then
+		sysctl -q vm.dirty_writeback_centisecs=1 vm.dirty_expire_centisecs=1
+	fi
 	# 直接 block と間接 block の両方に当たるよう、block ごとに同じ位置へ。
 	python3 -I -c '
 import os, sys
@@ -64,9 +69,12 @@ bs, off, n = map(int, sys.argv[1:4])
 fd = os.open("/mnt/b/hole", os.O_WRONLY)
 for i in range(0, 200):
 	os.pwrite(fd, b"D" * n, i * bs + off)
-if sys.argv[4] == "fsync":
+if sys.argv[4] in ("fsync", "race"):
 	os.fsync(fd)
 os.close(fd)' $bs $woff $wlen $s
+	if [ $s = race ]; then
+		sysctl -q vm.dirty_writeback_centisecs=500 vm.dirty_expire_centisecs=3000
+	fi
 	live=$(grep -c SENTINEL /mnt/b/hole)
 	echo 3 > /proc/sys/vm/drop_caches
 	cold=$(python3 -I -c '
@@ -88,6 +96,11 @@ for n in netbsd-ffs2 freebsd-ufs2; do
 		scenario $n ufs2 $s 8192 4096
 		scenario $n ufs2 $s 1000 100
 		scenario $n ufs2 $s 2048 4096
+	done
+done
+for n in netbsd-ffs2 freebsd-ufs2; do
+	for i in 1 2 3 4 5 6; do
+		scenario $n ufs2 race 8192 4096
 	done
 done
 for n in netbsd-ffs2 freebsd-ufs2; do
