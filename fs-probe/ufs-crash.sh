@@ -29,8 +29,9 @@ modprobe dm-log-writes || { note "!! no dm-log-writes"; exit 1; }
 fs_build ufs $out/ufs-build.log
 note "ufs build+insmod exit $?"
 
-scenario() {	# image ufstype scenario off len
-	n=$1 t=$2 s=$3 woff=$4 wlen=$5
+# 空き領域を印で埋めて消し、穴を作る。bs に block の大きさを返す。
+prepare() {	# image ufstype holesize
+	n=$1 t=$2
 	rm -f $work/*.img $work/log.raw
 	cp --sparse=always $in/$n.img $work/u.img
 	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
@@ -49,8 +50,13 @@ except OSError:
 	bs=$(python3 -I -c '
 import struct, sys
 print(struct.unpack("<i", open(sys.argv[1], "rb").read(65536 + 52)[65536 + 48:])[0])' $u)
-	truncate -s 16M /mnt/b/hole
+	truncate -s $3 /mnt/b/hole
 	sync; umount /mnt/b; losetup -d $u
+}
+
+scenario() {	# image ufstype scenario off len
+	s=$3 woff=$4 wlen=$5
+	prepare $1 $2 16M
 	cp --sparse=never $work/u.img $work/base.img
 	truncate -s 4G $work/log.raw
 	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
@@ -91,6 +97,56 @@ print(sum(b"SENTINEL" in b[i:i + 4096] for i in range(0, len(b), 4096)))')
 	note "$n $s off $woff len $wlen bsize $bs live-lines $live cold-pages $cold: $(python3 -I $here/ufs-crash.py $work/base.img $l $t hole $bs $woff $wlen | tee -a $out/$n-$s-$woff.log | tail -1)"
 	losetup -d $l
 }
+# dm-log-writes を通さずに測る。書き込みの途中で device を止めて写すので、写し
+# に在るのは止めた時点までに完了した書き込みそのもので、記録の順序によらない。
+snap() {	# image ufstype
+	prepare $1 $2 128M
+	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
+	dmsetup create lw --table "0 $(blockdev --getsz $u) linear $u 0"
+	mount -t ufs -o rw,ufstype=$t${UFS_OPTS:+,$UFS_OPTS} /dev/mapper/lw /mnt/b || { note "!! mount lw"; exit 1; }
+	sysctl -q vm.dirty_writeback_centisecs=1 vm.dirty_expire_centisecs=1
+	python3 -I -c '
+import os, sys, time
+bs = int(sys.argv[1])
+fd = os.open("/mnt/b/hole", os.O_WRONLY)
+for i in range(0, 4000):
+	os.pwrite(fd, b"D" * 4096, i * bs + 8192)
+	time.sleep(0.001)
+os.fsync(fd)
+os.close(fd)' $bs &
+	w=$!
+	k=0 hits=0
+	while [ $k -lt 12 ] && kill -0 $w 2>/dev/null; do
+		k=$((k + 1))
+		sleep 0.2
+		dmsetup suspend --nolockfs lw
+		cp --sparse=always $work/u.img $work/s.img
+		dmsetup resume lw
+		su=$(losetup -f --show -r -b 512 $work/s.img)
+		if mount -t ufs -o ro,ufstype=$t $su /mnt/c; then
+			c=$(python3 -I -c '
+b = open("/mnt/c/hole", "rb").read()
+print(sum(b"SENTINEL" in b[i:i + 4096] for i in range(0, len(b), 4096)))')
+			umount /mnt/c
+		else
+			c=unmountable
+		fi
+		losetup -d $su
+		rm -f $work/s.img
+		note "$n snap $k old-pages $c"
+		[ "$c" = 0 ] || [ "$c" = unmountable ] || hits=$((hits + 1))
+	done
+	wait $w
+	sysctl -q vm.dirty_writeback_centisecs=500 vm.dirty_expire_centisecs=3000
+	umount /mnt/b
+	dmsetup remove lw
+	losetup -d $u
+	note "$n snap: $k snapshots, $hits with old contents"
+}
+for n in netbsd-ffs2 freebsd-ufs2; do
+	snap $n ufs2
+done
+[ -n "${UFS_SNAP_ONLY:-}" ] && exit 0
 for n in netbsd-ffs2 freebsd-ufs2; do
 	for s in sync fsync background; do
 		scenario $n ufs2 $s 8192 4096
