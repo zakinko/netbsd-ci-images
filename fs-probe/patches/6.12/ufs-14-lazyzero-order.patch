@@ -75,7 +75,7 @@
 +}
 +
 +/**
-+ * ufs_order_inode() - put the data of @inode on the device ahead of its pointers
++ * ufs_order_inode() - write the data of @inode ahead of its pointers
 + * @inode: pointer to inode
 + * @sync: keep trying while new holes are being filled
 + *
@@ -126,7 +126,7 @@
  		goal = tmp + uspi->s_fpb;
  	else
  		goal = bh->b_blocknr + uspi->s_fpb;
-+	if (locked_page && UFS_SB(sb)->s_lazyzero && !IS_SYNC(inode))
++	if (locked_page && ufs_test_opt(UFS_SB(sb)->s_mount_opt, LAZYZERO) && !IS_SYNC(inode))
 +		ufs_hold_indirect(inode, bh);
  	tmp = ufs_new_fragments(inode, p, ufs_blknum(new_fragment), goal,
  				uspi->s_fpb, err, locked_page);
@@ -154,7 +154,7 @@
 +	bool sync = wbc->sync_mode == WB_SYNC_ALL;
 +	int err;
 +
-+	if (!UFS_SB(inode->i_sb)->s_lazyzero)
++	if (!ufs_test_opt(UFS_SB(inode->i_sb)->s_mount_opt, LAZYZERO))
 +		return ufs_update_inode(inode, sync);
 +
 +	err = ufs_order_inode(inode, sync);
@@ -196,7 +196,7 @@
 +	 * ones, which must not stay held to be written later over whatever
 +	 * takes their place.
 +	 */
-+	if (UFS_SB(inode->i_sb)->s_lazyzero) {
++	if (ufs_test_opt(UFS_SB(inode->i_sb)->s_mount_opt, LAZYZERO)) {
 +		err = ufs_order_inode(inode, true);
 +		if (err)
 +			goto out;

@@ -75,7 +75,7 @@
 +}
 +
 +/**
-+ * ufs_order_inode() - put the data of @inode on the device ahead of its pointers
++ * ufs_order_inode() - write the data of @inode ahead of its pointers
 + * @inode: pointer to inode
 + * @sync: keep trying while new holes are being filled
 + *
