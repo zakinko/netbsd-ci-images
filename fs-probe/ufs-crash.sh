@@ -103,6 +103,33 @@ for n in netbsd-ffs2 freebsd-ufs2; do
 		note "$n rand4k $(python3 -I -c 'import json,sys;print(round(json.load(open(sys.argv[1]))["jobs"][0]["write"]["iops"]))' $work/rw.json)"
 		rm -f /mnt/b/rw.*; sync; echo 3 > /proc/sys/vm/drop_caches
 	done
+	# 穴を埋めた直後に切り詰める。解放した間接 block を保留のまま書き戻すと、
+	# そこを再利用した次の file が壊れる。
+	python3 -I -c '
+import hashlib, os
+fd = os.open("/mnt/b/t1", os.O_CREAT | os.O_WRONLY, 0o644)
+os.ftruncate(fd, 64 << 20)
+for i in range(0, 64 << 20, 1 << 16):
+	os.pwrite(fd, b"D" * 4096, i)
+os.ftruncate(fd, 4096)
+os.close(fd)
+fd = os.open("/mnt/b/t2", os.O_CREAT | os.O_WRONLY, 0o644)
+h = hashlib.sha256()
+for i in range(1024):
+	b = bytes([i & 255]) * 65536
+	h.update(b)
+	os.write(fd, b)
+os.close(fd)
+print(h.hexdigest())' > $work/t2.want
+	sync; umount /mnt/b; echo 3 > /proc/sys/vm/drop_caches
+	mount -t ufs -o rw,ufstype=ufs2${UFS_OPTS:+,$UFS_OPTS} $u /mnt/b
+	if [ "$(sha256sum < /mnt/b/t2 | cut -d" " -f1)" = "$(cat $work/t2.want)" ]; then
+		note "$n truncate-reuse ok"
+	else
+		note "!! $n truncate-reuse corrupted"
+		echo truncate-reuse >> $out/build-failed
+	fi
+	rm -f /mnt/b/t1 /mnt/b/t2
 	umount /mnt/b; losetup -d $u
 done
 rm -f $work/*.img $work/log.raw

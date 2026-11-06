@@ -1,0 +1,233 @@
+--- a/fs/ufs/balloc.c
++++ b/fs/ufs/balloc.c
+@@ -454,8 +454,10 @@ static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
+ 	if (!n)
+ 		return;
+ 	if (data && !IS_SYNC(inode) && UFS_SB(inode->i_sb)->s_lazyzero &&
+-	    ufs_zero_frags_cached(inode, fragment, n, locked_folio))
++	    ufs_zero_frags_cached(inode, fragment, n, locked_folio)) {
++		UFS_I(inode)->i_unordered = 1;
+ 		return;
++	}
+ 	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
+ 		return;
+ 	end = beg + n;
+--- a/fs/ufs/inode.c
++++ b/fs/ufs/inode.c
+@@ -302,6 +302,107 @@ out:
+ 	return tmp + uspi->s_sbbase;
+ }
+ 
++/*
++ * With -o lazyzero the zeroes of a filled hole are in the page cache when
++ * the block pointer is set.  Were the pointer to reach the device first, a
++ * crash would leave the file naming a block that still holds what it held
++ * before it was freed, which may be another user's data.  So:
++ *
++ * A pointer in the inode is written by ufs_update_inode() alone, and an
++ * indirect block belongs to one inode.  Keep such an indirect buffer clean
++ * and on i_held_bhs while it carries pointers to blocks that may not have
++ * been zeroed yet, and write the pointers only once the file's data is on
++ * the device; see ufs_order_inode().
++ *
++ * The buffer has to be clean before the pointer goes in, or writing out
++ * what made it dirty would take the pointer along.  This costs a write per
++ * buffer of pointers, once per pass of ufs_order_inode().
++ */
++struct ufs_held_bh {
++	struct list_head list;
++	struct buffer_head *bh;
++};
++
++BUFFER_FNS(PrivateStart, ufs_held)
++
++static void ufs_hold_indirect(struct inode *inode, struct buffer_head *bh)
++{
++	struct ufs_held_bh *held;
++
++	if (buffer_ufs_held(bh))
++		return;
++	sync_dirty_buffer(bh);
++	/* A few bytes, and the block allocation cannot be refused here. */
++	held = kmalloc(sizeof(*held), GFP_NOFS | __GFP_NOFAIL);
++	get_bh(bh);
++	held->bh = bh;
++	set_buffer_ufs_held(bh);
++	list_add_tail(&held->list, &UFS_I(inode)->i_held_bhs);
++}
++
++/* Let go of the held buffers, marking them dirty.  Stable under the caller. */
++static int ufs_release_held(struct inode *inode, bool sync)
++{
++	struct ufs_held_bh *held, *next;
++	int err = 0;
++
++	list_for_each_entry_safe(held, next, &UFS_I(inode)->i_held_bhs, list) {
++		clear_buffer_ufs_held(held->bh);
++		mark_buffer_dirty(held->bh);
++		if (sync && !err)
++			err = sync_dirty_buffer(held->bh);
++		brelse(held->bh);
++		list_del(&held->list);
++		kfree(held);
++	}
++	return err;
++}
++
++/**
++ * ufs_order_inode() - put the data of @inode on the device ahead of its pointers
++ * @inode: pointer to inode
++ * @sync: keep trying while new holes are being filled
++ *
++ * Writing the data can itself allocate, through writepages, so
++ * truncate_mutex cannot be held across it.  Hence the test afterwards that
++ * nothing was allocated meanwhile.
++ *
++ * Return: 0 with truncate_mutex held, the held buffers marked dirty, and
++ * pointers in the inode safe to write until it is unlocked.  Otherwise an
++ * error without it: -EAGAIN if !@sync and holes were being filled.
++ */
++static int ufs_order_inode(struct inode *inode, bool sync)
++{
++	struct ufs_inode_info *ufsi = UFS_I(inode);
++	int err;
++
++	for (;;) {
++		mutex_lock(&ufsi->truncate_mutex);
++		if (!ufsi->i_unordered)
++			break;
++		ufsi->i_unordered = 0;
++		mutex_unlock(&ufsi->truncate_mutex);
++
++		err = filemap_write_and_wait(inode->i_mapping);
++		if (err) {
++			mutex_lock(&ufsi->truncate_mutex);
++			ufsi->i_unordered = 1;
++			mutex_unlock(&ufsi->truncate_mutex);
++			return err;
++		}
++		mutex_lock(&ufsi->truncate_mutex);
++		if (!ufsi->i_unordered)
++			break;
++		mutex_unlock(&ufsi->truncate_mutex);
++		if (!sync)
++			return -EAGAIN;
++	}
++	err = ufs_release_held(inode, sync);
++	if (err)
++		mutex_unlock(&ufsi->truncate_mutex);
++	return err;
++}
++
+ /**
+  * ufs_inode_getblock() - allocate new block
+  * @inode: pointer to inode
+@@ -349,6 +450,8 @@ static u64 ufs_inode_getblock(struct inode *inode, u64 ind_block,
+ 		goal = tmp + uspi->s_fpb;
+ 	else
+ 		goal = bh->b_blocknr + uspi->s_fpb;
++	if (locked_folio && UFS_SB(sb)->s_lazyzero && !IS_SYNC(inode))
++		ufs_hold_indirect(inode, bh);
+ 	tmp = ufs_new_fragments(inode, p, ufs_blknum(new_fragment), goal,
+ 				uspi->s_fpb, err, locked_folio);
+ 	if (!tmp)
+@@ -357,9 +460,11 @@ static u64 ufs_inode_getblock(struct inode *inode, u64 ind_block,
+ 	if (new)
+ 		*new = 1;
+ 
+-	mark_buffer_dirty(bh);
+-	if (IS_SYNC(inode))
+-		sync_dirty_buffer(bh);
++	if (!buffer_ufs_held(bh)) {
++		mark_buffer_dirty(bh);
++		if (IS_SYNC(inode))
++			sync_dirty_buffer(bh);
++	}
+ 	inode_set_ctime_current(inode);
+ 	mark_inode_dirty(inode);
+ out:
+@@ -959,7 +1064,23 @@ static int ufs_update_inode(struct inode * inode, int do_sync)
+ 
+ int ufs_write_inode(struct inode *inode, struct writeback_control *wbc)
+ {
+-	return ufs_update_inode(inode, wbc->sync_mode == WB_SYNC_ALL);
++	bool sync = wbc->sync_mode == WB_SYNC_ALL;
++	int err;
++
++	if (!UFS_SB(inode->i_sb)->s_lazyzero)
++		return ufs_update_inode(inode, sync);
++
++	err = ufs_order_inode(inode, sync);
++	if (err == -EAGAIN) {
++		/* Holes are being filled; the next pass takes the pointers. */
++		mark_inode_dirty(inode);
++		return 0;
++	}
++	if (err)
++		return err;
++	err = ufs_update_inode(inode, sync);
++	mutex_unlock(&UFS_I(inode)->truncate_mutex);
++	return err;
+ }
+ 
+ int ufs_sync_inode (struct inode *inode)
+@@ -1093,6 +1214,7 @@ void ufs_evict_inode(struct inode * inode)
+ 		want_delete = 1;
+ 
+ 	truncate_inode_pages_final(&inode->i_data);
++	ufs_release_held(inode, false);
+ 	if (want_delete) {
+ 		inode->i_size = 0;
+ 		if (inode->i_blocks &&
+@@ -1408,6 +1530,7 @@ static void ufs_truncate_blocks(struct inode *inode)
+ 			break;
+ 
+ 	mutex_lock(&ufsi->truncate_mutex);
++	ufs_release_held(inode, false);
+ 	if (depth == 1) {
+ 		ufs_trunc_direct(inode);
+ 		offsets[0] = UFS_IND_BLOCK;
+@@ -1462,6 +1585,18 @@ static int ufs_truncate(struct inode *inode, loff_t size)
+ 	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
+ 		return -EPERM;
+ 
++	/*
++	 * Freeing blocks dirties the indirect blocks and forgets the freed
++	 * ones, which must not stay held to be written later over whatever
++	 * takes their place.
++	 */
++	if (UFS_SB(inode->i_sb)->s_lazyzero) {
++		err = ufs_order_inode(inode, true);
++		if (err)
++			goto out;
++		mutex_unlock(&UFS_I(inode)->truncate_mutex);
++	}
++
+ 	if (size > i_size_read(inode)) {
+ 		err = ufs_zero_past_eof(inode, i_size_read(inode), size);
+ 		if (err)
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -1513,7 +1513,9 @@ static struct inode *ufs_alloc_inode(struct super_block *sb)
+ 	inode_set_iversion(&ei->vfs_inode, 1);
+ 	seqlock_init(&ei->meta_lock);
+ 	mutex_init(&ei->truncate_mutex);
++	INIT_LIST_HEAD(&ei->i_held_bhs);
+ 	ei->i_q2_blocks = 0;
++	ei->i_unordered = 0;
+ 	return &ei->vfs_inode;
+ }
+ 
+--- a/fs/ufs/ufs.h
++++ b/fs/ufs/ufs.h
+@@ -52,8 +52,10 @@ struct ufs_inode_info {
+ 	__u64	i_lastfrag;
+ 	seqlock_t meta_lock;
+ 	struct mutex	truncate_mutex;
++	struct list_head i_held_bhs;	/* see ufs_order_inode() */
+ 	blkcnt_t i_q2_blocks;	/* blocks charged to quota2 */
+ 	__u32   i_dir_start_lookup;
++	__u32	i_unordered;	/* see ufs_order_inode() */
+ 	struct inode vfs_inode;
+ };
+ 
