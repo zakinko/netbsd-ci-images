@@ -7,6 +7,10 @@ on:
         description: 'src-*bsd の artifact を持つ fs-probe の run'
         type: string
         required: true
+      omit:
+        description: '当てない当て物の名前の頭 (対照実験)'
+        type: string
+        default: ''
       snap_only:
         description: 'device を止めて写す測定だけを行う'
         type: boolean
@@ -86,7 +90,7 @@ jobs:
           almalinux $RUNNER_TEMP/k.sh
       - shell: almalinux {0}
         timeout-minutes: 45
-        run: FS_PATCH=1 UFS_OPTS='${{ matrix.opts }}' UFS_SNAP_ONLY='${{ inputs.snap_only && '1' || '' }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
+        run: FS_PATCH=1 FS_PATCH_OMIT='${{ inputs.omit }}' UFS_OPTS='${{ matrix.opts }}' UFS_SNAP_ONLY='${{ inputs.snap_only && '1' || '' }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
       - run: cat fsp/crash/crash.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4

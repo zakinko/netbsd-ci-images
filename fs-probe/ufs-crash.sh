@@ -127,13 +127,16 @@ os.close(fd)' $bs &
 			c=$(python3 -I -c '
 b = open("/mnt/c/hole", "rb").read()
 print(sum(b"SENTINEL" in b[i:i + 4096] for i in range(0, len(b), 4096)))')
+			d=$(python3 -I -c '
+b = open("/mnt/c/hole", "rb").read()
+print(sum(b[i:i + 4096] == b"D" * 4096 for i in range(0, len(b), 4096)))')
 			umount /mnt/c
 		else
-			c=unmountable
+			c=unmountable d=0
 		fi
 		losetup -d $su
 		rm -f $work/s.img
-		note "$n snap $k old-pages $c"
+		note "$n snap $k old-pages $c data-pages $d"
 		[ "$c" = 0 ] || [ "$c" = unmountable ] || hits=$((hits + 1))
 	done
 	wait $w
