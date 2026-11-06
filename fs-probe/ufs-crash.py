@@ -58,22 +58,33 @@ if magic != 0x6a736677736872 or ver != 1 or sectorsize != SS:
 img = os.open(base, os.O_WRONLY)
 pos = SS
 worst = [0, 0]
+trail, first = [], []	# 最初に古い中身が見えた所までの記録の並び
 nowhere = hit = 0
 for i in range(nr):
 	sector, nsec, flags, dlen = struct.unpack("<QQQQ", os.pread(log, 32, pos))
 	pos += SS
 	if flags & 8:		# LOG_MARK_FLAG
 		continue
+	if not nsec or flags & 4:
+		trail.append("%d s=%d n=%d f=%x -" % (i, sector, nsec, flags))
 	if nsec and not flags & 4:	# LOG_DISCARD_FLAG
-		os.pwrite(img, os.pread(log, nsec * SS, pos), sector * SS)
+		d = os.pread(log, nsec * SS, pos)
+		os.pwrite(img, d, sector * SS)
+		trail.append("%d s=%d n=%d f=%x %s" % (i, sector, nsec, flags,
+			"zero" if not d.strip(b"\0") else "mark" if MARK in d else "data"))
 		pos += nsec * SS
 		m, a, b = scan()
 		nowhere += not m
 		hit += bool(a or b)
+		if (a or b) and not first:
+			first = [len(trail), list(where[:12])]
 		if a > worst[0] or b > worst[1]:
 			print("entry %d/%d sector %d: written-page %d, rest-of-block %d"
 			      % (i, nr, sector, a, b))
 		worst = [max(worst[0], a), max(worst[1], b)]
+if first:
+	print("first exposed at trail index %d: %s" % tuple(first))
+	print("\n".join(trail))
 m, a, b = scan()
 print("entries %d, unmountable points %d, points with old contents %d, "
       "worst written-page %d, worst rest-of-block %d, final %d %d %s"
