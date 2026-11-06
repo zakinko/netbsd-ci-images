@@ -63,11 +63,6 @@ scenario() {	# image ufstype scenario off len
 	l=$(losetup -f --show --direct-io=on -b 512 $work/log.raw)
 	dmsetup create lw --table "0 $(blockdev --getsz $u) log-writes $u $l"
 	mount -t ufs -o rw,ufstype=$t${UFS_OPTS:+,$UFS_OPTS} /dev/mapper/lw /mnt/b || { note "!! mount lw"; exit 1; }
-	# race は flusher を書き込みに重ねる。fsync の途中で一度だけ順序が崩れた
-	# ことがあり (6.12、4 回に 1 回)、待っていては再現しない。
-	if [ $s = race ]; then
-		sysctl -q vm.dirty_writeback_centisecs=1 vm.dirty_expire_centisecs=1
-	fi
 	# 直接 block と間接 block の両方に当たるよう、block ごとに同じ位置へ。
 	python3 -I -c '
 import os, sys
@@ -75,12 +70,9 @@ bs, off, n = map(int, sys.argv[1:4])
 fd = os.open("/mnt/b/hole", os.O_WRONLY)
 for i in range(0, 200):
 	os.pwrite(fd, b"D" * n, i * bs + off)
-if sys.argv[4] in ("fsync", "race"):
+if sys.argv[4] == "fsync":
 	os.fsync(fd)
 os.close(fd)' $bs $woff $wlen $s
-	if [ $s = race ]; then
-		sysctl -q vm.dirty_writeback_centisecs=500 vm.dirty_expire_centisecs=3000
-	fi
 	live=$(grep -c SENTINEL /mnt/b/hole)
 	echo 3 > /proc/sys/vm/drop_caches
 	cold=$(python3 -I -c '
@@ -97,6 +89,8 @@ print(sum(b"SENTINEL" in b[i:i + 4096] for i in range(0, len(b), 4096)))')
 	note "$n $s off $woff len $wlen bsize $bs live-lines $live cold-pages $cold: $(python3 -I $here/ufs-crash.py $work/base.img $l $t hole $bs $woff $wlen | tee -a $out/$n-$s-$woff.log | tail -1)"
 	losetup -d $l
 }
+# flusher を重ねると dm-log-writes の記録では既定の mount でも古い中身が見えるが、
+# 止めて写すと既定では見えない (2026-11-06、理由は記録が無い)。順序は写しで測る。
 # dm-log-writes を通さずに測る。書き込みの途中で device を止めて写すので、写し
 # に在るのは止めた時点までに完了した書き込みそのもので、記録の順序によらない。
 snap() {	# image ufstype
@@ -155,11 +149,6 @@ for n in netbsd-ffs2 freebsd-ufs2; do
 		scenario $n ufs2 $s 8192 4096
 		scenario $n ufs2 $s 1000 100
 		scenario $n ufs2 $s 2048 4096
-	done
-done
-for n in netbsd-ffs2 freebsd-ufs2; do
-	for i in 1 2 3 4 5 6; do
-		scenario $n ufs2 race 8192 4096
 	done
 done
 for n in netbsd-ffs2 freebsd-ufs2; do
