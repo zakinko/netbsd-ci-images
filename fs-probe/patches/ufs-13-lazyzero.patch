@@ -8,7 +8,7 @@
  #include <asm/byteorder.h>
  
  #include "ufs_fs.h"
-@@ -363,6 +364,84 @@
+@@ -363,6 +364,88 @@
   * synchronous write for every block of a growing file, and most of the
   * time spent writing it.
   */
@@ -22,7 +22,9 @@
 + *
 + * The folio being written holds fragments the write does not cover when a
 + * fragment is smaller than a page.  __block_write_begin() does not prepare
-+ * those, and they would be read from the device, so zero them here.
++ * those, and they would be read from the device, so zero them here.  One
++ * read while it was a hole is uptodate with zeroes already, but it must be
++ * marked dirty all the same, or the new fragment keeps what it held before.
 + *
 + * The caller holds s_lock, and writeback holds a folio lock when it takes
 + * s_lock, so a folio that is not free right now is not waited for.  Pages
@@ -40,9 +42,11 @@
 +		create_empty_buffers(folio, 1 << fshift, 0);
 +	bh = head = folio_buffers(folio);
 +	do {
-+		if (frag >= fragment && frag < end && !buffer_uptodate(bh)) {
-+			folio_zero_range(folio, off, bh->b_size);
-+			set_buffer_uptodate(bh);
++		if (frag >= fragment && frag < end) {
++			if (!buffer_uptodate(bh)) {
++				folio_zero_range(folio, off, bh->b_size);
++				set_buffer_uptodate(bh);
++			}
 +			mark_buffer_dirty(bh);
 +		}
 +		frag++;
@@ -93,7 +97,7 @@
  static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
  			    u64 fragment, struct folio *locked_folio)
  {
-@@ -373,6 +452,9 @@
+@@ -373,6 +456,9 @@
  	if (data)
  		n = ufs_frags_to_zero(inode, fragment, n, locked_folio);
  	if (!n)
