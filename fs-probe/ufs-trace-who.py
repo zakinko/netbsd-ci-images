@@ -19,7 +19,7 @@ phys = struct.unpack("i", fcntl.ioctl(fd, FIBMAP, struct.pack("i", off // fsize)
 os.close(fd)
 print("ino %d offset %#x fsize %d phys %d" % (ino, off, fsize, phys))
 
-ev = re.compile(r"(ufsnew|ufsmove|ufsfree) (.*)$")
+ev = re.compile(r"(ufsnew|ufsmove|ufsfree|ufsbh) (.*)$")
 for line in open(trace, errors="replace"):
 	m = ev.search(line)
 	if not m:
@@ -31,6 +31,8 @@ for line in open(trace, errors="replace"):
 		ranges.append((d["result"], d["result"] + d["new"]))
 	elif m[1] == "ufsmove":
 		ranges += [(d["oldb"], d["oldb"] + d["count"]), (d["newb"], d["newb"] + d["count"])]
+	elif m[1] == "ufsbh":
+		ranges += [(d["old"], d["old"] + 1), (d["new"], d["new"] + 1)]
 	else:
 		ranges.append((d["frag"], d["frag"] + d["count"]))
 	hit = any(a <= phys < b for a, b in ranges)

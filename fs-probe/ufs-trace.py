@@ -19,6 +19,12 @@ points = [
 	(r"^\tUFSD\(\"ENTER, ino %l*u, count %u, oldb %llu, newb %llu\\n\",$", 1,
 	 '\ttrace_printk("ufsmove ino %llu beg %llu count %u oldb %llu newb %llu\\n", ' + ino +
 	 ', (unsigned long long)beg, (unsigned)count, (unsigned long long)oldb, (unsigned long long)newb);\n'),
+	# ufs_change_blocknr が buffer を付け替える前の状態。bh_read() の前に取る。
+	(r"^\t\t\tpos = \(i - beg\) \+ j;$", 1,
+	 '\t\t\ttrace_printk("ufsbh ino %llu frag %llu old %llu new %llu fdirty %d fwb %d fup %d bmap %d bup %d bdirty %d bnr %llu\\n", ' + ino +
+	 ', (unsigned long long)(i + j - (i & mask)), (unsigned long long)(oldb + (i - beg) + j), (unsigned long long)(newb + (i - beg) + j)'
+	 ', folio_test_dirty(folio), folio_test_writeback(folio), folio_test_uptodate(folio)'
+	 ', buffer_mapped(bh), buffer_uptodate(bh), buffer_dirty(bh), (unsigned long long)bh->b_blocknr);\n'),
 	# ufs_new_fragments の三つの出口
 	(r"^\t\tUFSD\(\"EXIT, result %llu\\n\", \(unsigned long long\)result\);$", 3,
 	 '\t\ttrace_printk("ufsnew ino %llu frag %llu old %u new %u result %llu\\n", ' + ino +
