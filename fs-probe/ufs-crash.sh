@@ -165,7 +165,7 @@ stress() {	# image ufstype seed
 	done
 	# -v は操作を一つずつ記録する。remount で中身が変わったファイルに何が
 	# 起きたかを後で辿る。
-	timeout 900 $fsstress -v -d /mnt/b/fss -n 4000 -p 4 -s $3 > $out/$L-fss.log 2>&1
+	timeout 900 $fsstress -v -d /mnt/b/fss ${UFS_FSS_ARGS:--n 4000 -p 4} -s $3 > $out/$L-fss.log 2>&1
 	st=$?
 	note "$L fsstress: exit $st"
 	[ $st = 0 ] || echo fsstress >> $out/build-failed
