@@ -8,7 +8,7 @@
  #include <asm/byteorder.h>
  
  #include "ufs_fs.h"
-@@ -363,6 +364,88 @@
+@@ -363,6 +364,95 @@
   * synchronous write for every block of a growing file, and most of the
   * time spent writing it.
   */
@@ -66,6 +66,13 @@
 +
 +	if (fshift > PAGE_SHIFT)
 +		return false;
++	/*
++	 * Writeback drops a folio wholly past i_size and the buffers past it
++	 * in one that straddles i_size, and i_size moves only when the write
++	 * ends, so zeroes left in the cache there would never be written.
++	 */
++	if (end > ((u64)i_size_read(inode) + (1U << fshift) - 1) >> fshift)
++		return false;
 +	for (index = fragment >> shift; (u64)index << shift < end; index++) {
 +		struct folio *folio;
 +
@@ -97,7 +104,7 @@
  static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
  			    u64 fragment, struct folio *locked_folio)
  {
-@@ -373,6 +456,9 @@
+@@ -373,6 +463,9 @@
  	if (data)
  		n = ufs_frags_to_zero(inode, fragment, n, locked_folio);
  	if (!n)
