@@ -147,39 +147,40 @@ print(sum(b[i:i + 4096] == b"D" * 4096 for i in range(0, len(b), 4096)))')
 # fsx は自分の持つ写しと読み戻しを、穴・切り詰め・mmap を含めて突き合わせ
 # る。fsstress は並行に割り当てと解放を重ねる。その後 umount の前後で中身の
 # hash を比べ、書き戻した後も同じかを見る。
-stress() {	# image ufstype
-	n=$1 t=$2
+stress() {	# image ufstype seed
+	n=$1 t=$2 L=$1-s$3
 	rm -f $work/u.img
 	cp --sparse=always $in/$n.img $work/u.img
 	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
 	mount -t ufs -o rw,ufstype=$t${UFS_OPTS:+,$UFS_OPTS} $u /mnt/b || { note "!! mount $n"; exit 1; }
 	rm -rf /mnt/b/src; sync
-	for seed in 1 2 3; do
+	# fsx は種で決まるので、最初の回だけ。
+	[ $3 = ${seeds%% *} ] && for seed in 1 2 3; do
 		timeout 900 $fsx -q -N 30000 -S $seed -l 8388608 /mnt/b/fsx.$seed \
-			> $out/$n-fsx.$seed 2>&1
+			> $out/$L-fsx.$seed 2>&1
 		st=$?
 		note "$n fsx seed $seed: exit $st"
-		[ $st = 0 ] || { grep -vE '^[0-9]+\(|^ *$' $out/$n-fsx.$seed | head -12 | cut -c1-160 | sed 's/^/    /' | tee -a $sum
+		[ $st = 0 ] || { grep -vE '^[0-9]+\(|^ *$' $out/$L-fsx.$seed | head -12 | cut -c1-160 | sed 's/^/    /' | tee -a $sum
 			echo fsx >> $out/build-failed; }
 	done
 	# -v は操作を一つずつ記録する。remount で中身が変わったファイルに何が
 	# 起きたかを後で辿る。
-	timeout 900 $fsstress -v -d /mnt/b/fss -n 4000 -p 4 -s 1 > $out/$n-fss.log 2>&1
+	timeout 900 $fsstress -v -d /mnt/b/fss -n 4000 -p 4 -s $3 > $out/$L-fss.log 2>&1
 	st=$?
-	note "$n fsstress: exit $st"
+	note "$L fsstress: exit $st"
 	[ $st = 0 ] || echo fsstress >> $out/build-failed
 	sync
-	(cd /mnt/b && find . -xdev -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) > $out/$n-tree1 2>&1
+	(cd /mnt/b && find . -xdev -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) > $out/$L-tree1 2>&1
 	# 違ったファイルの、umount 前に見えていた中身を後で byte 単位で比べる。
 	rm -rf $work/before; mkdir -p $work/before
 	(cd /mnt/b && find . -xdev -type f -print0 | cpio -0pdm --quiet $work/before) 2>/dev/null
-	(cd /mnt/b && find . -xdev -printf '%i %y %s %b %p\n') > $out/$n-inodes1
+	(cd /mnt/b && find . -xdev -printf '%i %y %s %b %p\n') > $out/$L-inodes1
 	umount /mnt/b; echo 3 > /proc/sys/vm/drop_caches
 	mount -t ufs -o ro,ufstype=$t $u /mnt/b || { note "!! remount $n"; exit 1; }
-	(cd /mnt/b && find . -xdev -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) > $out/$n-tree2 2>&1
-	(cd /mnt/b && find . -xdev -printf '%i %y %s %b %p\n') > $out/$n-inodes2
+	(cd /mnt/b && find . -xdev -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) > $out/$L-tree2 2>&1
+	(cd /mnt/b && find . -xdev -printf '%i %y %s %b %p\n') > $out/$L-inodes2
 	# 変わった byte の数、最初と最後の位置、後の側が 0 か、前の側が 0 か。
-	diff $out/$n-tree1 $out/$n-tree2 | sed -n 's/^< [0-9a-f]*  //p' | while read -r f; do
+	diff $out/$L-tree1 $out/$L-tree2 | sed -n 's/^< [0-9a-f]*  //p' | while read -r f; do
 		note "    $f: $(python3 -I -c '
 import sys
 a = open(sys.argv[1], "rb").read(); b = open(sys.argv[2], "rb").read()
@@ -189,16 +190,16 @@ if not d:
 print("size", len(a), "bytes", len(d), "first", hex(d[0]), "last", hex(d[-1]),
       "after-zero", sum(b[i] == 0 for i in d), "before-zero", sum(a[i] == 0 for i in d),
       "pages", sorted({i >> 12 for i in d})[:12])' "$work/before/$f" "/mnt/b/$f")"
-		mkdir -p "$out/diff/$(dirname "$f")"
-		cp "$work/before/$f" "$out/diff/$f.before"; cp "/mnt/b/$f" "$out/diff/$f.after"
+		mkdir -p "$out/diff/$L/$(dirname "$f")"
+		cp "$work/before/$f" "$out/diff/$L/$f.before"; cp "/mnt/b/$f" "$out/diff/$L/$f.after"
 	done
 	rm -rf $work/before
 	umount /mnt/b; losetup -d $u
-	d=$(diff $out/$n-tree1 $out/$n-tree2 | grep -c '^[<>]')
-	note "$n after remount: differing lines $d of $(wc -l < $out/$n-tree1)"
+	d=$(diff $out/$L-tree1 $out/$L-tree2 | grep -c '^[<>]')
+	note "$L after remount: differing lines $d of $(wc -l < $out/$L-tree1)"
 	[ $d = 0 ] || echo remount >> $out/build-failed
-	dmesg -c > $out/$n-stress.dmesg
-	grep -iE 'ufs|bug|warn' $out/$n-stress.dmesg | head -8 | sed 's/^/    dmesg: /' | tee -a $sum
+	dmesg -c > $out/$L-stress.dmesg
+	grep -iE 'ufs|bug|warn' $out/$L-stress.dmesg | head -8 | sed 's/^/    dmesg: /' | tee -a $sum
 	rm -f $work/u.img
 }
 # fsstress の後で umount の前後に中身が変わったファイルの操作を、replay/ に
@@ -271,8 +272,12 @@ if has stress; then
 		note "root fs ($(findmnt -no FSTYPE -T $work)) fsx seed $seed: exit $?"
 		rm -f $work/fsx.$seed*
 	done
+	# 並行の負荷でしか出ないものを数えるため、種を変えて新しい image で繰り返す。
+	seeds=${UFS_STRESS_SEEDS:-1}
 	for n in netbsd-ffs2 freebsd-ufs2; do
-		stress $n ufs2
+		for k in $seeds; do
+			stress $n ufs2 $k
+		done
 	done
 fi
 has snap && for n in netbsd-ffs2 freebsd-ufs2; do
