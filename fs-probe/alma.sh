@@ -49,7 +49,7 @@ rpm -q ntfs-3g ntfs-3g-system-compression | tee -a $sum
 note "fs source: $ksrc"
 cp -a $ksrc/ufs $work/ufs.orig
 fs_build ufs $out/ufs-build.log
-note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings, FS_PATCH=${FS_PATCH:-0})"
+note "ufs build+insmod exit $? ($(grep -c warning: $out/ufs-build.log) warnings, FS_PATCH=${FS_PATCH:-0}, UFS_OPTS=${UFS_OPTS:-})"
 # 当て物を試すときは、ntfs3 も当てたものをソースから建てて差し替える。
 # RHEL の kernel では ntfs3 は切られているので、これが唯一の ntfs3 になる。
 if [ "${FS_PATCH:-0}" = 1 ]; then
@@ -143,7 +143,7 @@ for f in $in/netbsd-*.img $in/freebsd-*.img; do
 	losetup -d $loop4k
 	dmesg -c >> $out/$n.ro.dmesg
 
-	if mount -t ufs -o rw,ufstype=$t $loop /mnt/p 2>>$out/$n.err; then
+	if mount -t ufs -o rw,ufstype=$t${UFS_OPTS:+,$UFS_OPTS} $loop /mnt/p 2>>$out/$n.err; then
 		mo=$(awk '$2 == "/mnt/p" { print $4 }' /proc/mounts | cut -d, -f1)
 		note "rw: mount says $mo"
 		if [ "$mo" = rw ]; then

@@ -156,7 +156,8 @@ for n in netbsd-ffs2 netbsd-ffs1 freebsd-ufs2 freebsd-ufs1; do
 	note "ufs $n on $(cat /sys/block/$(basename $loop)/queue/logical_block_size)-byte sectors: $(mount -t ufs -o ro,ufstype=$t $loop /mnt/b 2>&1 && { umount /mnt/b; echo mounts; } || echo 'does not mount')"
 	losetup -d $loop
 	loop=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
-	mount -t ufs -o rw,ufstype=$t $loop /mnt/b && rm -rf /mnt/b/src && sync && {
+	mount -t ufs -o rw,ufstype=$t${UFS_OPTS:+,$UFS_OPTS} $loop /mnt/b && rm -rf /mnt/b/src && sync && {
+		note "    $(findmnt -no OPTIONS /mnt/b)"
 		df -k /mnt/b | tail -1 | sed 's/^/    /' | tee -a $sum
 		run "ufs $n"
 		prof "ufs-$n"

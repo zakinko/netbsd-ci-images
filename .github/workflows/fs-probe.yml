@@ -20,6 +20,10 @@ on:
         description: 'fs-probe/patches の当て物を当てた ufs と ntfs3 で測る'
         type: boolean
         default: false
+      ufs_opts:
+        description: 'ufs を rw で mount するときに足す option (lazyzero など、patches と一緒に)'
+        type: string
+        default: ''
 
 concurrency:
   group: fs-probe-${{ github.run_id }}
@@ -137,7 +141,7 @@ jobs:
           if grep -qw user_shstk /proc/cpuinfo; then exit 1; fi
           dmesg -n 8
       - shell: almalinux {0}
-        run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/alma.sh fsp/in fsp/alma-${{ matrix.kernel }}
+        run: FS_PATCH=${{ inputs.patches && '1' || '0' }} UFS_OPTS='${{ inputs.ufs_opts }}' sh fs-probe/alma.sh fsp/in fsp/alma-${{ matrix.kernel }}
       - shell: almalinux {0}
         if: always()
         timeout-minutes: 60
@@ -224,7 +228,7 @@ jobs:
           if grep -qw user_shstk /proc/cpuinfo; then exit 1; fi
           dmesg -n 8
       - shell: almalinux {0}
-        run: FS_PATCH=${{ inputs.patches && '1' || '0' }} sh fs-probe/bench.sh fsp/in fsp/bench-${{ matrix.kernel }}
+        run: FS_PATCH=${{ inputs.patches && '1' || '0' }} UFS_OPTS='${{ inputs.ufs_opts }}' sh fs-probe/bench.sh fsp/in fsp/bench-${{ matrix.kernel }}
       - name: VM の serial console の末尾
         if: failure() || cancelled()
         run: find /home/runner/work/_actions -name '*.serial.log' -exec tail -c 60000 {} \;
