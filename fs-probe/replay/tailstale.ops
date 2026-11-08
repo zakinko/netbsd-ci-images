@@ -1,3 +1,5 @@
+#image netbsd-ffs2
+#ino 250
 915: read - d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 0 0] zero size
 990: ioctl(FIEMAP) d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 0 0] [466097,172124003252332976,] -1
 1176: fallocate(ZERO_RANGE) d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 0 0] [829862,115426] 95

@@ -5,6 +5,8 @@
 #   ufs-replay.py <ops> <file> [skip,...]
 # skip に行番号 (ops の先頭の数) を並べると、その操作を飛ばす。
 # 成功した操作だけをかける。読む操作も cache に page を載せるのでかける。
+# 頭の "#ino N" は記録の中のこのファイルの inode 番号で、splice、copyrange
+# のどちらの側かを決める。"#image" は ufs-crash.sh が読む。
 import mmap
 import os
 import re
@@ -29,7 +31,12 @@ def mm(off, n, flags, write):
 	m.close()
 
 
+ino = None
 for line in open(ops):
+	if line.startswith("#"):
+		if line.startswith("#ino "):
+			ino = line.split()[1]
+		continue
 	no, rest = line.split(":", 1)
 	if no in skip:
 		continue
@@ -54,11 +61,16 @@ for line in open(ops):
 		os.pread(fd, int(m[2]), int(m[1]))
 		print(no, "read", m[1], m[2])
 		continue
-	# 読み手として splice、copyrange に使われた分。書き手の側は記録に無い。
-	m = re.match(r"(splice|copyrange) \S+\[[^]]*\] \[(\d+),(\d+)\] -> .*\](?: 0)?$", rest)
+	# splice、copyrange の読み手ならその範囲を読み、書き手なら書く。中身は
+	# 記録に無いので、書く側は一定の byte で。
+	m = re.match(r"(splice|copyrange) \S+\[(\d+) [^]]*\] \[(\d+),(\d+)\] -> \S+\[(\d+) [^]]*\] \[(\d+),(\d+)\](?: 0)?$", rest)
 	if m and "??" not in rest:
-		os.pread(fd, int(m[3]), int(m[2]))
-		print(no, m[1], "read", m[2], m[3])
+		if m[2] == ino:
+			os.pread(fd, int(m[4]), int(m[3]))
+			print(no, m[1], "read", m[3], m[4])
+		elif m[5] == ino:
+			os.pwrite(fd, fill * int(m[7]), int(m[6]))
+			print(no, m[1], "write", m[6], m[7])
 		continue
 	m = re.match(r"truncate \S+\[[^]]*\] (\d+) 0$", rest)
 	if m:

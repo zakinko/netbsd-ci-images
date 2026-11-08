@@ -242,7 +242,7 @@ replay() {	# image ops
 }
 if has replay; then
 	for o in $here/replay/*.ops; do
-		replay netbsd-ffs2 $(basename $o .ops)
+		replay $(sed -n 's/^#image //p' $o) $(basename $o .ops)
 	done
 fi
 if has stress; then
