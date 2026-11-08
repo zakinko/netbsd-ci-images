@@ -1,6 +1,6 @@
 --- a/fs/ufs/balloc.c
 +++ b/fs/ufs/balloc.c
-@@ -465,8 +465,10 @@ static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
+@@ -466,8 +466,10 @@ static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
  	if (!n)
  		return;
  	if (data && !IS_SYNC(inode) && UFS_SB(inode->i_sb)->s_lazyzero &&

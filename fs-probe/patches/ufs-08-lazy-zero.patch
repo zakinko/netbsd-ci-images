@@ -25,16 +25,16 @@
  {
  	struct super_block *sb = inode->i_sb;
  	unsigned int shift = UFS_SB(sb)->s_uspi->s_nspfshift;
-@@ -335,14 +330,53 @@
+@@ -335,14 +330,54 @@
  				    (sector_t)n << shift, GFP_NOFS, 0);
  }
  
 +/*
 + * How many of the @n new fragments of @inode from file fragment
-+ * @fragment, taken for @folio, have to be zeroed on the device now: those
-+ * before EOF, as when a hole is filled, and those before @folio, which
-+ * EOF passes once @folio is written.  The rest are in @folio or past it,
-+ * and past EOF; see ufs_clear_frags().
++ * @fragment, taken for @folio, have to be zeroed on the device now: all up
++ * to the end of @folio, as __block_write_begin() neither maps nor dirties
++ * its buffers outside the write and EOF passes them once it is written,
++ * and any before EOF.  The rest are past both; see ufs_clear_frags().
 + */
 +static unsigned int ufs_frags_to_zero(struct inode *inode, u64 fragment,
 +				      unsigned int n, struct folio *folio)
@@ -42,7 +42,8 @@
 +	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
 +	u64 eof = ((u64)i_size_read(inode) + uspi->s_fsize - 1) >>
 +		  uspi->s_fshift;
-+	u64 limit = max(eof, (u64)folio_pos(folio) >> uspi->s_fshift);
++	u64 limit = max(eof, (u64)(folio_pos(folio) + folio_size(folio)) >>
++		  uspi->s_fshift);
 +
 +	if (fragment >= limit)
 +		return 0;
@@ -82,7 +83,7 @@
  	for (; beg < end; ++beg) {
  		bh = sb_getblk(inode->i_sb, beg);
  		lock_buffer(bh);
-@@ -350,7 +384,7 @@
+@@ -350,7 +385,7 @@
  		set_buffer_uptodate(bh);
  		mark_buffer_dirty(bh);
  		unlock_buffer(bh);
@@ -91,7 +92,7 @@
  			sync_dirty_buffer(bh);
  		brelse(bh);
  	}
-@@ -443,7 +477,8 @@
+@@ -443,7 +478,8 @@
  		result = ufs_alloc_fragments (inode, cgno, goal, count, err);
  		if (result) {
  			ufs_clear_frags(inode, result + oldcount,
@@ -101,7 +102,7 @@
  			*err = 0;
  			write_seqlock(&UFS_I(inode)->meta_lock);
  			ufs_cpu_to_data_ptr(sb, p, result);
-@@ -467,7 +502,7 @@
+@@ -467,7 +503,7 @@
  						fragment + count);
  		read_sequnlock_excl(&UFS_I(inode)->meta_lock);
  		ufs_clear_frags(inode, result + oldcount, newcount - oldcount,
@@ -110,7 +111,7 @@
  		mutex_unlock(&UFS_SB(sb)->s_lock);
  		UFSD("EXIT, result %llu\n", (unsigned long long)result);
  		return result;
-@@ -488,7 +523,7 @@
+@@ -488,7 +524,7 @@
  	result = ufs_alloc_fragments (inode, cgno, goal, request, err);
  	if (result) {
  		ufs_clear_frags(inode, result + oldcount, newcount - oldcount,
