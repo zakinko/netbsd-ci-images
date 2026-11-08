@@ -2,6 +2,7 @@
 # ufs-13 の -o lazyzero は穴の残りの 0 埋めを同期書き込みから page cache へ
 # 移す。既定と lazyzero で、走行中と途中の時点に古い中身が見えるかを、書き
 # 込みの順序を実際に記録して確かめる。UFS_OPTS に mount option を置く。
+# UFS_PARTS に行う段を並べる (既定は snap order speed stress)。
 #   ufs-crash.sh <indir> <outdir>
 # 空き領域を全部印で埋めて消してから、穴に書く。
 set -u
@@ -18,6 +19,9 @@ note "# ufs-crash / kernel $(uname -r) FS_PATCH=${FS_PATCH:-0} OMIT=${FS_PATCH_O
 dnf -y -q install epel-release
 dnf -y -q install fio patch gcc make elfutils-libelf-devel rpm cpio xz tar bc \
 	kernel-headers device-mapper
+parts=${UFS_PARTS:-snap order speed stress}
+has() { case " $parts " in *" $1 "*) ;; *) return 1 ;; esac; }
+note "parts: $parts"
 # kernel-ml は kernel-ml-modules-extra を kernel.sh が入れている。
 case $(uname -r) in
 *elrepo*) ;;
@@ -140,18 +144,76 @@ print(sum(b[i:i + 4096] == b"D" * 4096 for i in range(0, len(b), 4096)))')
 	losetup -d $u
 	note "$n snap: $k snapshots, $hits with old contents"
 }
-for n in netbsd-ffs2 freebsd-ufs2; do
+# fsx は自分の持つ写しと読み戻しを、穴・切り詰め・mmap を含めて突き合わせ
+# る。fsstress は並行に割り当てと解放を重ねる。その後 umount の前後で中身の
+# hash を比べ、書き戻した後も同じかを見る。
+stress() {	# image ufstype
+	n=$1 t=$2
+	rm -f $work/u.img
+	cp --sparse=always $in/$n.img $work/u.img
+	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
+	mount -t ufs -o rw,ufstype=$t${UFS_OPTS:+,$UFS_OPTS} $u /mnt/b || { note "!! mount $n"; exit 1; }
+	rm -rf /mnt/b/src; sync
+	for seed in 1 2 3; do
+		timeout 900 $fsx -q -N 30000 -S $seed -l 8388608 /mnt/b/fsx.$seed \
+			> $out/$n-fsx.$seed 2>&1
+		st=$?
+		note "$n fsx seed $seed: exit $st"
+		[ $st = 0 ] || { grep -vE '^[0-9]+\(|^ *$' $out/$n-fsx.$seed | head -12 | cut -c1-160 | sed 's/^/    /' | tee -a $sum
+			echo fsx >> $out/build-failed; }
+	done
+	timeout 900 $fsstress -d /mnt/b/fss -n 4000 -p 4 -s 1 > $out/$n-fss.log 2>&1
+	st=$?
+	note "$n fsstress: exit $st"
+	[ $st = 0 ] || echo fsstress >> $out/build-failed
+	sync
+	(cd /mnt/b && find . -xdev -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) > $out/$n-tree1 2>&1
+	umount /mnt/b; echo 3 > /proc/sys/vm/drop_caches
+	mount -t ufs -o ro,ufstype=$t $u /mnt/b || { note "!! remount $n"; exit 1; }
+	(cd /mnt/b && find . -xdev -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) > $out/$n-tree2 2>&1
+	umount /mnt/b; losetup -d $u
+	d=$(diff $out/$n-tree1 $out/$n-tree2 | grep -c '^[<>]')
+	note "$n after remount: differing lines $d of $(wc -l < $out/$n-tree1)"
+	[ $d = 0 ] || echo remount >> $out/build-failed
+	dmesg -c > $out/$n-stress.dmesg
+	grep -iE 'ufs|bug|warn' $out/$n-stress.dmesg | head -8 | sed 's/^/    dmesg: /' | tee -a $sum
+	rm -f $work/u.img
+}
+if has stress; then
+	dnf -y -q install git autoconf automake libtool libuuid-devel xfsprogs-devel \
+		libaio-devel libacl-devel libattr-devel
+	# stress.sh と同じ版の xfstests の ltp/ から建てる。
+	xfstests_tag=v2026.10.15
+	git clone -q --depth 1 --branch $xfstests_tag \
+		https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git $work/xfstests
+	note "xfstests: $(git -C $work/xfstests log -1 --format='%h %cd' --date=short)"
+	(cd $work/xfstests && make configure > $out/xfstests-build.log 2>&1 &&
+		./configure >> $out/xfstests-build.log 2>&1 &&
+		make -C lib >> $out/xfstests-build.log 2>&1 &&
+		make -C ltp fsx fsstress >> $out/xfstests-build.log 2>&1)
+	fsx=$work/xfstests/ltp/fsx
+	fsstress=$work/xfstests/ltp/fsstress
+	if [ ! -x $fsx ] || [ ! -x $fsstress ]; then
+		note "!! fsx/fsstress did not build"
+		tail -20 $out/xfstests-build.log | tee -a $sum
+		exit 1
+	fi
+	dmesg -c > /dev/null
+	for n in netbsd-ffs2 freebsd-ufs2; do
+		stress $n ufs2
+	done
+fi
+has snap && for n in netbsd-ffs2 freebsd-ufs2; do
 	snap $n ufs2
 done
-[ -n "${UFS_SNAP_ONLY:-}" ] && exit 0
-for n in netbsd-ffs2 freebsd-ufs2; do
+has order && for n in netbsd-ffs2 freebsd-ufs2; do
 	for s in sync fsync background; do
 		scenario $n ufs2 $s 8192 4096
 		scenario $n ufs2 $s 1000 100
 		scenario $n ufs2 $s 2048 4096
 	done
 done
-for n in netbsd-ffs2 freebsd-ufs2; do
+has speed && for n in netbsd-ffs2 freebsd-ufs2; do
 	rm -f $work/u.img
 	cp --sparse=always $in/$n.img $work/u.img
 	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)

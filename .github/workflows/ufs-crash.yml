@@ -11,10 +11,10 @@ on:
         description: '当てない当て物の名前の頭 (対照実験)'
         type: string
         default: ''
-      snap_only:
-        description: 'device を止めて写す測定だけを行う'
-        type: boolean
-        default: false
+      parts:
+        description: '行う段 (snap order speed stress から)'
+        type: string
+        default: 'snap order speed stress'
 
 concurrency:
   group: ufs-crash-${{ github.run_id }}
@@ -23,7 +23,7 @@ concurrency:
 jobs:
   order:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -89,8 +89,8 @@ jobs:
           printf 'test "$(uname -r)" = "$(cat /var/tmp/want-kernel)"\n' > $RUNNER_TEMP/k.sh
           almalinux $RUNNER_TEMP/k.sh
       - shell: almalinux {0}
-        timeout-minutes: 45
-        run: FS_PATCH=1 FS_PATCH_OMIT='${{ inputs.omit }}' UFS_OPTS='${{ matrix.opts }}' UFS_SNAP_ONLY='${{ inputs.snap_only && '1' || '' }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
+        timeout-minutes: 100
+        run: FS_PATCH=1 FS_PATCH_OMIT='${{ inputs.omit }}' UFS_OPTS='${{ matrix.opts }}' UFS_PARTS='${{ inputs.parts }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
       - run: cat fsp/crash/crash.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
