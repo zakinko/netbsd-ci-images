@@ -8,7 +8,7 @@
  #include <asm/byteorder.h>
  
  #include "ufs_fs.h"
-@@ -369,6 +370,95 @@
+@@ -368,6 +369,95 @@
   * synchronous write for every block of a growing file, and most of the
   * time spent writing it.
   */
@@ -104,7 +104,7 @@
  static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
  			    u64 fragment, struct page *locked_page)
  {
-@@ -379,6 +469,9 @@
+@@ -378,6 +468,9 @@
  	if (data)
  		n = ufs_frags_to_zero(inode, fragment, n, locked_page);
  	if (!n)

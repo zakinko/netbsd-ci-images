@@ -42,7 +42,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  
-@@ -626,8 +626,8 @@
+@@ -625,8 +625,8 @@
  	fs32_sub(sb, &UFS_SB(sb)->fs_cs(cgno).cs_nffree, count);
  	uspi->cs_total.cs_nffree -= count;
  	
@@ -53,7 +53,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  	ufs_mark_sb_dirty(sb);
-@@ -747,8 +747,8 @@
+@@ -746,8 +746,8 @@
  		fs32_add(sb, &ucg->cg_frsum[allocsize - count], 1);
  
  succed:

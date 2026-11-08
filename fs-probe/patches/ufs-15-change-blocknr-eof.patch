@@ -1,6 +1,6 @@
 --- a/fs/ufs/balloc.c
 +++ b/fs/ufs/balloc.c
-@@ -304,6 +304,19 @@
+@@ -304,6 +304,22 @@
  			bh->b_blocknr = newb + pos;
  			clean_bdev_bh_alias(bh);
  			mark_buffer_dirty(bh);
@@ -13,8 +13,11 @@
 +			 * later showed what the device held there before.  The
 +			 * folio was left clean with the buffer still dirty, so
 +			 * later writes to it never reached the device either.
++			 * The folio being written stays locked until the write
++			 * has moved i_size, so only the others need this.
 +			 */
-+			if ((loff_t)(beg + pos) << inode->i_blkbits >=
++			if (folio != locked_folio &&
++			    (loff_t)(beg + pos) << inode->i_blkbits >=
 +			    i_size_read(inode))
 +				sync_dirty_buffer(bh);
  			++j;
