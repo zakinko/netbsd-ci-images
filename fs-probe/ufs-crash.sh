@@ -228,6 +228,16 @@ replay() {	# image ops
 	prepare $1 ufs2 1M
 	mv $work/u.img $work/rbase.img
 	o=$here/replay/$2.ops
+	# 一つのファイルを順にかけるだけでは出ないものがあるので、flusher を
+	# 10ms ごとに回して操作の合間に書き戻しを割り込ませた回も数える。
+	sysctl -q vm.dirty_writeback_centisecs=1 vm.dirty_expire_centisecs=1
+	hits=0
+	for k in 1 2 3 4 5 6 7 8; do
+		replay_once $o ""
+		[ "${rr%% *}" = 0 ] || hits=$((hits + 1))
+	done
+	sysctl -q vm.dirty_writeback_centisecs=500 vm.dirty_expire_centisecs=3000
+	note "$1 replay $2 with flusher: $hits of 8 differ (last: $rr)"
 	replay_once $o ""
 	note "$1 replay $2: differing-bytes first last sentinel-pages $rr"
 	if [ "${rr%% *}" != 0 ]; then
