@@ -163,6 +163,11 @@ stress() {	# image ufstype seed
 		[ $st = 0 ] || { grep -vE '^[0-9]+\(|^ *$' $out/$L-fsx.$seed | head -12 | cut -c1-160 | sed 's/^/    /' | tee -a $sum
 			echo fsx >> $out/build-failed; }
 	done
+	T=/sys/kernel/tracing
+	if [ -n "${UFS_TRACE:-}" ]; then
+		echo 0 > $T/tracing_on; echo 262144 > $T/buffer_size_kb; echo > $T/trace
+		echo 1 > $T/tracing_on
+	fi
 	# -v は操作を一つずつ記録する。remount で中身が変わったファイルに何が
 	# 起きたかを後で辿る。
 	timeout 900 $fsstress -v -d /mnt/b/fss ${UFS_FSS_ARGS:--n 4000 -p 4} -s $3 > $out/$L-fss.log 2>&1
@@ -190,10 +195,25 @@ if not d:
 print("size", len(a), "bytes", len(d), "first", hex(d[0]), "last", hex(d[-1]),
       "after-zero", sum(b[i] == 0 for i in d), "before-zero", sum(a[i] == 0 for i in d),
       "pages", sorted({i >> 12 for i in d})[:12])' "$work/before/$f" "/mnt/b/$f")"
+		if [ -n "${UFS_TRACE:-}" ]; then
+			[ -s $work/trace ] || { echo 0 > $T/tracing_on; cat $T/trace > $work/trace; }
+			fo=$(python3 -I -c '
+import sys
+a = open(sys.argv[1], "rb").read(); b = open(sys.argv[2], "rb").read()
+print(next(i for i in range(min(len(a), len(b))) if a[i] != b[i]))' "$work/before/$f" "/mnt/b/$f")
+			python3 -I $here/ufs-trace-who.py $work/trace "/mnt/b/$f" $fo > $work/who 2>&1
+			grep -c "^\* " $work/who | sed "s/^/      trace events on the fragment: /" | tee -a $sum
+			head -1 $work/who | sed 's/^/      /' | tee -a $sum
+			grep "^\* " $work/who | tail -8 | cut -c1-200 | sed 's/^/      /' | tee -a $sum
+			mkdir -p "$out/who/$L"; cp $work/who "$out/who/$L/$(echo "$f" | tr / _)"
+		fi
 		mkdir -p "$out/diff/$L/$(dirname "$f")"
 		cp "$work/before/$f" "$out/diff/$L/$f.before"; cp "/mnt/b/$f" "$out/diff/$L/$f.after"
 	done
 	rm -rf $work/before
+	if [ -s $work/trace ]; then gzip -c $work/trace > $out/$L-trace.gz; fi
+	rm -f $work/trace
+	[ -n "${UFS_TRACE:-}" ] && echo 0 > $T/tracing_on
 	umount /mnt/b; losetup -d $u
 	d=$(diff $out/$L-tree1 $out/$L-tree2 | grep -c '^[<>]')
 	note "$L after remount: differing lines $d of $(wc -l < $out/$L-tree1)"

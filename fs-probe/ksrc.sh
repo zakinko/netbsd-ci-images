@@ -110,6 +110,10 @@ fs_build1() {	# fs logfile
 			echo "patched: ${p#$here/patches/}"
 		done
 	fi
+	# 診断用の trace (ufs-crash.sh の UFS_TRACE)。当て物の組の外。
+	if [ -n "${UFS_TRACE:-}" ] && [ $fs = ufs ]; then
+		python3 -I $here/ufs-trace.py $ksrc/ufs || return 1
+	fi
 	fs_make $fs $log || { tail -20 $log; return 1; }
 	# C=1 は sparse が使えないと警告一行で外れ、W=123 だけの比較になる。
 	if grep -q 'sparse is not available' $log; then
@@ -123,7 +127,8 @@ fs_build1() {	# fs logfile
 		comm -13 $log.w-base $log.w-patched | grep -v "^/usr/src/kernels/" > $log.w-new
 		echo "$fs W=123+sparse warnings: before $(wc -l < $log.w-base), after $(wc -l < $log.w-patched), new $(wc -l < $log.w-new)"
 		cat $log.w-new
-		[ -s $log.w-new ] && return 1
+		# trace_printk の行は測る対象でない。
+		[ -s $log.w-new ] && [ -z "${UFS_TRACE:-}" ] && return 1
 	fi
 	insmod $ksrc/$fs/$fs.ko
 }
