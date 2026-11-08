@@ -1,0 +1,22 @@
+--- a/fs/ufs/balloc.c
++++ b/fs/ufs/balloc.c
+@@ -304,6 +304,19 @@
+ 			bh->b_blocknr = newb + pos;
+ 			clean_bdev_bh_alias(bh);
+ 			mark_buffer_dirty(bh);
++			/*
++			 * We are inside a write that has not moved i_size
++			 * yet.  Writeback drops a folio wholly past i_size
++			 * without writing it, and skips the buffers past it in
++			 * one that straddles i_size, so leaving such a buffer
++			 * to writeback put nothing at the new place: the file
++			 * later showed what the device held there before.  The
++			 * folio was left clean with the buffer still dirty, so
++			 * later writes to it never reached the device either.
++			 */
++			if ((loff_t)(beg + pos) << inode->i_blkbits >=
++			    i_size_read(inode))
++				sync_dirty_buffer(bh);
+ 			++j;
+ 			bh = bh->b_this_page;
+ 		} while (bh != head);
