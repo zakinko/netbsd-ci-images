@@ -42,7 +42,7 @@
 +	struct ufs_sb_private_info *uspi = UFS_SB(inode->i_sb)->s_uspi;
 +	u64 eof = ((u64)i_size_read(inode) + uspi->s_fsize - 1) >>
 +		  uspi->s_fshift;
-+	u64 limit = max(eof, (u64)(page_offset(page) + PAGE_SIZE) >>
++	u64 limit = max(eof, ((u64)page_offset(page) + PAGE_SIZE) >>
 +		  uspi->s_fshift);
 +
 +	if (fragment >= limit)
