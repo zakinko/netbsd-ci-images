@@ -1,0 +1,6 @@
+#image netbsd-ffs2
+#ino 904
+2753: writev d1/da/d7d/d121/d117/d1b8/d1c6/d1d0/f1f9[904 1 0 0 0 0] [71678,43,475] 0
+2761: write dontcache d1/da/d7d/d121/d117/d1b8/d1c6/d1d0/f1f9[904 1 0 0 52 92103] [697737,101076] 0
+3496: clonerange d1/da/d7d/d121/d117/d1b8/d1c6/d1d0/f1f9[904 1 0 0 288 798813] [467968,98304] -> d1/da/d16/d6b/d3a/d3d/d156/d13a/d1ae/d11c/d1a5/f1c7[823 1 0 0 0 0] [497664,98304] error 95
+3881: write d1/da/d7d/d121/d117/d1b8/d1c6/d1d0/f1f9[904 1 0 0 288 798813] [317913,49035] 0
