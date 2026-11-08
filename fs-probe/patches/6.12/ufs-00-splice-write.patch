@@ -1,0 +1,12 @@
+Upstream 7f71d6e3462b ("ufs: missing ->splice_write()"), not in 6.12.
+Without it splice(2) into a ufs file and the copy_file_range(2) that
+falls back to splice fail with EINVAL, and fsx stops on them.
+
+--- a/fs/ufs/file.c
++++ b/fs/ufs/file.c
+@@ -42,4 +42,5 @@ const struct file_operations ufs_file_operations = {
+ 	.open           = generic_file_open,
+ 	.fsync		= generic_file_fsync,
+ 	.splice_read	= filemap_splice_read,
++	.splice_write	= iter_file_splice_write,
+ };
