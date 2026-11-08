@@ -12,9 +12,9 @@ on:
         type: string
         default: ''
       parts:
-        description: '行う段 (snap order speed stress から)'
+        description: '行う段 (snap order speed stress replay から)'
         type: string
-        default: 'snap order speed stress'
+        default: 'snap order speed stress replay'
 
 concurrency:
   group: ufs-crash-${{ github.run_id }}

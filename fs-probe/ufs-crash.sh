@@ -2,7 +2,7 @@
 # ufs-13 の -o lazyzero は穴の残りの 0 埋めを同期書き込みから page cache へ
 # 移す。既定と lazyzero で、走行中と途中の時点に古い中身が見えるかを、書き
 # 込みの順序を実際に記録して確かめる。UFS_OPTS に mount option を置く。
-# UFS_PARTS に行う段を並べる (既定は snap order speed stress)。
+# UFS_PARTS に行う段を並べる (既定は snap order speed stress replay)。
 #   ufs-crash.sh <indir> <outdir>
 # 空き領域を全部印で埋めて消してから、穴に書く。
 set -u
@@ -19,7 +19,7 @@ note "# ufs-crash / kernel $(uname -r) FS_PATCH=${FS_PATCH:-0} OMIT=${FS_PATCH_O
 dnf -y -q install epel-release
 dnf -y -q install fio patch gcc make elfutils-libelf-devel rpm cpio xz tar bc \
 	kernel-headers device-mapper
-parts=${UFS_PARTS:-snap order speed stress}
+parts=${UFS_PARTS:-snap order speed stress replay}
 has() { case " $parts " in *" $1 "*) ;; *) return 1 ;; esac; }
 note "parts: $parts"
 # kernel-ml は kernel-ml-modules-extra を kernel.sh が入れている。
@@ -201,6 +201,49 @@ print("size", len(a), "bytes", len(d), "first", hex(d[0]), "last", hex(d[-1]),
 	grep -iE 'ufs|bug|warn' $out/$n-stress.dmesg | head -8 | sed 's/^/    dmesg: /' | tee -a $sum
 	rm -f $work/u.img
 }
+# fsstress の後で umount の前後に中身が変わったファイルの操作を、replay/ に
+# 抜き出してある。印で埋めた空き領域の上でかけ直し、変わるかを見る。変わる
+# なら、操作を一つずつ外して、どれが要るかを数える。
+replay_once() {	# ops skip
+	cp --sparse=always $work/rbase.img $work/u.img
+	u=$(losetup -f --show --direct-io=on -b 512 $work/u.img)
+	mount -t ufs -o rw,ufstype=ufs2${UFS_OPTS:+,$UFS_OPTS} $u /mnt/b || { note "!! mount replay"; exit 1; }
+	python3 -I $here/ufs-replay.py $1 /mnt/b/r "$2" > $work/replay.out
+	python3 -I -c '
+import sys
+open(sys.argv[2], "wb").write(open(sys.argv[1], "rb").read())' /mnt/b/r $work/r.before
+	umount /mnt/b; echo 3 > /proc/sys/vm/drop_caches
+	mount -t ufs -o ro,ufstype=ufs2 $u /mnt/b || { note "!! remount replay"; exit 1; }
+	rr=$(python3 -I -c '
+import sys
+a = open(sys.argv[1], "rb").read(); b = open(sys.argv[2], "rb").read()
+d = [i for i in range(min(len(a), len(b))) if a[i] != b[i]]
+print(len(d), hex(d[0]) if d else "-", hex(d[-1]) if d else "-",
+      sum(b"SENTINEL" in b[i:i + 4096] for i in range(0, len(b), 4096)))' $work/r.before /mnt/b/r)
+	umount /mnt/b; losetup -d $u
+	rm -f $work/u.img $work/r.before
+}
+replay() {	# image ops
+	prepare $1 ufs2 1M
+	mv $work/u.img $work/rbase.img
+	o=$here/replay/$2.ops
+	replay_once $o ""
+	note "$1 replay $2: differing-bytes first last sentinel-pages $rr"
+	if [ "${rr%% *}" != 0 ]; then
+		echo replay-$2 >> $out/build-failed
+		cp $work/replay.out $out/replay-$2.ops-done
+		for k in $(cut -d" " -f1 $out/replay-$2.ops-done); do
+			replay_once $o $k
+			note "    without $(grep "^$k " $out/replay-$2.ops-done): $rr"
+		done
+	fi
+	rm -f $work/rbase.img
+}
+if has replay; then
+	for o in $here/replay/*.ops; do
+		replay netbsd-ffs2 $(basename $o .ops)
+	done
+fi
 if has stress; then
 	dnf -y -q install git autoconf automake libtool libuuid-devel xfsprogs-devel \
 		libaio-devel libacl-devel libattr-devel

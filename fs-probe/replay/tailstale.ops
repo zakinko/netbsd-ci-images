@@ -1,0 +1,19 @@
+915: read - d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 0 0] zero size
+990: ioctl(FIEMAP) d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 0 0] [466097,172124003252332976,] -1
+1176: fallocate(ZERO_RANGE) d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 0 0] [829862,115426] 95
+1604: fallocate(KEEP_SIZE|PUNCH_HOLE) d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 0 0] [342770,410307] 95
+1692: writev d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 0 0] [70103,39,526] 0
+1695: write dontcache d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 50 90617] [621556,12134] 0
+1719: clonerange d3/d2d/fe7[429 1 0 0 0 0] [0,0] -> d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 128 633690] [949248,0] error 95
+1748: fallocate(KEEP_SIZE|COLLAPSE_RANGE) d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 128 633690] [1506301,20629] 95
+1803: splice d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 128 633690] [159639,64593] -> d3/d1c/f56[151 1 89 9 384 2016240] [2549954,64593] 22 asked for 64593, spliced 0??
+1980: mwrite d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 128 633690] [425984,118407,SHARED] 0
+2123: fallocate(WRITE_ZEROES) d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 368 633690] [603243,501978] 95
+2237: mread d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 368 633690] [339968,19540,SHARED] 0
+2280: fallocate(KEEP_SIZE) d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 368 633690] [228866,316995] 95
+2612: truncate d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 368 633690] 753534 0
+2867: write d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 384 753534] [814998,82882] 0
+2880: splice d3/d2d/d40/d4c/d57/d78/f8b[250 1 0 0 560 897880] [126692,105726] -> d3/d2d/d40/d4c/d57/d78/fb3[96 2 394118 10440665 496 1280092] [1075470,105726] 22 asked for 105726, spliced 0??
+3126: ioctl(FIEMAP) d3/d5e/d85/dbc/d14e/d1b9/d20a/d4c/d57/d78/f8b[250 1 0 0 560 897880] [977908,5286351172322902569,SYNC|XATTR] -1
+3405: copyrange d3/d5e/d85/dbc/d14e/d1b9/d20a/d4c/d57/d78/f8b[250 1 0 0 560 897880] [827029,5310] -> d3/d166/d1cd/f1d1[593 1 0 0 0 0] [981044,5310] asked for 5310, copied -1??
+3947: mwrite d3/d5e/d85/dbc/d14e/d1b9/d20a/d4c/d57/d78/f8b[250 1 0 0 560 897880] [24576,107147,PRIVATE] 0
