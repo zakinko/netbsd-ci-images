@@ -32,7 +32,7 @@ esac
 modprobe dm-log-writes || { note "!! no dm-log-writes"; exit 1; }
 . $here/ksrc.sh
 # 当て物を頭から一つずつ当て、そのたびに建てて、W=123 と sparse の警告が
-# 出荷の版より増えないことを見る。組の途中までで止めても建つことの確かめ。
+# 出荷の版より増えないこと、どの hunk も書いた行にずれなく当たることを見る。組の途中までで止めても建つことの確かめ。
 if has prefix; then
 	fs_sparse || { note "!! sparse is not installed"; exit 1; }
 	cp -a $ksrc/ufs $work/ufs.pristine
@@ -47,8 +47,12 @@ if has prefix; then
 		st=$?
 		fs_warnings $out/prefix-$n.log | comm -13 $work/w-base - |
 			grep -v "^/usr/src/kernels/" > $out/prefix-$n.w-new
-		note "prefix $n: build exit $st, new warnings $(wc -l < $out/prefix-$n.w-new), fuzz/offset $(grep -ci 'fuzz\|offset' $out/prefix-$n.patch)"
-		[ $st = 0 ] && [ ! -s $out/prefix-$n.w-new ] || echo prefix >> $out/build-failed
+		fz=$(grep -ci 'fuzz\|offset' $out/prefix-$n.patch)
+		note "prefix $n: build exit $st, new warnings $(wc -l < $out/prefix-$n.w-new), fuzz/offset $fz"
+		# offset や fuzz で当たる hunk は、文脈か行番号が木と合っていない。
+		# macOS の patch は黙って当てるので、ここで数える。
+		[ $st = 0 ] && [ ! -s $out/prefix-$n.w-new ] && [ $fz = 0 ] ||
+			echo prefix >> $out/build-failed
 	done
 	rm -rf $ksrc/ufs && cp -a $work/ufs.pristine $ksrc/ufs
 fi
