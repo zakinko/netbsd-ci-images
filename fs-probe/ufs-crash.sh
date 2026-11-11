@@ -246,6 +246,12 @@ print(next(i for i in range(min(len(a), len(b))) if a[i] != b[i]))' "$work/befor
 	[ $d = 0 ] || echo remount >> $out/build-failed
 	dmesg -c > $out/$L-stress.dmesg
 	grep -iE 'ufs|bug|warn' $out/$L-stress.dmesg | head -8 | sed 's/^/    dmesg: /' | tee -a $sum
+	# kernel の WARNING は fs-probe を落とさず、ufs の誤った sync_dirty_buffer()
+	# が二日見過ごされた (2026-11-11)。ここでは落とす。
+	if grep -qE 'WARNING:|BUG:|Oops' $out/$L-stress.dmesg; then
+		note "!! $L: kernel warning in dmesg"
+		echo dmesg >> $out/build-failed
+	fi
 	rm -f $work/u.img
 }
 # fsstress の後で umount の前後に中身が変わったファイルの操作を、replay/ に
