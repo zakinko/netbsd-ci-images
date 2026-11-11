@@ -1,9 +1,10 @@
 --- a/fs/ufs/super.c
 +++ b/fs/ufs/super.c
-@@ -499,6 +499,38 @@
+@@ -498,6 +498,38 @@ static void ufs_setup_cstotal(struct super_block *sb)
+ 	UFSD("EXIT\n");
  }
  
- /*
++/*
 + * FreeBSD keeps CRC32C check-hashes of the superblock, the cylinder
 + * groups and the inodes when FS_METACKHASH is set in fs_flags, and
 + * names which of them in fs_metackhash.  This driver does not update
@@ -35,11 +36,10 @@
 +		sb->s_id);
 +}
 +
-+/*
+ /*
   * Read on-disk structures associated with cylinder groups
   */
- static int ufs_read_cylinder_structures(struct super_block *sb)
-@@ -1273,9 +1305,11 @@
+@@ -1284,9 +1316,11 @@ magic_found:
  	/*
  	 * Read cylinder group structures
  	 */
@@ -50,9 +50,9 @@
 +		ufs_clear_metackhash(sb);
 +	}
  
- 	/* create the root dentry last, once UFS_SB(sb) is fully set up */
- 	inode = ufs_iget(sb, UFS_ROOTINO);
-@@ -1382,6 +1416,7 @@
+ 	UFSD("EXIT\n");
+ 	return 0;
+@@ -1381,6 +1415,7 @@ static int ufs_remount (struct super_block *sb, int *mount_flags, char *data)
  			mutex_unlock(&UFS_SB(sb)->s_lock);
  			return -EPERM;
  		}
@@ -62,7 +62,7 @@
  	}
 --- a/fs/ufs/ufs_fs.h
 +++ b/fs/ufs/ufs_fs.h
-@@ -334,6 +334,12 @@
+@@ -334,6 +334,12 @@ struct ufs_csum_core {
  #define UFS_ACLS         0x10    /* file system has ACLs enabled */
  #define UFS_MULTILABEL   0x20    /* file system is MAC multi-label */
  #define UFS_FLAGS_UPDATED 0x80   /* flags have been moved to new location */
@@ -75,7 +75,7 @@
  
  #if 0
  /*
-@@ -941,7 +947,10 @@
+@@ -941,7 +947,10 @@ struct ufs_super_block_third {
  			__fs32	fs_qfmask[2];	/* ~usb_fmask */
  		} fs_sunx86;
  		struct {

@@ -17,7 +17,7 @@
  
  /*
   * NOTE! When we get the inode, we're the only people
-@@ -335,6 +336,7 @@
+@@ -335,6 +336,7 @@ cg_found:
  		brelse(bh);
  	}
  	mutex_unlock(&sbi->s_lock);
@@ -35,7 +35,7 @@
  
  static int ufs_block_to_path(struct inode *inode, sector_t i_block, unsigned offsets[4])
  {
-@@ -460,6 +461,7 @@
+@@ -460,6 +461,7 @@ out:
  			set_buffer_new(bh_result);
  	}
  	mutex_unlock(&UFS_I(inode)->truncate_mutex);
@@ -43,7 +43,7 @@
  	return err;
  
  done:
-@@ -550,15 +552,17 @@
+@@ -550,15 +552,17 @@ static void ufs_set_inode_ops(struct inode *inode)
  	} else if (S_ISLNK(inode->i_mode)) {
  		if (!inode->i_blocks) {
  			inode->i_link = (char *)UFS_I(inode)->i_u1.i_symlink;
@@ -64,7 +64,7 @@
  }
  
  static int ufs1_read_inode(struct inode *inode, struct ufs_inode *ufs_inode)
-@@ -706,6 +710,7 @@
+@@ -706,6 +710,7 @@ struct inode *ufs_iget(struct super_block *sb, unsigned long ino)
  		(inode->i_size + uspi->s_fsize - 1) >> uspi->s_fshift;
  	ufsi->i_dir_start_lookup = 0;
  	ufsi->i_osync = 0;
@@ -72,7 +72,7 @@
  
  	ufs_set_inode_ops(inode);
  
-@@ -876,8 +881,10 @@
+@@ -876,8 +881,10 @@ void ufs_evict_inode(struct inode * inode)
  	invalidate_inode_buffers(inode);
  	clear_inode(inode);
  
@@ -84,7 +84,7 @@
  }
  
  struct to_free {
-@@ -1190,6 +1197,7 @@
+@@ -1190,6 +1197,7 @@ static void ufs_truncate_blocks(struct inode *inode)
  	read_sequnlock_excl(&ufsi->meta_lock);
  	mark_inode_dirty(inode);
  	mutex_unlock(&ufsi->truncate_mutex);
@@ -92,7 +92,7 @@
  }
  
  static int ufs_truncate(struct inode *inode, loff_t size)
-@@ -1240,11 +1248,34 @@
+@@ -1240,6 +1248,10 @@ int ufs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
  			return error;
  	}
  
@@ -103,11 +103,10 @@
  	setattr_copy(&nop_mnt_idmap, inode, attr);
  	mark_inode_dirty(inode);
  	return 0;
- }
- 
+@@ -1248,3 +1260,22 @@ int ufs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
  const struct inode_operations ufs_file_inode_operations = {
-+	.setattr = ufs_setattr,
-+};
+ 	.setattr = ufs_setattr,
+ };
 +
 +/*
 + * Symlinks and special files take ufs_setattr() too, so that a change of
@@ -125,11 +124,11 @@
 +};
 +
 +const struct inode_operations ufs_special_inode_operations = {
- 	.setattr = ufs_setattr,
- };
++	.setattr = ufs_setattr,
++};
 --- a/fs/ufs/namei.c
 +++ b/fs/ufs/namei.c
-@@ -99,6 +99,7 @@
+@@ -99,6 +99,7 @@ static int ufs_mknod(struct mnt_idmap *idmap, struct inode *dir,
  	err = PTR_ERR(inode);
  	if (!IS_ERR(inode)) {
  		init_special_inode(inode, mode, rdev);
@@ -137,7 +136,7 @@
  		ufs_set_inode_dev(inode->i_sb, UFS_I(inode), rdev);
  		mark_inode_dirty(inode);
  		err = ufs_add_nondir(dentry, inode);
-@@ -124,7 +125,7 @@
+@@ -124,7 +125,7 @@ static int ufs_symlink (struct mnt_idmap * idmap, struct inode * dir,
  
  	if (l > UFS_SB(sb)->s_uspi->s_maxsymlinklen) {
  		/* slow symlink */
@@ -146,7 +145,7 @@
  		inode_nohighmem(inode);
  		inode->i_mapping->a_ops = &ufs_aops;
  		err = page_symlink(inode, symname, l);
-@@ -132,7 +133,7 @@
+@@ -132,7 +133,7 @@ static int ufs_symlink (struct mnt_idmap * idmap, struct inode * dir,
  			goto out_fail;
  	} else {
  		/* fast symlink */
@@ -155,14 +154,15 @@
  		inode->i_link = (char *)UFS_I(inode)->i_u1.i_symlink;
  		memcpy(inode->i_link, symname, l);
  		inode->i_size = l-1;
-@@ -332,4 +333,5 @@
+@@ -332,4 +333,5 @@ const struct inode_operations ufs_dir_inode_operations = {
  	.rmdir		= ufs_rmdir,
  	.mknod		= ufs_mknod,
  	.rename		= ufs_rename,
 +	.setattr	= ufs_setattr,
  };
---- a/fs/ufs/quota2.c	1970-01-01 09:00:00
-+++ b/fs/ufs/quota2.c	2026-10-28 16:26:36
+new file mode 100644
+--- /dev/null
++++ b/fs/ufs/quota2.c
 @@ -0,0 +1,565 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
@@ -729,8 +729,9 @@
 +		iput(qi);
 +	}
 +}
---- a/fs/ufs/quota2.h	1970-01-01 09:00:00
-+++ b/fs/ufs/quota2.h	2026-10-28 16:26:36
+new file mode 100644
+--- /dev/null
++++ b/fs/ufs/quota2.h
 @@ -0,0 +1,67 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -809,7 +810,7 @@
  
  static struct inode *ufs_nfs_get_inode(struct super_block *sb, u64 ino, u32 generation)
  {
-@@ -778,8 +779,10 @@
+@@ -778,8 +779,10 @@ static void ufs_put_super(struct super_block *sb)
  
  	UFSD("ENTER\n");
  
@@ -821,7 +822,7 @@
  	cancel_delayed_work_sync(&sbi->sync_work);
  
  	ubh_brelse_uspi (sbi->s_uspi);
-@@ -844,6 +847,7 @@
+@@ -844,6 +847,7 @@ static int ufs_fill_super(struct super_block *sb, void *data, int silent)
  	UFSD("flag %u\n", (int)(sb_rdonly(sb)));
  	
  	mutex_init(&sbi->s_lock);
@@ -829,10 +830,11 @@
  	spin_lock_init(&sbi->work_lock);
  	INIT_DELAYED_WORK(&sbi->sync_work, delayed_sync_fs);
  	/*
-@@ -1303,6 +1307,21 @@
+@@ -1313,6 +1317,21 @@ magic_found:
+ 	}
  
  	ufs_setup_cstotal(sb);
- 	/*
++	/*
 +	 * Writes must keep NetBSD's quota2 in step.  If its files cannot be
 +	 * used, stay read-only; deciding that before the cylinder group
 +	 * structures are read keeps ufs_put_super() from leaking them.
@@ -847,11 +849,10 @@
 +			sb->s_flags |= SB_RDONLY;
 +		}
 +	}
-+	/*
+ 	/*
  	 * Read cylinder group structures
  	 */
- 	if (!sb_rdonly(sb)) {
-@@ -1327,6 +1346,7 @@
+@@ -1326,6 +1345,7 @@ magic_found:
  	return 0;
  
  failed:
@@ -859,7 +860,7 @@
  	if (ubh)
  		ubh_brelse_uspi (uspi);
  	kfree (uspi);
-@@ -1384,6 +1404,7 @@
+@@ -1383,6 +1403,7 @@ static int ufs_remount (struct super_block *sb, int *mount_flags, char *data)
  	 * fs was mouted as rw, remounting ro
  	 */
  	if (*mount_flags & SB_RDONLY) {
@@ -867,7 +868,7 @@
  		ufs_put_super_internal(sb);
  		usb1->fs_time = ufs_get_seconds(sb);
  		if ((flags & UFS_ST_MASK) == UFS_ST_SUN
-@@ -1411,8 +1432,14 @@
+@@ -1410,8 +1431,14 @@ static int ufs_remount (struct super_block *sb, int *mount_flags, char *data)
  			mutex_unlock(&UFS_SB(sb)->s_lock);
  			return -EINVAL;
  		}
@@ -882,7 +883,7 @@
  			mutex_unlock(&UFS_SB(sb)->s_lock);
  			return -EPERM;
  		}
-@@ -1487,6 +1514,7 @@
+@@ -1486,6 +1513,7 @@ static struct inode *ufs_alloc_inode(struct super_block *sb)
  	inode_set_iversion(&ei->vfs_inode, 1);
  	seqlock_init(&ei->meta_lock);
  	mutex_init(&ei->truncate_mutex);
@@ -892,7 +893,7 @@
  
 --- a/fs/ufs/ufs.h
 +++ b/fs/ufs/ufs.h
-@@ -30,6 +30,8 @@
+@@ -30,6 +30,8 @@ struct ufs_sb_info {
  	struct delayed_work sync_work; /* FS sync delayed work */
  	spinlock_t work_lock; /* protects sync_work and work_queued */
  	struct mutex s_lock;
@@ -901,7 +902,7 @@
  };
  
  struct ufs_inode_info {
-@@ -47,6 +49,7 @@
+@@ -47,6 +49,7 @@ struct ufs_inode_info {
  	__u64	i_lastfrag;
  	seqlock_t meta_lock;
  	struct mutex	truncate_mutex;
@@ -909,7 +910,7 @@
  	__u32   i_dir_start_lookup;
  	struct inode vfs_inode;
  };
-@@ -113,6 +116,9 @@
+@@ -113,6 +116,9 @@ void ufs_set_link(struct inode *dir, struct ufs_dir_entry *de,
  
  /* file.c */
  extern const struct inode_operations ufs_file_inode_operations;
@@ -921,7 +922,7 @@
  
 --- a/fs/ufs/ufs_fs.h
 +++ b/fs/ufs/ufs_fs.h
-@@ -903,7 +903,12 @@
+@@ -903,7 +903,12 @@ struct ufs_super_block_second {
  			__fs32   fs_active;
  			__fs32   fs_old_cpc;
  			__fs32   fs_maxbsize;

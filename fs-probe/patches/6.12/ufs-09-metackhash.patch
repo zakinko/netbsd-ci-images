@@ -1,6 +1,6 @@
 --- a/fs/ufs/Kconfig
 +++ b/fs/ufs/Kconfig
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,7 @@ config UFS_FS
  	tristate "UFS file system support (read only)"
  	depends on BLOCK
  	select BUFFER_HEAD
@@ -20,7 +20,7 @@
  ccflags-$(CONFIG_UFS_DEBUG)    += -DDEBUG
 --- a/fs/ufs/balloc.c
 +++ b/fs/ufs/balloc.c
-@@ -115,8 +115,8 @@
+@@ -115,8 +115,8 @@ void ufs_free_fragments(struct inode *inode, u64 fragment, unsigned count)
  		}
  	}
  	
@@ -31,7 +31,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  	ufs_mark_sb_dirty(sb);
-@@ -205,8 +205,8 @@
+@@ -205,8 +205,8 @@ do_more:
  		}
  	}
  
@@ -42,7 +42,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  
-@@ -625,8 +625,8 @@
+@@ -663,8 +663,8 @@ static u64 ufs_add_fragments(struct inode *inode, u64 fragment,
  	fs32_sub(sb, &UFS_SB(sb)->fs_cs(cgno).cs_nffree, count);
  	uspi->cs_total.cs_nffree -= count;
  	
@@ -53,7 +53,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  	ufs_mark_sb_dirty(sb);
-@@ -746,8 +746,8 @@
+@@ -784,8 +784,8 @@ cg_found:
  		fs32_add(sb, &ucg->cg_frsum[allocsize - count], 1);
  
  succed:
@@ -64,7 +64,8 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  	ufs_mark_sb_dirty(sb);
---- a/fs/ufs/ckhash.c
+new file mode 100644
+--- /dev/null
 +++ b/fs/ufs/ckhash.c
 @@ -0,0 +1,271 @@
 +// SPDX-License-Identifier: GPL-2.0
@@ -340,7 +341,7 @@
 +}
 --- a/fs/ufs/cylinder.c
 +++ b/fs/ufs/cylinder.c
-@@ -50,6 +50,7 @@
+@@ -50,6 +50,7 @@ static void ufs_read_cylinder (struct super_block * sb,
  		if (!(UCPI_UBH(ucpi)->bh[i] = sb_bread(sb, UCPI_UBH(ucpi)->fragment + i)))
  			goto failed;
  	sbi->s_cgno[bitmap_nr] = cgno;
@@ -348,7 +349,7 @@
  			
  	ucpi->c_cgx	= fs32_to_cpu(sb, ucg->cg_cgx);
  	ucpi->c_ncyl	= fs16_to_cpu(sb, ucg->cg_ncyl);
-@@ -119,7 +120,7 @@
+@@ -109,7 +110,7 @@ void ufs_put_cylinder (struct super_block * sb, unsigned bitmap_nr)
  	ucg->cg_rotor = cpu_to_fs32(sb, ucpi->c_rotor);
  	ucg->cg_frotor = cpu_to_fs32(sb, ucpi->c_frotor);
  	ucg->cg_irotor = cpu_to_fs32(sb, ucpi->c_irotor);
@@ -359,7 +360,7 @@
  	}
 --- a/fs/ufs/ialloc.c
 +++ b/fs/ufs/ialloc.c
-@@ -111,8 +111,8 @@
+@@ -111,8 +111,8 @@ void ufs_free_inode (struct inode * inode)
  		}
  	}
  
@@ -370,7 +371,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  	
-@@ -153,7 +153,7 @@
+@@ -153,7 +153,7 @@ static void ufs2_init_inodes_chunk(struct super_block *sb,
  	}
  
  	fs32_add(sb, &ucg->cg_u.cg_u2.cg_initediblk, uspi->s_inopb);
@@ -379,7 +380,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  
-@@ -297,8 +297,8 @@
+@@ -297,8 +297,8 @@ cg_found:
  		uspi->cs_total.cs_ndir++;
  		fs32_add(sb, &sbi->fs_cs(cg).cs_ndir, 1);
  	}
@@ -390,7 +391,7 @@
  	if (sb->s_flags & SB_SYNCHRONOUS)
  		ubh_sync_block(UCPI_UBH(ucpi));
  	ufs_mark_sb_dirty(sb);
-@@ -342,6 +342,7 @@
+@@ -342,6 +342,7 @@ cg_found:
  		ktime_get_real_ts64(&ts);
  		ufs2_inode->ui_birthtime = cpu_to_fs64(sb, ts.tv_sec);
  		ufs2_inode->ui_birthnsec = cpu_to_fs32(sb, ts.tv_nsec);
@@ -400,7 +401,7 @@
  		if (sb->s_flags & SB_SYNCHRONOUS)
 --- a/fs/ufs/inode.c
 +++ b/fs/ufs/inode.c
-@@ -785,8 +785,9 @@
+@@ -785,8 +785,9 @@ struct inode *ufs_iget(struct super_block *sb, unsigned long ino)
  	if ((UFS_SB(sb)->s_flags & UFS_TYPE_MASK) == UFS_TYPE_UFS2) {
  		struct ufs2_inode *ufs2_inode = (struct ufs2_inode *)bh->b_data;
  
@@ -412,7 +413,7 @@
  	} else {
  		struct ufs_inode *ufs_inode = (struct ufs_inode *)bh->b_data;
  
-@@ -926,8 +927,9 @@
+@@ -926,8 +927,9 @@ static int ufs_update_inode(struct inode * inode, int do_sync)
  	if (uspi->fs_magic == UFS2_MAGIC) {
  		struct ufs2_inode *ufs2_inode = (struct ufs2_inode *)bh->b_data;
  
@@ -424,7 +425,7 @@
  	} else {
  		struct ufs_inode *ufs_inode = (struct ufs_inode *) bh->b_data;
  
-@@ -1048,6 +1050,7 @@
+@@ -1048,6 +1050,7 @@ static void ufs2_free_extattr(struct inode *inode)
  	owned = ufs2_extattr_owned(inode, extsize, blk);
  	ui->ui_extsize = 0;
  	memset(ui->ui_extb, 0, sizeof(ui->ui_extb));
@@ -434,7 +435,7 @@
  		sync_dirty_buffer(bh);
 --- a/fs/ufs/super.c
 +++ b/fs/ufs/super.c
-@@ -283,7 +283,7 @@
+@@ -283,7 +283,7 @@ void ufs_error (struct super_block * sb, const char * function,
  	
  	if (!sb_rdonly(sb)) {
  		usb1->fs_clean = UFS_FSBAD;
@@ -443,7 +444,7 @@
  		ufs_mark_sb_dirty(sb);
  		sb->s_flags |= SB_RDONLY;
  	}
-@@ -317,7 +317,7 @@
+@@ -317,7 +317,7 @@ void ufs_panic (struct super_block * sb, const char * function,
  	
  	if (!sb_rdonly(sb)) {
  		usb1->fs_clean = UFS_FSBAD;
@@ -452,10 +453,11 @@
  		ufs_mark_sb_dirty(sb);
  	}
  	va_start(args, fmt);
-@@ -500,38 +500,6 @@
+@@ -499,38 +499,6 @@ static void ufs_setup_cstotal(struct super_block *sb)
+ 	UFSD("EXIT\n");
  }
  
- /*
+-/*
 - * FreeBSD keeps CRC32C check-hashes of the superblock, the cylinder
 - * groups and the inodes when FS_METACKHASH is set in fs_flags, and
 - * names which of them in fs_metackhash.  This driver does not update
@@ -487,11 +489,10 @@
 -		sb->s_id);
 -}
 -
--/*
+ /*
   * Read on-disk structures associated with cylinder groups
   */
- static int ufs_read_cylinder_structures(struct super_block *sb)
-@@ -663,7 +631,7 @@
+@@ -663,7 +631,7 @@ static void ufs_put_cstotal(struct super_block *sb)
  	usb1->fs_cstotal.cs_nifree = cpu_to_fs32(sb, uspi->cs_total.cs_nifree);
  	usb1->fs_cstotal.cs_nffree = cpu_to_fs32(sb, uspi->cs_total.cs_nffree);
  out:
@@ -500,15 +501,15 @@
  	ufs_print_super_stuff(sb, usb1, usb2, usb3);
  	UFSD("EXIT\n");
  }
-@@ -1331,6 +1299,7 @@
- 	sb->s_max_links = UFS_LINK_MAX;
+@@ -1342,6 +1310,7 @@ magic_found:
+ 	}
  
  	ufs_setup_cstotal(sb);
 +	ufs_ckhash_mount(sb);
  	/*
  	 * Writes must keep NetBSD's quota2 in step.  If its files cannot be
  	 * used, stay read-only; deciding that before the cylinder group
-@@ -1349,11 +1318,9 @@
+@@ -1360,11 +1329,9 @@ magic_found:
  	/*
  	 * Read cylinder group structures
  	 */
@@ -519,9 +520,9 @@
 -		ufs_clear_metackhash(sb);
 -	}
  
- 	/* create the root dentry last, once UFS_SB(sb) is fully set up */
- 	inode = ufs_iget(sb, UFS_ROOTINO);
-@@ -1437,7 +1404,7 @@
+ 	UFSD("EXIT\n");
+ 	return 0;
+@@ -1436,7 +1403,7 @@ static int ufs_remount (struct super_block *sb, int *mount_flags, char *data)
  		  || (flags & UFS_ST_MASK) == UFS_ST_SUNx86) 
  			ufs_set_fs_state(sb, usb1, usb3,
  				UFS_FSOK - fs32_to_cpu(sb, usb1->fs_time));
@@ -530,7 +531,7 @@
  		sb->s_flags |= SB_RDONLY;
  	} else {
  	/*
-@@ -1468,7 +1435,7 @@
+@@ -1467,7 +1434,7 @@ static int ufs_remount (struct super_block *sb, int *mount_flags, char *data)
  			mutex_unlock(&UFS_SB(sb)->s_lock);
  			return -EPERM;
  		}
@@ -541,7 +542,7 @@
  	}
 --- a/fs/ufs/ufs.h
 +++ b/fs/ufs/ufs.h
-@@ -27,6 +27,7 @@
+@@ -27,6 +27,7 @@ struct ufs_sb_info {
  	unsigned s_mount_opt;
  	struct super_block *sb;
  	int work_queued; /* non-zero if the delayed work is queued */
@@ -549,11 +550,10 @@
  	struct delayed_work sync_work; /* FS sync delayed work */
  	spinlock_t work_lock; /* protects sync_work and work_queued */
  	struct mutex s_lock;
-@@ -96,6 +97,17 @@
- extern u64 ufs_new_fragments(struct inode *, void *, u64, u64,
+@@ -97,6 +98,17 @@ extern u64 ufs_new_fragments(struct inode *, void *, u64, u64,
  			     unsigned, int *, struct page *);
  int ufs_zero_frags_now(struct inode *inode, sector_t beg, unsigned int n);
-+
+ 
 +/* ckhash.c */
 +void ufs_ckhash_mount(struct super_block *sb);
 +void ufs_ckhash_remount_rw(struct super_block *sb);
@@ -564,12 +564,13 @@
 +void ufs_ckhash_set_inode(struct super_block *sb, struct ufs2_inode *ui);
 +void ufs_ckhash_check_inode(struct super_block *sb, struct ufs2_inode *ui,
 +			    u64 ino);
- 
++
  /* cylinder.c */
  extern struct ufs_cg_private_info * ufs_load_cylinder (struct super_block *, unsigned);
+ extern void ufs_put_cylinder (struct super_block *, unsigned);
 --- a/fs/ufs/ufs_fs.h
 +++ b/fs/ufs/ufs_fs.h
-@@ -571,7 +571,9 @@
+@@ -571,7 +571,9 @@ struct	ufs_cylinder_group {
  			__fs32	cg_nclusterblks;/* number of clusters this cg */
  			__fs32   cg_niblk; /* number of inode blocks this cg */
  			__fs32   cg_initediblk;	/* last initialized inode */
@@ -580,7 +581,7 @@
  			__fs64   cg_time;	/* time last written */
  			__fs64	cg_sparecon[3];	/* reserved for future use */
  		} cg_u2;
-@@ -682,7 +684,10 @@
+@@ -682,7 +684,10 @@ struct ufs2_inode {
  		} ui_addr;
  	__u8	ui_symlink[2*4*(UFS_NDADDR+UFS_NINDIR)];/* 0x28 fast symlink */
  	} ui_u2;

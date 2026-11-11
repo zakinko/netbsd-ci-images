@@ -1,6 +1,6 @@
 --- a/fs/ufs/balloc.c
 +++ b/fs/ufs/balloc.c
-@@ -470,8 +470,10 @@ static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
+@@ -478,8 +478,10 @@ static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
  	if (!n)
  		return;
  	if (data && !IS_SYNC(inode) && ufs_test_opt(UFS_SB(inode->i_sb)->s_mount_opt, LAZYZERO) &&
@@ -179,7 +179,7 @@
  	if (want_delete) {
  		inode->i_size = 0;
  		if (inode->i_blocks &&
-@@ -1436,6 +1558,7 @@ static void ufs_truncate_blocks(struct inode *inode)
+@@ -1443,6 +1565,7 @@ static void ufs_truncate_blocks(struct inode *inode)
  			break;
  
  	mutex_lock(&ufsi->truncate_mutex);
@@ -187,7 +187,7 @@
  	if (depth == 1) {
  		ufs_trunc_direct(inode);
  		offsets[0] = UFS_IND_BLOCK;
-@@ -1490,6 +1613,18 @@ static int ufs_truncate(struct inode *inode, loff_t size)
+@@ -1497,6 +1620,18 @@ static int ufs_truncate(struct inode *inode, loff_t size)
  	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
  		return -EPERM;
  
