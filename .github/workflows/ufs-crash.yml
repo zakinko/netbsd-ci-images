@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       images_run:
-        description: 'src-*bsd の artifact を持つ fs-probe の run'
+        description: 'src-*bsd の artifact を持つ fs-probe の run (空なら最新)'
         type: string
-        required: true
+        default: ''
       omit:
         description: '当てない当て物の名前の頭 (対照実験)'
         type: string
@@ -27,13 +27,54 @@ on:
         description: 'ufs の割り当てを trace_printk で記録する (診断用)'
         type: boolean
         default: false
+  # 頻度の低い競合は一晩の数十回では出ないことがあるので、毎晩違う種で
+  # 数を重ねる。条件は fsstress を 8 本並べ truncate を外したもので、
+  # ufs_change_blocknr() と ufs-08 の取りこぼしを一番多く出した
+  # (run 42495970457、2026-11-08)。
+  schedule:
+    - cron: '17 18 * * *'
 
 concurrency:
   group: ufs-crash-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
+  # 定期実行には入力が無い。src-*bsd の artifact がまだ残っている最新の
+  # 成功した fs-probe の run を使い、種は run 番号から毎晩違う 8 個にする。
+  setup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      images_run: ${{ steps.pick.outputs.images_run }}
+      seeds: ${{ steps.pick.outputs.seeds }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGES_RUN: ${{ inputs.images_run }}
+          SEEDS: ${{ inputs.seeds }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -e
+          run=$IMAGES_RUN
+          if [ -z "$run" ]; then
+            for r in $(gh run list -R ${{ github.repository }} -w fs-probe.yml --status success -L 30 --json databaseId -q '.[].databaseId'); do
+              n=$(gh api repos/${{ github.repository }}/actions/runs/$r/artifacts -q '[.artifacts[] | select(.expired == false) | select(.name == "src-netbsd" or .name == "src-freebsd")] | length')
+              [ "$n" = 2 ] && { run=$r; break; }
+            done
+          fi
+          [ -n "$run" ] || { echo "!! src-netbsd と src-freebsd を持つ fs-probe の run が無い"; exit 1; }
+          seeds=$SEEDS
+          if [ -z "$seeds" ]; then
+            b=$((RUN_NUMBER * 8))
+            seeds=$(seq $((b + 1)) $((b + 8)) | tr '\n' ' ')
+          fi
+          echo "images from run $run, seeds $seeds"
+          echo "images_run=$run" >> $GITHUB_OUTPUT
+          echo "seeds=$seeds" >> $GITHUB_OUTPUT
+
   order:
+    needs: setup
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
@@ -52,7 +93,7 @@ jobs:
           pattern: src-*bsd
           path: fsp/in
           merge-multiple: true
-          run-id: ${{ inputs.images_run }}
+          run-id: ${{ needs.setup.outputs.images_run }}
           github-token: ${{ github.token }}
       - name: kernel-ml の rpm を host で落とす
         if: matrix.kernel == 'ml'
@@ -102,7 +143,7 @@ jobs:
           almalinux $RUNNER_TEMP/k.sh
       - shell: almalinux {0}
         timeout-minutes: 100
-        run: FS_PATCH=1 FS_PATCH_OMIT='${{ inputs.omit }}' UFS_OPTS='${{ matrix.opts }}' UFS_PARTS='${{ inputs.parts }}' UFS_STRESS_SEEDS='${{ inputs.seeds }}' UFS_FSS_ARGS='${{ inputs.fss_args }}' UFS_TRACE='${{ inputs.trace && '1' || '' }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
+        run: FS_PATCH=1 FS_PATCH_OMIT='${{ inputs.omit }}' UFS_OPTS='${{ matrix.opts }}' UFS_PARTS='${{ inputs.parts || 'stress replay' }}' UFS_STRESS_SEEDS='${{ needs.setup.outputs.seeds }}' UFS_FSS_ARGS='${{ inputs.fss_args || '-n 3000 -p 8 -f truncate=0' }}' UFS_TRACE='${{ inputs.trace && '1' || '' }}' sh fs-probe/ufs-crash.sh fsp/in fsp/crash
       - run: cat fsp/crash/crash.txt >> $GITHUB_STEP_SUMMARY
         if: always()
       - uses: actions/upload-artifact@v4
