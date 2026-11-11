@@ -312,8 +312,13 @@ if has stress; then
 		libaio-devel libacl-devel libattr-devel
 	# stress.sh と同じ版の xfstests の ltp/ から建てる。
 	xfstests_tag=v2026.10.15
-	git clone -q --depth 1 --branch $xfstests_tag \
-		https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git $work/xfstests
+	# stress.sh と同じく、git.kernel.org が断るときは間をあけて取り直す。
+	for i in 1 2 3 4 5; do
+		rm -rf $work/xfstests
+		git clone -q --depth 1 --branch $xfstests_tag \
+			https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git $work/xfstests && break
+		sleep $((i * 30))
+	done
 	note "xfstests: $(git -C $work/xfstests log -1 --format='%h %cd' --date=short)"
 	(cd $work/xfstests && make configure > $out/xfstests-build.log 2>&1 &&
 		./configure >> $out/xfstests-build.log 2>&1 &&

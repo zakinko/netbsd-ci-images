@@ -25,8 +25,14 @@ dnf -y -q install patch ntfs-3g ntfsprogs qemu-img gcc make git autoconf \
 	elfutils-libelf-devel rpm cpio xz tar bison flex
 # fsx と fsstress は xfstests の ltp/ に在る。版を固定し、何で測ったかを残す。
 xfstests_tag=v2026.10.15
-git clone -q --depth 1 --branch $xfstests_tag \
-	https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git $work/xfstests
+# git.kernel.org は一時的に断ることがある (2026-11-11 に三度)。間をあけて
+# 取り直す。GitHub の mirror には版の tag が無い。
+for i in 1 2 3 4 5; do
+	rm -rf $work/xfstests
+	git clone -q --depth 1 --branch $xfstests_tag \
+		https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git $work/xfstests && break
+	sleep $((i * 30))
+done
 note "xfstests: $(git -C $work/xfstests log -1 --format='%h %cd' --date=short)"
 (cd $work/xfstests && make configure > $out/xfstests-build.log 2>&1 &&
 	./configure >> $out/xfstests-build.log 2>&1 &&
