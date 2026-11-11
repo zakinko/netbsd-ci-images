@@ -8,10 +8,10 @@
  #include <asm/byteorder.h>
  
  #include "ufs_fs.h"
-@@ -363,6 +364,95 @@
-  * synchronous write for every block of a growing file, and most of the
-  * time spent writing it.
-  */
+@@ -380,6 +381,65 @@ static void ufs_zero_frags_in_folio(struct folio *folio, u64 fragment, u64 end,
+ 	} while (bh != head);
+ }
+ 
 +/*
 + * With -o lazyzero, zero the @n new fragments from file fragment @fragment
 + * in the page cache rather than on the device, so that a hole filled by a
@@ -20,41 +20,11 @@
 + * block pointer: a crash can leave old disk contents in the block, which
 + * is what the option asks to accept.
 + *
-+ * The folio being written holds fragments the write does not cover when a
-+ * fragment is smaller than a page.  __block_write_begin() does not prepare
-+ * those, and they would be read from the device, so zero them here.  One
-+ * read while it was a hole is uptodate with zeroes already, but it must be
-+ * marked dirty all the same, or the new fragment keeps what it held before.
-+ *
 + * The caller holds s_lock, and writeback holds a folio lock when it takes
 + * s_lock, so a folio that is not free right now is not waited for.  Pages
 + * that the new fragments do not cover whole are left to the caller, as they
 + * can hold data of older fragments that are not in the cache.
 + */
-+static void ufs_zero_frags_in_folio(struct folio *folio, u64 fragment, u64 end,
-+				    unsigned int fshift)
-+{
-+	struct buffer_head *head, *bh;
-+	u64 frag = (u64)folio->index << (PAGE_SHIFT - fshift);
-+	size_t off = 0;
-+
-+	if (!folio_buffers(folio))
-+		create_empty_buffers(folio, 1 << fshift, 0);
-+	bh = head = folio_buffers(folio);
-+	do {
-+		if (frag >= fragment && frag < end) {
-+			if (!buffer_uptodate(bh)) {
-+				folio_zero_range(folio, off, bh->b_size);
-+				set_buffer_uptodate(bh);
-+			}
-+			mark_buffer_dirty(bh);
-+		}
-+		frag++;
-+		off += bh->b_size;
-+		bh = bh->b_this_page;
-+	} while (bh != head);
-+}
-+
 +static bool ufs_zero_frags_cached(struct inode *inode, u64 fragment,
 +				  unsigned int n, struct folio *locked_folio)
 +{
@@ -101,22 +71,22 @@
 +	return true;
 +}
 +
- static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
- 			    u64 fragment, struct folio *locked_folio)
- {
-@@ -373,6 +463,9 @@
- 	if (data)
- 		n = ufs_frags_to_zero(inode, fragment, n, locked_folio);
+ /*
+  * Clear the @n new fragments from @beg, which hold file fragments from
+  * @fragment on.  A data block taken for @locked_folio is larger than the
+@@ -412,6 +472,9 @@ static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
+ 	}
  	if (!n)
-+		return;
+ 		return;
 +	if (data && !IS_SYNC(inode) && UFS_SB(inode->i_sb)->s_lazyzero &&
 +	    ufs_zero_frags_cached(inode, fragment, n, locked_folio))
- 		return;
++		return;
  	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
  		return;
+ 	end = beg + n;
 --- a/fs/ufs/super.c
 +++ b/fs/ufs/super.c
-@@ -343,7 +343,7 @@
+@@ -343,7 +343,7 @@ void ufs_warning (struct super_block * sb, const char * function,
  	va_end(args);
  }
  
@@ -125,7 +95,7 @@
  
  static const struct constant_table ufs_param_ufstype[] = {
  	{"old",		UFS_MOUNT_UFSTYPE_OLD},
-@@ -371,11 +371,12 @@
+@@ -371,11 +371,12 @@ static const struct constant_table ufs_param_onerror[] = {
  static const struct fs_parameter_spec ufs_param_spec[] = {
  	fsparam_enum	("ufstype",	Opt_type, ufs_param_ufstype),
  	fsparam_enum	("onerror",	Opt_onerror, ufs_param_onerror),
@@ -139,7 +109,7 @@
  };
  
  static int ufs_parse_param(struct fs_context *fc, struct fs_parameter *param)
-@@ -407,6 +408,9 @@
+@@ -407,6 +408,9 @@ static int ufs_parse_param(struct fs_context *fc, struct fs_parameter *param)
  	case Opt_onerror:
  		ctx->on_err = result.uint_32;
  		break;
@@ -149,7 +119,7 @@
  	default:
  		return -EINVAL;
  	}
-@@ -784,6 +788,7 @@
+@@ -784,6 +788,7 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
  
  	sbi->s_flavour = ctx->flavour;
  	sbi->s_on_err = ctx->on_err;
@@ -157,7 +127,7 @@
  
  	if (!sbi->s_flavour) {
  		if (!silent)
-@@ -1377,6 +1382,7 @@
+@@ -1377,6 +1382,7 @@ static int ufs_reconfigure(struct fs_context *fc)
  
  	if ((bool)(fc->sb_flags & SB_RDONLY) == sb_rdonly(sb)) {
  		UFS_SB(sb)->s_on_err = ctx->on_err;
@@ -165,7 +135,7 @@
  		mutex_unlock(&UFS_SB(sb)->s_lock);
  		return 0;
  	}
-@@ -1438,6 +1444,7 @@
+@@ -1438,6 +1444,7 @@ static int ufs_reconfigure(struct fs_context *fc)
  #endif
  	}
  	UFS_SB(sb)->s_on_err = ctx->on_err;
@@ -173,7 +143,7 @@
  	mutex_unlock(&UFS_SB(sb)->s_lock);
  	return 0;
  }
-@@ -1458,6 +1465,8 @@
+@@ -1458,6 +1465,8 @@ static int ufs_show_options(struct seq_file *seq, struct dentry *root)
  	while (tp->value && tp->value != mval)
  		++tp;
  	seq_printf(seq, ",onerror=%s", tp->name);
@@ -182,7 +152,7 @@
  
  	return 0;
  }
-@@ -1586,6 +1595,7 @@
+@@ -1586,6 +1595,7 @@ static int ufs_init_fs_context(struct fs_context *fc)
  
  		ctx->flavour = sbi->s_flavour;
  		ctx->on_err = sbi->s_on_err;
@@ -192,7 +162,7 @@
  		ctx->on_err = UFS_MOUNT_ONERROR_LOCK;
 --- a/fs/ufs/ufs.h
 +++ b/fs/ufs/ufs.h
-@@ -24,6 +24,7 @@
+@@ -24,6 +24,7 @@ struct ufs_sb_info {
  	struct ufs_cg_private_info * s_ucpi[UFS_MAX_GROUP_LOADED];
  	unsigned s_cgno[UFS_MAX_GROUP_LOADED];
  	unsigned short s_cg_loaded;

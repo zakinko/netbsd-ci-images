@@ -8,10 +8,10 @@
  #include <asm/byteorder.h>
  
  #include "ufs_fs.h"
-@@ -368,6 +369,95 @@
-  * synchronous write for every block of a growing file, and most of the
-  * time spent writing it.
-  */
+@@ -385,6 +386,65 @@ static void ufs_zero_frags_in_folio(struct folio *folio, u64 fragment, u64 end,
+ 	} while (bh != head);
+ }
+ 
 +/*
 + * With -o lazyzero, zero the @n new fragments from file fragment @fragment
 + * in the page cache rather than on the device, so that a hole filled by a
@@ -20,41 +20,11 @@
 + * block pointer: a crash can leave old disk contents in the block, which
 + * is what the option asks to accept.
 + *
-+ * The folio being written holds fragments the write does not cover when a
-+ * fragment is smaller than a page.  __block_write_begin() does not prepare
-+ * those, and they would be read from the device, so zero them here.  One
-+ * read while it was a hole is uptodate with zeroes already, but it must be
-+ * marked dirty all the same, or the new fragment keeps what it held before.
-+ *
 + * The caller holds s_lock, and writeback holds a folio lock when it takes
 + * s_lock, so a folio that is not free right now is not waited for.  Pages
 + * that the new fragments do not cover whole are left to the caller, as they
 + * can hold data of older fragments that are not in the cache.
 + */
-+static void ufs_zero_frags_in_folio(struct folio *folio, u64 fragment, u64 end,
-+				    unsigned int fshift)
-+{
-+	struct buffer_head *head, *bh;
-+	u64 frag = (u64)folio->index << (PAGE_SHIFT - fshift);
-+	size_t off = 0;
-+
-+	if (!folio_buffers(folio))
-+		create_empty_buffers(folio, 1 << fshift, 0);
-+	bh = head = folio_buffers(folio);
-+	do {
-+		if (frag >= fragment && frag < end) {
-+			if (!buffer_uptodate(bh)) {
-+				folio_zero_range(folio, off, bh->b_size);
-+				set_buffer_uptodate(bh);
-+			}
-+			mark_buffer_dirty(bh);
-+		}
-+		frag++;
-+		off += bh->b_size;
-+		bh = bh->b_this_page;
-+	} while (bh != head);
-+}
-+
 +static bool ufs_zero_frags_cached(struct inode *inode, u64 fragment,
 +				  unsigned int n, struct page *locked_page)
 +{
@@ -101,22 +71,22 @@
 +	return true;
 +}
 +
- static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
- 			    u64 fragment, struct page *locked_page)
- {
-@@ -378,6 +468,9 @@
- 	if (data)
- 		n = ufs_frags_to_zero(inode, fragment, n, locked_page);
+ /*
+  * Clear the @n new fragments from @beg, which hold file fragments from
+  * @fragment on.  A data block taken for @locked_page is larger than the
+@@ -417,6 +477,9 @@ static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
+ 	}
  	if (!n)
-+		return;
+ 		return;
 +	if (data && !IS_SYNC(inode) && ufs_test_opt(UFS_SB(inode->i_sb)->s_mount_opt, LAZYZERO) &&
 +	    ufs_zero_frags_cached(inode, fragment, n, locked_page))
- 		return;
++		return;
  	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
  		return;
+ 	end = beg + n;
 --- a/fs/ufs/super.c
 +++ b/fs/ufs/super.c
-@@ -358,6 +358,7 @@
+@@ -358,6 +358,7 @@ enum {
         Opt_onerror_lock = UFS_MOUNT_ONERROR_LOCK,
         Opt_onerror_umount = UFS_MOUNT_ONERROR_UMOUNT,
         Opt_onerror_repair = UFS_MOUNT_ONERROR_REPAIR,
@@ -124,7 +94,7 @@
         Opt_err
  };
  
-@@ -378,6 +379,7 @@
+@@ -378,6 +379,7 @@ static const match_table_t tokens = {
  	{Opt_onerror_lock, "onerror=lock"},
  	{Opt_onerror_umount, "onerror=umount"},
  	{Opt_onerror_repair, "onerror=repair"},
@@ -132,7 +102,7 @@
  	{Opt_err, NULL}
  };
  
-@@ -455,6 +457,9 @@
+@@ -455,6 +457,9 @@ static int ufs_parse_options (char * options, unsigned * mount_options)
  			ufs_clear_opt (*mount_options, ONERROR);
  			ufs_set_opt (*mount_options, ONERROR_REPAIR);
  			break;
@@ -142,19 +112,19 @@
  		default:
  			pr_err("Invalid option: \"%s\" or missing value\n", p);
  			return 0;
-@@ -1542,6 +1547,9 @@
- 		++tp;
+@@ -1543,6 +1548,9 @@ static int ufs_show_options(struct seq_file *seq, struct dentry *root)
  	BUG_ON(tp->token == Opt_err);
  	seq_printf(seq, ",%s", tp->pattern);
-+
+ 
 +	if (ufs_test_opt(sbi->s_mount_opt, LAZYZERO))
 +		seq_puts(seq, ",lazyzero");
- 
++
  	return 0;
  }
+ 
 --- a/fs/ufs/ufs.h
 +++ b/fs/ufs/ufs.h
-@@ -74,6 +74,8 @@
+@@ -74,6 +74,8 @@ struct ufs_inode_info {
  #define UFS_MOUNT_UFSTYPE_UFS2		0x00001000
  #define UFS_MOUNT_UFSTYPE_SUNOS		0x00002000
  
