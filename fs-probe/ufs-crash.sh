@@ -2,7 +2,8 @@
 # ufs-13 の -o lazyzero は穴の残りの 0 埋めを同期書き込みから page cache へ
 # 移す。既定と lazyzero で、走行中と途中の時点に古い中身が見えるかを、書き
 # 込みの順序を実際に記録して確かめる。UFS_OPTS に mount option を置く。
-# UFS_PARTS に行う段を並べる (既定は snap order speed stress replay)。
+# UFS_PARTS に行う段を並べる (既定は snap order speed stress replay、
+# ほかに prefix)。
 #   ufs-crash.sh <indir> <outdir>
 # 空き領域を全部印で埋めて消してから、穴に書く。
 set -u
@@ -30,6 +31,27 @@ case $(uname -r) in
 esac
 modprobe dm-log-writes || { note "!! no dm-log-writes"; exit 1; }
 . $here/ksrc.sh
+# 当て物を頭から一つずつ当て、そのたびに建てて、W=123 と sparse の警告が
+# 出荷の版より増えないことを見る。組の途中までで止めても建つことの確かめ。
+if has prefix; then
+	fs_sparse || { note "!! sparse is not installed"; exit 1; }
+	cp -a $ksrc/ufs $work/ufs.pristine
+	fs_make ufs $out/prefix-base.log || { note "!! base does not build"; exit 1; }
+	fs_warnings $out/prefix-base.log > $work/w-base
+	for p in $(fs_patches ufs); do
+		n=$(basename $p .patch)
+		(cd $(dirname $ksrc) && patch -p1 -f -i $p < /dev/null) > $out/prefix-$n.patch 2>&1 ||
+			{ note "!! $n does not apply"; echo prefix >> $out/build-failed; break; }
+		make -C /lib/modules/$KV/build M=$ksrc/ufs clean > /dev/null 2>&1
+		fs_make ufs $out/prefix-$n.log
+		st=$?
+		fs_warnings $out/prefix-$n.log | comm -13 $work/w-base - |
+			grep -v "^/usr/src/kernels/" > $out/prefix-$n.w-new
+		note "prefix $n: build exit $st, new warnings $(wc -l < $out/prefix-$n.w-new), fuzz/offset $(grep -ci 'fuzz\|offset' $out/prefix-$n.patch)"
+		[ $st = 0 ] && [ ! -s $out/prefix-$n.w-new ] || echo prefix >> $out/build-failed
+	done
+	rm -rf $ksrc/ufs && cp -a $work/ufs.pristine $ksrc/ufs
+fi
 fs_build ufs $out/ufs-build.log
 note "ufs build+insmod exit $?"
 

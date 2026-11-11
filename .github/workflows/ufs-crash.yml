@@ -12,7 +12,7 @@ on:
         type: string
         default: ''
       parts:
-        description: '行う段 (snap order speed stress replay から)'
+        description: '行う段 (snap order speed stress replay prefix から)'
         type: string
         default: 'snap order speed stress replay'
       seeds:
