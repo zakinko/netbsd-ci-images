@@ -179,7 +179,7 @@
  	if (want_delete) {
  		inode->i_size = 0;
  		if (inode->i_blocks &&
-@@ -1443,6 +1565,7 @@ static void ufs_truncate_blocks(struct inode *inode)
+@@ -1448,6 +1570,7 @@ static void ufs_truncate_blocks(struct inode *inode)
  			break;
  
  	mutex_lock(&ufsi->truncate_mutex);
@@ -187,7 +187,7 @@
  	if (depth == 1) {
  		ufs_trunc_direct(inode);
  		offsets[0] = UFS_IND_BLOCK;
-@@ -1497,6 +1620,18 @@ static int ufs_truncate(struct inode *inode, loff_t size)
+@@ -1502,6 +1625,18 @@ static int ufs_truncate(struct inode *inode, loff_t size)
  	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
  		return -EPERM;
  

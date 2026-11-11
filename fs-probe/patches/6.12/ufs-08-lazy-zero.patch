@@ -292,7 +292,7 @@
  
  	return ret;
  }
-@@ -1191,6 +1275,37 @@ static void free_branch_tail(struct inode *inode, unsigned from, struct ufs_buff
+@@ -1191,6 +1275,40 @@ static void free_branch_tail(struct inode *inode, unsigned from, struct ufs_buff
  	ubh_brelse(ubh);
  }
  
@@ -320,7 +320,10 @@
 +				break;
 +			set_buffer_uptodate(bh);
 +			mark_buffer_dirty(bh);
++			/* A folio's buffers carry no reference of their own. */
++			get_bh(bh);
 +			sync_dirty_buffer(bh);
++			put_bh(bh);
 +		}
 +		frag++;
 +		bh = bh->b_this_page;
@@ -330,7 +333,7 @@
  static int ufs_alloc_lastblock(struct inode *inode, loff_t size)
  {
  	int err = 0;
-@@ -1236,8 +1351,15 @@ static int ufs_alloc_lastblock(struct inode *inode, loff_t size)
+@@ -1236,8 +1354,17 @@ static int ufs_alloc_lastblock(struct inode *inode, loff_t size)
  		*/
  	       set_buffer_uptodate(bh);
  	       mark_buffer_dirty(bh);
@@ -341,13 +344,15 @@
 +		 * buffer dirty on a clean folio that later writes then never
 +		 * dirty again.  Write it now.
 +		 */
++		get_bh(bh);
 +		sync_dirty_buffer(bh);
++		put_bh(bh);
         }
 +	ufs_dirty_past_eof(folio, lastfrag);
  
         if (lastfrag >= UFS_IND_FRAGMENT) {
  	       end = uspi->s_fpb - ufs_fragnum(lastfrag) - 1;
-@@ -1340,6 +1462,12 @@ static int ufs_truncate(struct inode *inode, loff_t size)
+@@ -1340,6 +1467,12 @@ static int ufs_truncate(struct inode *inode, loff_t size)
  	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
  		return -EPERM;
  

@@ -1,6 +1,6 @@
 --- a/fs/ufs/balloc.c
 +++ b/fs/ufs/balloc.c
-@@ -309,6 +309,22 @@
+@@ -309,6 +309,26 @@ static void ufs_change_blocknr(struct inode *inode, sector_t beg,
  			bh->b_blocknr = newb + pos;
  			clean_bdev_bh_alias(bh);
  			mark_buffer_dirty(bh);
@@ -18,8 +18,12 @@
 +			 */
 +			if (folio != locked_folio &&
 +			    (loff_t)(beg + pos) << inode->i_blkbits >=
-+			    i_size_read(inode))
++			    i_size_read(inode)) {
++				/* A folio's buffers carry no reference. */
++				get_bh(bh);
 +				sync_dirty_buffer(bh);
++				put_bh(bh);
++			}
  			++j;
  			bh = bh->b_this_page;
  		} while (bh != head);
