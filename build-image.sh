@@ -241,6 +241,17 @@ set -- \
 	--persist
 if [ -n "$SETS" ]; then set -- "$@" --sets "$SETS"; fi
 
+# macppc の mac99 の既定の NIC は sungem で、NetBSD の gem はこれを
+# "gem0: cannot reset receiver" で上げられない。入れ終わった後の dhcpcd が
+# 何も取れず、guest-bootstrap.sh を取りに行けない (9.4 で実際に止まった)。
+# GENERIC にも INSTALL にもある rtk/re で拾える rtl8139 に替える。起動する
+# 側 (runvm.sh) も同じ NIC にするよう、.qemu の NICDEV にも書く。
+NICDEV=
+if [ "$PORT" = macppc ]; then
+	QEMU_EXTRA="-nic user,model=rtl8139 ${QEMU_EXTRA:-}"
+	NICDEV=rtl8139
+fi
+
 if [ "$VMM" = qemu ]; then
 	# QEMU に足したいものがあれば外から渡せるようにしておく。古い版は
 	# 機械の型で挙動が変わる。NetBSD 5 は PIIX の IDE で
@@ -467,7 +478,7 @@ FORMAT=$IMGFMT
 MEM=$MEM
 DISKARGS="$DISKARGS"
 EXTRAARGS="$EXTRAARGS"
-NICDEV=
+NICDEV=$NICDEV
 ROOTDEV=$ROOTDEV
 SSH=$SSH
 SSHOPTS="$SSHOPTS"

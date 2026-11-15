@@ -68,6 +68,12 @@ BASE=${BASE:-$(cd "$(dirname "$0")" && pwd)}
 
 [ -s "$META" ] || { echo "$0: $META が無い"; exit 1; }
 . "$META"
+# QEMU の mac99 は CPU を一つしか持てず、-smp 2 以上を渡すと起動を拒む
+# ("The max CPUs supported by machine 'mac99' is 1")。上の既定は runner の
+# コア数から取るので、macppc ではここで 1 に戻す。
+case $EXTRAARGS in
+*"-M mac99"*) SMP=1 ;;
+esac
 SEED_PORT=${SEED_PORT:-8123}
 VMM=${VMM:-qemu}
 # 2048 では足りない。イメージは no_swap=YES で焼いてあるので swap が無く、
