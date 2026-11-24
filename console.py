@@ -79,7 +79,14 @@ def main():
             pat, reply = answers[0]
             text = buf.decode('latin-1')
             if pat.search(text):
-                s.sendall((reply + "\r\n").encode('latin-1'))
+                # 問いを出しているカーネルは一文字ずつ polling で受けていて、
+                # まとめて送ると後ろが落ちる (macppc の zs で一文字目しか
+                # 届かなかった)。改行は CR だけにする。LF も送ると、次の
+                # 問いの答えとして読まれる。
+                time.sleep(1.0)
+                for c in (reply + "\r").encode('latin-1'):
+                    s.sendall(bytes([c]))
+                    time.sleep(0.2)
                 log.write(("\n[console.py] %s -> %s\n"
                            % (pat.pattern, reply or '(改行だけ)')).encode())
                 answers.pop(0)
