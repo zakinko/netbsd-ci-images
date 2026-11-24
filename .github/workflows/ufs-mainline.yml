@@ -8,9 +8,13 @@ on:
         description: 'src-*bsd の artifact を持つ fs-probe の run'
         type: string
         required: true
+      patch:
+        description: 'fs-probe/send の diff と guest の名前'
+        type: string
+        default: ufs-4kn
 
 concurrency:
-  group: ufs-mainline
+  group: ufs-mainline-${{ inputs.patch }}
   cancel-in-progress: true
 
 jobs:
@@ -43,7 +47,7 @@ jobs:
           make -s -j$(nproc) bzImage
           cp arch/x86/boot/bzImage $HOME/bz-base
           touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-base 2>&1
-          patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/ufs-4kn.diff < /dev/null
+          patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/${{ inputs.patch }}.diff < /dev/null
           touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-new 2>&1
           for x in base new; do grep -E 'warning:|error:' $HOME/w-$x | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$x || true; done
           echo "new warnings: $(comm -13 $HOME/ws-base $HOME/ws-new | wc -l)"
@@ -54,13 +58,13 @@ jobs:
         run: |
           mkdir -p out
           for x in base new; do
-            timeout 1500 vng --run $HOME/bz-$x --user root --memory 8G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/4kn-guest.sh $PWD/fsp/in $PWD/out $x < /dev/null || echo "vng exit $?"
+            timeout 1500 vng --run $HOME/bz-$x --user root --memory 8G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/${{ inputs.patch }}-guest.sh $PWD/fsp/in $PWD/out $x < /dev/null || echo "vng exit $?"
           done
           ls -l out; cat out/*.txt | tee -a $GITHUB_STEP_SUMMARY
           test -s out/base.txt && test -s out/new.txt
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: 4kn-out, path: out, retention-days: 14 }
+        with: { name: mainline-out, path: out, retention-days: 14 }
 
   fsck:
     needs: linux
@@ -68,12 +72,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: 4kn-out, path: out }
+        with: { name: mainline-out, path: out }
       - uses: vmactions/freebsd-vm@v1
         with:
           release: "15.0"
           run: |
             for g in out/*.img.gz; do
+              [ -e $g ] || continue
               gunzip -f $g; i=${g%.gz}
               echo "== $i"
               md=$(mdconfig -a -t vnode -f $i)

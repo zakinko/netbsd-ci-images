@@ -1,0 +1,56 @@
+diff --git a/fs/ufs/inode.c b/fs/ufs/inode.c
+index c9ff8673f..1af0bcedb 100644
+--- a/fs/ufs/inode.c
++++ b/fs/ufs/inode.c
+@@ -541,6 +541,19 @@ static void ufs_set_inode_ops(struct inode *inode)
+ 				   ufs_get_inode_dev(inode->i_sb, UFS_I(inode)));
+ }
+ 
++/*
++ * FreeBSD takes the 32-bit seconds of a UFS1 inode as unsigned, so that they
++ * last until 2106.  The other flavours have them signed.
++ */
++static time64_t ufs1_time(struct super_block *sb, __fs32 sec)
++{
++	u32 t = fs32_to_cpu(sb, sec);
++
++	if (UFS_SB(sb)->s_flavour == UFS_MOUNT_UFSTYPE_44BSD)
++		return t;
++	return (s32)t;
++}
++
+ static int ufs1_read_inode(struct inode *inode, struct ufs_inode *ufs_inode)
+ {
+ 	struct ufs_inode_info *ufsi = UFS_I(inode);
+@@ -562,15 +575,9 @@ static int ufs1_read_inode(struct inode *inode, struct ufs_inode *ufs_inode)
+ 	i_gid_write(inode, ufs_get_inode_gid(sb, ufs_inode));
+ 
+ 	inode->i_size = fs64_to_cpu(sb, ufs_inode->ui_size);
+-	inode_set_atime(inode,
+-			(signed)fs32_to_cpu(sb, ufs_inode->ui_atime.tv_sec),
+-			0);
+-	inode_set_ctime(inode,
+-			(signed)fs32_to_cpu(sb, ufs_inode->ui_ctime.tv_sec),
+-			0);
+-	inode_set_mtime(inode,
+-			(signed)fs32_to_cpu(sb, ufs_inode->ui_mtime.tv_sec),
+-			0);
++	inode_set_atime(inode, ufs1_time(sb, ufs_inode->ui_atime.tv_sec), 0);
++	inode_set_ctime(inode, ufs1_time(sb, ufs_inode->ui_ctime.tv_sec), 0);
++	inode_set_mtime(inode, ufs1_time(sb, ufs_inode->ui_mtime.tv_sec), 0);
+ 	inode->i_blocks = fs32_to_cpu(sb, ufs_inode->ui_blocks);
+ 	inode->i_generation = fs32_to_cpu(sb, ufs_inode->ui_gen);
+ 	ufsi->i_flags = fs32_to_cpu(sb, ufs_inode->ui_flags);
+diff --git a/fs/ufs/super.c b/fs/ufs/super.c
+index 3569ac92b..52499d7da 100644
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -784,6 +784,8 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
+ 	switch (sbi->s_flavour) {
+ 	case UFS_MOUNT_UFSTYPE_44BSD:
+ 		UFSD("ufstype=44bsd\n");
++		sb->s_time_min = 0;
++		sb->s_time_max = U32_MAX;
+ 		uspi->s_fsize = block_size = 512;
+ 		uspi->s_fmask = ~(512 - 1);
+ 		uspi->s_fshift = 9;
