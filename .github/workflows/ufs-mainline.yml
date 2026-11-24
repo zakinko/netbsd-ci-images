@@ -1,0 +1,83 @@
+name: mainline に送る ufs の当て物を一本だけ当てて測る
+
+# 手で回すだけ。送る diff そのものを、その日の mainline に当てて測る。
+on:
+  workflow_dispatch:
+    inputs:
+      images_run:
+        description: 'src-*bsd の artifact を持つ fs-probe の run'
+        type: string
+        required: true
+
+concurrency:
+  group: ufs-mainline
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: src-*bsd
+          path: fsp/in
+          merge-multiple: true
+          run-id: ${{ inputs.images_run }}
+          github-token: ${{ github.token }}
+      - run: |
+          sudo apt-get -q update
+          sudo apt-get -qy install virtme-ng qemu-system-x86 flex bison bc libelf-dev libssl-dev dwarves sparse
+          sudo chmod 666 /dev/kvm
+          git clone -q --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git $HOME/linux
+          git -C $HOME/linux log -1 --format='%H %ad'
+      - name: 当てる前と後の二つを建てる
+        run: |
+          set -e
+          cd $HOME/linux
+          make -s x86_64_defconfig kvm_guest.config
+          scripts/config -e BLK_DEV_LOOP -e MISC_FILESYSTEMS -e UFS_FS -e UFS_FS_WRITE -e VIRTIO_FS -e FUSE_FS -e OVERLAY_FS -e NET_9P -e NET_9P_VIRTIO -e 9P_FS -e TMPFS
+          make -s olddefconfig
+          grep -E 'CONFIG_UFS_FS|CONFIG_BLK_DEV_LOOP=' .config
+          make -s -j$(nproc) bzImage
+          cp arch/x86/boot/bzImage $HOME/bz-base
+          touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-base 2>&1
+          patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/ufs-4kn.diff < /dev/null
+          touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-new 2>&1
+          for x in base new; do grep -E 'warning:|error:' $HOME/w-$x | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$x || true; done
+          echo "new warnings: $(comm -13 $HOME/ws-base $HOME/ws-new | wc -l)"
+          comm -13 $HOME/ws-base $HOME/ws-new
+          make -s -j$(nproc) bzImage
+          cp arch/x86/boot/bzImage $HOME/bz-new
+      - name: 測る
+        run: |
+          mkdir -p out
+          for x in base new; do
+            timeout 1500 vng --run $HOME/bz-$x --user root --memory 8G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/4kn-guest.sh $PWD/fsp/in $PWD/out $x < /dev/null || echo "vng exit $?"
+          done
+          ls -l out; cat out/*.txt | tee -a $GITHUB_STEP_SUMMARY
+          test -s out/base.txt && test -s out/new.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: 4kn-out, path: out, retention-days: 14 }
+
+  fsck:
+    needs: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: 4kn-out, path: out }
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: |
+            for g in out/*.img.gz; do
+              gunzip -f $g; i=${g%.gz}
+              echo "== $i"
+              md=$(mdconfig -a -t vnode -f $i)
+              fsck_ffs -n -f /dev/$md > f.txt 2>&1; echo "fsck exit $?"
+              grep -v '^\*\*' f.txt | head -8
+              mdconfig -d -u $md
+            done
