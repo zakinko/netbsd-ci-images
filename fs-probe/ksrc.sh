@@ -22,7 +22,9 @@ case $KV in
 	elif ! dnf -y -q install kernel-devel-$KV; then
 		for u in https://vault.almalinux.org/$rel/AppStream/x86_64/os/Packages \
 		         https://repo.almalinux.org/almalinux/$rel/AppStream/x86_64/os/Packages; do
-			rpm -ivh --nodeps $u/kernel-devel-$v.x86_64.rpm && break
+			# --nodeps では perl が入らず、W=123 の呼ぶ scripts/kernel-doc が
+			# 動かずに止まる (run 45323129212)。依存ごと入れる。
+			dnf -y -q install $u/kernel-devel-$v.x86_64.rpm && break
 		done
 	fi
 	(cd $work &&
@@ -70,7 +72,7 @@ sparse_commit=37156835e3d725b6d750f000be33ba3814bb2310
 fs_sparse() {
 	command -v sparse > /dev/null && return 0
 	d=$(mktemp -d /var/tmp/sparse.XXXXXX)
-	curl -fsSL https://git.kernel.org/pub/scm/devel/sparse/sparse.git/snapshot/sparse-$sparse_commit.tar.gz |
+	curl -fsSL --retry 5 --retry-delay 30 --retry-all-errors https://git.kernel.org/pub/scm/devel/sparse/sparse.git/snapshot/sparse-$sparse_commit.tar.gz |
 		tar -xzf - -C $d &&
 		make -s -C $d/sparse-$sparse_commit PREFIX=/usr/local install > $d/build.log 2>&1 ||
 		{ tail -20 $d/build.log; return 1; }

@@ -58,7 +58,13 @@ jobs:
           set -e
           run=$IMAGES_RUN
           if [ -z "$run" ]; then
-            for r in $(gh run list -R ${{ github.repository }} -w fs-probe.yml --status success -L 30 --json databaseId -q '.[].databaseId'); do
+            # 一覧が空で返った夜があった (run 43998863366)。間をあけて引き直す。
+            for i in 1 2 3; do
+              runs=$(gh run list -R ${{ github.repository }} -w fs-probe.yml --status success -L 30 --json databaseId -q '.[].databaseId') || runs=
+              [ -n "$runs" ] && break
+              sleep 30
+            done
+            for r in $runs; do
               n=$(gh api repos/${{ github.repository }}/actions/runs/$r/artifacts -q '[.artifacts[] | select(.expired == false) | select(.name == "src-netbsd" or .name == "src-freebsd")] | length')
               [ "$n" = 2 ] && { run=$r; break; }
             done
