@@ -31,11 +31,22 @@ fi
 
 echo "--- ACPI の電源ボタンを押す ---"
 if [ -S "$MON" ]; then
-	echo system_powerdown | nc -U "$MON" > /dev/null 2>&1 || true
+	# Ubuntu の nc は stdin が尽きても相手が閉じるまで待つ。電源ボタンの無い
+	# 機械 (mac99) の qemu は閉じないので、-w が無いと永遠に戻らない。
+	echo system_powerdown | nc -w 3 -U "$MON" > /dev/null 2>&1 || true
 else
 	echo "!! モニタ socket が無いので kill -TERM で代用する" >&2
 	kill -TERM $PID 2>/dev/null || true
 fi
+
+# mac99 には電源ボタンが無い。ゲストに自分で落ちてもらう。
+case $NAME in
+macppc-*)
+	if [ -s "$DIR/$NAME.ssh" ]; then
+		$(cat "$DIR/$NAME.ssh") -o ServerAliveInterval=5 \
+			/sbin/shutdown -p now < /dev/null > /dev/null 2>&1 || true
+	fi ;;
+esac
 
 echo "--- 落ちるのを待つ ---"
 n=0
