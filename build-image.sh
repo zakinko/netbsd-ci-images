@@ -416,7 +416,10 @@ alpha)
 macppc)
 	# FFS から起動できないので、毎回 CD からカーネルを起こして
 	# root だけディスクを使う。root device は聞かれるので答える。
-	EXTRAARGS="-M mac99 -prom-env qemu_boot_hack=y -prom-env boot-device=cd:,netbsd-GENERIC -drive file=@BOOTISO@,format=raw,media=cdrom,readonly=on,index=2"
+	#
+	# graphics=off が無いと OpenBIOS の stdout が画面になり、kernel の問いが
+	# シリアルに出てこない。anita は -nographic なのでここだけ違って見える。
+	EXTRAARGS="-M mac99,graphics=off -prom-env qemu_boot_hack=y -prom-env boot-device=cd:,netbsd-GENERIC -drive file=@BOOTISO@,format=raw,media=cdrom,readonly=on,index=2"
 	# 聞かれ方は "root device (default cd0a): " のように既定値が挟まる。
 	# anita が install のときに使っているのと同じ形にしておく。
 	ANSWERS="root device.*:=>wd0a|dump device.*:=>|file system.*:=>|init path.*:=>"
