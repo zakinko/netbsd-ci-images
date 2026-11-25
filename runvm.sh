@@ -74,6 +74,10 @@ BASE=${BASE:-$(cd "$(dirname "$0")" && pwd)}
 case $EXTRAARGS in
 *"-M mac99"*) SMP=1 ;;
 esac
+# sparc の SS-5 も同じ ("The max CPUs supported by machine 'SS-5' is 1")。
+case $PORT in
+sparc) SMP=1 ;;
+esac
 SEED_PORT=${SEED_PORT:-8123}
 VMM=${VMM:-qemu}
 # 2048 では足りない。イメージは no_swap=YES で焼いてあるので swap が無く、
