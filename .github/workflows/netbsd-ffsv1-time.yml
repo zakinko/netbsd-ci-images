@@ -76,6 +76,16 @@ jobs:
           cp $(find $HOME/obj -name 'librumpfs_ffs.so.*.*' -type f | head -1) out/lib/ || echo "no librumpfs_ffs"
           cp $(find $HOME/obj -path '*tests/fs/ffs/t_ufs1time' -type f | head -1) out/atf/ || echo "no t_ufs1time"
           ls -l out out/bin out/lib out/atf
+      - name: 対照のカーネル (nfs_serv.c の直しだけを抜いたもの)
+        if: inputs.form != 'dumpddate'
+        run: |
+          cd $HOME/src
+          git checkout sys/nfs/nfs_serv.c
+          git status --short sys/nfs
+          ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest kernel=GENERIC > $HOME/k2.log 2>&1 || { grep -E 'error' $HOME/k2.log | head; tail -40 $HOME/k2.log; exit 1; }
+          grep -c 'nfs_serv' $HOME/k2.log
+          gzip -c $(find $HOME/obj -path '*GENERIC/netbsd' | head -1) > $GITHUB_WORKSPACE/out/netbsd-nonfs.gz
+          ls -l $GITHUB_WORKSPACE/out
       - if: success() || failure()
         uses: actions/upload-artifact@v4
         with: { name: netbsd-ffsv1-time, path: out, retention-days: 14, if-no-files-found: error }

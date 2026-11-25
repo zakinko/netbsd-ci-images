@@ -1,6 +1,6 @@
 #!/bin/bash
 # NetBSD の FFSv1 の日付の試験を、runner の上の qemu で回す。
-#	netbsd-ffsv1-host.sh test <建てたものの dir>	ctl, new, old の三回 boot する
+#	netbsd-ffsv1-host.sh test <建てたものの dir>	ctl, new, old (在れば nonfs も) を boot する
 #	netbsd-ffsv1-host.sh back <建てたものの dir>	FreeBSD が触った image を読む
 #	netbsd-ffsv1-host.sh check			結果を数える。合わなければ落ちる
 # 記録は ./res に、FreeBSD に渡す image は ./fbin に置く。大きなものは
@@ -22,6 +22,7 @@ setup() {
 	for s in base rescue etc; do curl -sSfL $B/sets/$s.tar.xz | sudo tar -xJpf - -C $W/root; done
 	curl -sSfL $B/sets/kern-GENERIC.tar.xz | tar -xJf - -C $W/k; mv $W/k/netbsd $W/netbsd-old
 	gunzip -c $IN/netbsd.gz > $W/netbsd-new
+	[ -f $IN/netbsd-nonfs.gz ] && gunzip -c $IN/netbsd-nonfs.gz > $W/netbsd-nonfs
 	sudo mkdir -p $W/root/new $W/root/mnt $W/root/w $W/root/nfs $W/root/atf
 	sudo cp $IN/bin/* $W/root/new/
 	[ -d $IN/lib ] && sudo cp $IN/lib/* $W/root/new/
@@ -58,6 +59,7 @@ test)
 	boot ctl old $W/c1.raw $W/c2.raw $W/c3.raw $W/c4.raw
 	boot new new $W/d1.raw $W/d2.raw $W/d3.raw $W/d4.raw
 	boot old old $W/d1.raw $W/d2.raw $W/d3.raw $W/d4.raw
+	[ -f $W/netbsd-nonfs ] && boot nonfs nonfs $W/c1.raw $W/c2.raw $W/c3.raw $W/c4.raw
 	mkdir -p fbin
 	for i in 1 2 3; do gzip -c $W/d$i.raw > $RES/d$i.raw.gz; done
 	cp $RES/d1.raw.gz $RES/d2.raw.gz fbin/
@@ -93,6 +95,14 @@ check)
 	want new '^T atf ufs1time_[a-z]* exit 0 result passed' 3 "new: ATF passed"
 	want ctl '^T atf ufs1time_[a-z]* exit 0 result passed' 0 "ctl: ATF does not pass unpatched"
 	want new '^T nfs-ffsv1 exclusive create: ok 40 failed 0 ' 1 "new: NFS exclusive create on FFSv1"
+	want new '^T nfs-ffsv1 same verifier twice, .*: first 0 again 0' 5 "new: NFS exclusive create repeated on FFSv1"
+	want new '^T nfs-ffsv2 same verifier twice, .*: first 0 again 0' 5 "new: NFS exclusive create repeated on FFSv2"
+	want new '^T nfs-ext2fs same verifier twice, .*: first 0 again 0' 5 "new: NFS exclusive create repeated on ext2fs"
+	want ctl '^T nfs-ffsv1 same verifier twice, .*: first 0 again 0' 5 "ctl: NFS exclusive create repeated on FFSv1"
+	if [ -f $RES/nonfs.log ]; then
+		want nonfs '^T ALLDONE$' 1 "nonfs ran to the end"
+		want nonfs '^T nfs-ffsv1 same verifier twice, .*: first 0 again 17' 3 "nonfs: without the nfs_serv.c change three of the five are refused on FFSv1"
+	fi
 	want old ' remounted w2030 1893553445 ' 3 "old: 2030 written by new"
 	exit $bad
 	;;

@@ -5,6 +5,7 @@
 #	new	当てたカーネルとコマンドで、作って読む
 #	old	当てていないカーネルとコマンドで、new が書いたものを読む
 #	back	当てたカーネルで、FreeBSD が rw で mount した後のものを読む
+#	nonfs	当てたものから nfs_serv.c の直しだけを抜いたカーネルで、NFS だけ
 PATH=/sbin:/bin:/usr/sbin:/usr/bin; export PATH; TZ=UTC; export TZ
 mount -u -o rw / 2>&1
 (cd /dev && sh MAKEDEV ld1 ld2 ld3 ld4 > /dev/null 2>&1)
@@ -17,7 +18,7 @@ date 204001020304 > /dev/null 2>&1; echo "T date $(date)"
 # 当てたコマンドは /new に在る。new と back のときだけ使う。
 cmd() {
 	case $K in
-	new|back) [ -x /new/$1 ] && { echo /new/$1; return; } ;;
+	new|back|nonfs) [ -x /new/$1 ] && { echo /new/$1; return; } ;;
 	esac
 	command -v $1
 }
@@ -159,6 +160,16 @@ nfsone() {	# 名前 mount の型
 			if [ $? = 0 ]; then ok=$((ok + 1)); else bad=$((bad + 1)); fi
 		done
 		echo "T $n exclusive create: ok $ok failed $bad of 40, on the server $(ls /mnt | grep -c '^x') files; $(head -1 /w/e2)"
+		# 同じ verifier でもう一度。0 は NFS3_OK、17 は NFS3ERR_EXIST
+		if [ -x /new/ffsv1-probe ]; then
+			i=0
+			for v in "0x7f000001 0x00000005" "0xc0a80101 0x00000005" \
+			    "0x12345678 0x3b9aca00" "0x12345678 0xdeadbeef" \
+			    "0xffffffff 0xffffffff"; do
+				i=$((i + 1))
+				echo "T $n same verifier twice, $v: $(/new/ffsv1-probe nfsx 127.0.0.1 /mnt rx$i $v 2>&1 | tr '\n' ' ')"
+			done
+		fi
 		umount /nfs || umount -f /nfs
 	else
 		echo "T $n NFS mount failed: $(cat /w/e)"
@@ -168,15 +179,21 @@ nfsone() {	# 名前 mount の型
 }
 
 nfstest() {
+	(sleep 300; echo "T nfs: gave up after 300 s"; echo "T ALLDONE with NFS stuck"; sync; halt -p) &
+	wd=$!
 	ifconfig lo0 inet 127.0.0.1 up; hostname ffsv1
 	echo "/mnt -maproot=root 127.0.0.1" > /etc/exports
 	rpcbind; nfsd -tun 2; sleep 1
 	$NEWFS -I -O 1 /dev/rld4d > /dev/null 2>&1 && nfsone ffsv1 ffs
 	$NEWFS -I -O 2 /dev/rld4d > /dev/null 2>&1 && nfsone ffsv2 ffs
 	newfs_ext2fs -I /dev/rld4d > /w/nf 2>&1 && { echo "T nfs-ext2fs $(grep -ai 'inode' /w/nf | head -2 | tr '\n' ';')"; nfsone ext2fs ext2fs; }
+	kill $wd
 }
 
 case $K in
+nonfs)
+	nfstest
+	;;
 back)
 	for t in "ld1 O1-le-fb2026" "ld2 O1-le-fb2040" "ld3 O0-le-fb2026" "ld4 O0-le-fb2040"; do
 		set -- $t
@@ -194,10 +211,7 @@ back)
 		makefstest
 		atftest
 		echo "T ATFDONE"
-		(sleep 300; echo "T nfs: gave up after 300 s"; echo "T ALLDONE with NFS stuck"; sync; halt -p) &
-		wd=$!
 		nfstest
-		kill $wd
 	fi
 	;;
 esac
