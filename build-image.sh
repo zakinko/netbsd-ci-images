@@ -211,6 +211,16 @@ url_exists "http://127.0.0.1:$SEED_PORT/guest-bootstrap.sh" || {
 	exit 1
 }
 ANITA_URL="http://127.0.0.1:$SEED_PORT/$ARCH/"
+# sparc sparc64 vax は、配布ツリーを渡すと anita が "must be installed from
+# an ISO" と言って断る。hppa はツリーでも始まるが、起動用の CD
+# (installation/cdrom/boot-com.iso) が配布物に無くて止まる。どれも
+# images/ の ISO から入れる。
+case $PORT in
+sparc|sparc64|vax|hppa)
+	ISO=$(dirname "${DISTURL%/}")/images/NetBSD-$REL-$ARCH.iso
+	if url_exists "$ISO"; then ANITA_URL=$ISO; fi
+	;;
+esac
 
 # ------------------------------------------------------------------
 # 入れるセット。指定しないと anita の既定になり、X が落ちる。X が無いと
