@@ -17,12 +17,12 @@ permissions:
 
 jobs:
   use:
-    name: ${{ matrix.c.img }} ${{ matrix.c.n }}
+    name: ${{ matrix.c.img }} ${{ matrix.c.sync }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 8
       matrix:
         c: ${{ fromJSON(inputs.confs) }}
     steps:
@@ -62,12 +62,15 @@ jobs:
         with:
           release: ${{ matrix.c.rel }}
           arch: ${{ matrix.c.arch }}
-          sync: scp
+          sync: ${{ matrix.c.sync }}
           debug: true
           usesh: true
           run: |
             uname -a
             uname -m; uname -p; uname -r
+            pwd; test -f act/action.yml
+            echo made-in-guest > from-guest.txt
             echo "E2E-OK in guest"
             df -h /
             sh -c 'cat /etc/release 2>/dev/null | head -1; freebsd-version 2>/dev/null; true'
+      - run: grep -x made-in-guest from-guest.txt
