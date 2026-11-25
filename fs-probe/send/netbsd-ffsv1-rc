@@ -14,15 +14,19 @@ mount | grep -q ' on /w ' || mount -t tmpfs tmpfs /w
 mount -t tmpfs tmpfs /var/run
 mount -t tmpfs tmpfs /var/db
 TMPDIR=/w; export TMPDIR; HOME=/w; export HOME
+# 下の三つは、手元の qemu で試すときに外から変える。当てたカーネルが無くても、
+# 当てた rump の FFS を rump_ffs で mount すれば同じ道を通せる。
 ATF=${ATF:-/atf}		# ATF の試験の在る所
-K=$(cat /testkernel)
+NEW=${NEW:-/new}		# 当てたコマンドと道具の在る所
+MNTFFS=${MNTFFS:-mount -t ffs}	# FFS を mount するもの
+K=${K:-$(cat /testkernel)}
 echo "T# mode $K kernel $(uname -rv)"
 date 204001020304 > /dev/null 2>&1; echo "T date $(date)"
 
-# 当てたコマンドは /new に在る。new と back のときだけ使う。
+# 当てたコマンドは $NEW に在る。new と back と nonfs のときだけ使う。
 cmd() {
 	case $K in
-	new|back|nonfs) [ -x /new/$1 ] && { echo /new/$1; return; } ;;
+	new|back|nonfs) [ -x $NEW/$1 ] && { echo $NEW/$1; return; } ;;
 	esac
 	command -v $1
 }
@@ -57,10 +61,10 @@ create() {	# 名前
 	done
 	echo hello > /mnt/now
 	# ナノ秒でない値を utimensat() に渡す。秒は 2040-01-02 03:04:05。
-	if [ -x /new/ffsv1-probe ]; then
+	if [ -x $NEW/ffsv1-probe ]; then
 		for v in 1000000000 1073741829 2147483653 4294967295 -5; do
 			f=/mnt/badnsec$v; : > $f
-			/new/ffsv1-probe nsec $f 2209086245 $v 2> /w/e
+			$NEW/ffsv1-probe nsec $f 2209086245 $v 2> /w/e
 			echo "T $1 utimensat nsec $v exit $? $(cat /w/e)"
 		done
 	fi
@@ -71,11 +75,11 @@ fstest() {	# ディスク 版 並び
 	if [ $K != old ]; then
 		$NEWFS -I -O $2 -B $3 /dev/r${d}d > /w/nf 2>&1 || { echo "T $n newfs failed: $(tail -1 /w/nf)"; return; }
 	fi
-	mount -t ffs /dev/${d}d /mnt || { echo "T $n mount failed"; return; }
+	$MNTFFS /dev/${d}d /mnt || { echo "T $n mount failed"; return; }
 	if [ $K != old ]; then
 		create $n
 		show "$n cached"
-		umount /mnt; mount -t ffs /dev/${d}d /mnt || { echo "T $n mount failed"; return; }
+		umount /mnt; $MNTFFS /dev/${d}d /mnt || { echo "T $n mount failed"; return; }
 	fi
 	show "$n remounted"
 	ino=$(ls -i /mnt/w2040 | awk '{print $1}')
@@ -87,7 +91,7 @@ fstest() {	# ディスク 版 並び
 	[ $K = old ] && return
 	printf 'inode 2\nlookup w2040\nquit\n' | $FSDB -n -f /dev/r${d}d 2>&1 | grep -aE 'TIME=' | tail -3 | sed "s/^/T $n fsdb /"
 	$DUMP -0 -a -f /w/d0 /dev/r${d}d > /w/dl 2>&1; echo "T $n dump exit $? $(ls -l /w/d0 | awk '{print $5}') bytes $(tail -3 /w/dl | tr '\n' ';')"
-	if $NEWFS -I -O 1 /dev/rld4d > /dev/null 2>&1 && mount -t ffs /dev/ld4d /mnt; then
+	if $NEWFS -I -O 1 /dev/rld4d > /dev/null 2>&1 && $MNTFFS /dev/ld4d /mnt; then
 		(cd /mnt && $RESTORE -rf /w/d0 > /w/rl 2>&1; echo "T $n restore exit $? $(tail -4 /w/rl | tr '\n' ';')")
 		show "$n restored"; umount /mnt
 	else
@@ -102,7 +106,7 @@ fstest() {	# ディスク 版 並び
 	done
 	# 2038 年と関係なく、2030 年の変更が増分に入るか
 	date 203001020304 > /dev/null 2>&1
-	mount -t ffs /dev/${d}d /mnt; echo x > /mnt/y2030; umount /mnt
+	$MNTFFS /dev/${d}d /mnt; echo x > /mnt/y2030; umount /mnt
 	for w in $DUMP /sbin/dump; do
 		$w -1 -a -T "Tue Jan  2 00:00:00 2029" -f /w/d1 /dev/r${d}d > /w/dl 2>&1
 		echo "T $n incremental2030 $w exit $? $(grep 'Date of last' /w/dl) y2030 listed $($RESTORE -tf /w/d1 2>&1 | grep -c y2030)"
@@ -123,7 +127,7 @@ makefstest() {
 		done
 		$MAKEFS -t ffs -B $e -o version=1 -s 16m /w/mk.img /w/tree > /w/mk.log 2>&1 || { echo "T $n failed: $(tail -1 /w/mk.log)"; continue; }
 		dd if=/w/mk.img of=/dev/rld4d bs=1m > /dev/null 2>&1
-		mount -r -t ffs /dev/ld4d /mnt || { echo "T $n mount failed"; continue; }
+		$MNTFFS -o ro /dev/ld4d /mnt || { echo "T $n mount failed"; continue; }
 		show $n; umount /mnt
 		fsck $n /dev/rld4d
 	done
@@ -136,7 +140,7 @@ atftest() {
 	L=$(ls /usr/lib/librumpfs_ffs.so.*.* | head -1)
 	rm -rf /w/lib; mkdir /w/lib
 	if [ $K = new ]; then
-		cp /new/librumpfs_ffs.so.*.* /w/lib/$(basename $L) || echo "T atf: no patched librumpfs_ffs"
+		cp $NEW/librumpfs_ffs.so.*.* /w/lib/$(basename $L) || echo "T atf: no patched librumpfs_ffs"
 		ln -s $(basename $L) /w/lib/$(basename ${L%.*})
 	fi
 	LD_LIBRARY_PATH=/w/lib; export LD_LIBRARY_PATH
@@ -159,8 +163,8 @@ nfsone() {	# 名前 mount の型
 		ok=0; bad=0; : > /w/e2
 		for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
 		    21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do
-			if [ -x /new/ffsv1-probe ]; then
-				/new/ffsv1-probe excl /nfs/x$i 2>> /w/e2
+			if [ -x $NEW/ffsv1-probe ]; then
+				$NEW/ffsv1-probe excl /nfs/x$i 2>> /w/e2
 			else
 				(set -C; : > /nfs/x$i) 2>> /w/e2
 			fi
@@ -168,13 +172,13 @@ nfsone() {	# 名前 mount の型
 		done
 		echo "T $n exclusive create: ok $ok failed $bad of 40, on the server $(ls /mnt | grep -c '^x') files; $(head -1 /w/e2)"
 		# 同じ verifier でもう一度。0 は NFS3_OK、17 は NFS3ERR_EXIST
-		if [ -x /new/ffsv1-probe ]; then
+		if [ -x $NEW/ffsv1-probe ]; then
 			i=0
 			for v in "0x7f000001 0x00000005" "0xc0a80101 0x00000005" \
 			    "0x12345678 0x3b9aca00" "0x12345678 0xdeadbeef" \
 			    "0xffffffff 0xffffffff"; do
 				i=$((i + 1))
-				echo "T $n same verifier twice, $v: $(/new/ffsv1-probe nfsx 127.0.0.1 /mnt rx$i $v 2>&1 | tr '\n' ' ')"
+				echo "T $n same verifier twice, $v: $($NEW/ffsv1-probe nfsx 127.0.0.1 /mnt rx$i $v 2>&1 | tr '\n' ' ')"
 			done
 		fi
 		umount /nfs || umount -f /nfs
@@ -205,7 +209,7 @@ nonfs)
 back)
 	for t in "ld1 O1-le-fb2026" "ld2 O1-le-fb2040" "ld3 O0-le-fb2026" "ld4 O0-le-fb2040"; do
 		set -- $t
-		mount -r -t ffs /dev/${1}d /mnt || { echo "T back-$2 mount failed"; continue; }
+		$MNTFFS -o ro /dev/${1}d /mnt || { echo "T back-$2 mount failed"; continue; }
 		show "back-$2"; umount /mnt
 		fsck back-$2 /dev/r${1}d
 	done
