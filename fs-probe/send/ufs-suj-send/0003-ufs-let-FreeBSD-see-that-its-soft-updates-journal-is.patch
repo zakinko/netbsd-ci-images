@@ -1,0 +1,92 @@
+From 953ff36b6c4ac63ae5320dddc8d4f7b1db44d3d5 Mon Sep 17 00:00:00 2001
+From: Showta Ishizaki <zakinko@snowrabbit.org>
+Date: Thu, 26 Nov 2026 03:02:05 +0900
+Subject: [PATCH 3/4] ufs: let FreeBSD see that its soft updates journal is out
+ of date
+
+fsck on FreeBSD uses the journal of a filesystem with journaled soft
+updates when the time stored with the journal is fs_mtime, and then does
+not do the full check.  FreeBSD sets fs_mtime at each read-write mount.
+ufs does not, so after a crash of Linux fsck recovers from a journal
+that has nothing of what Linux wrote, and marks the filesystem clean.
+
+Set fs_mtime when the filesystem becomes read-write.
+
+With only fs_clean cleared, fsck_ffs -p of FreeBSD 15.0 used the journal
+and marked clean all eight of the copies from the first patch, and
+fsck_ffs -fn then found 154 to 225 errors in each.  With this it says
+
+  Journal timestamp does not match fs mount time
+
+goes on to the full check, and asks for a manual fsck.  This is about
+fsck_ffs -p; I did not look at the background fsck of a filesystem with
+soft updates only, or at gjournal.
+
+Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
+---
+ fs/ufs/super.c  | 26 ++++++++++++++++++++++++++
+ fs/ufs/ufs_fs.h |  4 +++-
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/fs/ufs/super.c b/fs/ufs/super.c
+index c204af7ce..716867fac 100644
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -599,6 +599,31 @@ static void ufs_put_cstotal(struct super_block *sb)
+ 	UFSD("EXIT\n");
+ }
+ 
++/*
++ * FreeBSD's fsck takes the soft updates journal as current when the time
++ * kept with it is fs_mtime, and then skips the full check.  FreeBSD sets
++ * fs_mtime at each read-write mount; do the same, as the journal knows
++ * nothing about what is written here.
++ */
++static void ufs_44bsd_set_mtime(struct super_block *sb)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct ufs_super_block_first *usb1 = ubh_get_usb_first(uspi);
++	struct ufs_super_block_third *usb3 = ubh_get_usb_third(uspi);
++	time64_t now = ktime_get_real_seconds();
++	__fs64 mtime;
++
++	/* Without these the place belongs to fields of the old superblock. */
++	if (uspi->fs_magic != UFS2_MAGIC &&
++	    !(usb1->fs_flags & UFS_FLAGS_UPDATED))
++		return;
++	memcpy(&mtime, usb3->fs_un2.fs_44.fs_mtime, sizeof(mtime));
++	if (now == fs64_to_cpu(sb, mtime))
++		now++;
++	mtime = cpu_to_fs64(sb, now);
++	memcpy(usb3->fs_un2.fs_44.fs_mtime, &mtime, sizeof(mtime));
++}
++
+ /*
+  * FreeBSD keeps fs_clean at 0 and NetBSD at 2 or 0 while a filesystem is
+  * mounted read-write, and at 1 otherwise, so that their fsck checks it after
+@@ -613,6 +638,7 @@ static void ufs_44bsd_set_active(struct super_block *sb)
+ 		return;
+ 	sbi->s_was_clean = usb1->fs_clean == UFS_FSCLEAN;
+ 	usb1->fs_clean = UFS_FSACTIVE;
++	ufs_44bsd_set_mtime(sb);
+ 	ubh_mark_buffer_dirty(USPI_UBH(sbi->s_uspi));
+ 	ubh_sync_block(USPI_UBH(sbi->s_uspi));
+ }
+diff --git a/fs/ufs/ufs_fs.h b/fs/ufs/ufs_fs.h
+index b8dc354ae..c5e9c6aab 100644
+--- a/fs/ufs/ufs_fs.h
++++ b/fs/ufs/ufs_fs.h
+@@ -937,7 +937,9 @@ struct ufs_super_block_third {
+ 			__fs32	fs_qfmask[2];	/* ~usb_fmask */
+ 		} fs_sunx86;
+ 		struct {
+-			__fs32	fs_sparecon[50];/* reserved for future constants */
++			__fs32	fs_sparecon[23];/* reserved for future constants */
++			__fs32	fs_mtime[2];	/* last mount or fsck time */
++			__fs32	fs_sparecon2[25];/* reserved for future constants */
+ 			__fs32	fs_contigsumsize;/* size of cluster summary array */
+ 			__fs32	fs_maxsymlinklen;/* max length of an internal symlink */
+ 			__fs32	fs_inodefmt;	/* format of on-disk inodes */
+-- 
+2.54.0 (Apple Git-157)
+

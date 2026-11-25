@@ -1,0 +1,36 @@
+From 1711d3e61bda456de4c191f5e6b7d45c2b7182fa Mon Sep 17 00:00:00 2001
+From: Showta Ishizaki <zakinko@snowrabbit.org>
+Date: Thu, 26 Nov 2026 03:02:05 +0900
+Subject: [PATCH 2/4] ufs: do not take a filesystem NetBSD has mounted for
+ clean
+
+NetBSD has fs_clean at 2, FS_WASCLEAN, while a filesystem that was clean
+is mounted read-write, so it is what is left after a crash.  ufs reads
+it as Solaris' "stable" and mounts the filesystem read-write.  Mount it
+read-only, as one with 0.
+
+Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
+---
+ fs/ufs/super.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/fs/ufs/super.c b/fs/ufs/super.c
+index cbb034a87..c204af7ce 100644
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -1135,6 +1135,12 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
+ 			UFSD("fs is clean\n");
+ 			break;
+ 		case UFS_FSSTABLE:
++			/* NetBSD's FS_WASCLEAN: mounted, or not unmounted */
++			if ((flags & UFS_ST_MASK) == UFS_ST_44BSD) {
++				pr_err("%s(): fs is active\n", __func__);
++				sb->s_flags |= SB_RDONLY;
++				break;
++			}
+ 			UFSD("fs is stable\n");
+ 			break;
+ 		case UFS_FSLOG:
+-- 
+2.54.0 (Apple Git-157)
+

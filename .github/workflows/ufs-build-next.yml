@@ -1,0 +1,25 @@
+name: linux-next に当て物を順に当てて fs/ufs を建てる
+
+on:
+  workflow_dispatch:
+    inputs:
+      dir: { description: 'fs-probe/send の下の patch のあるディレクトリ', type: string, required: true }
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get -q update; sudo apt-get -qy install flex bison bc libelf-dev libssl-dev sparse
+          git clone -q --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git $HOME/linux
+          cd $HOME/linux; git log -1 --format='%H %ad'
+          make -s x86_64_defconfig; scripts/config -e BLK_DEV_LOOP -e MISC_FILESYSTEMS -m UFS_FS -e UFS_FS_WRITE; make -s olddefconfig; make -s modules_prepare
+          w() { touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ 2>&1 | tee $HOME/l.$1 | grep -E 'warning:|error:' | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/w.$1 || true; grep -qE '^make.*Error' $HOME/l.$1 && { tail -20 $HOME/l.$1; exit 1; } || true; }
+          w base
+          for p in $GITHUB_WORKSPACE/fs-probe/send/${{ inputs.dir }}/*.patch; do
+            n=$(basename $p | cut -c1-4); patch -p1 -F0 -f -i $p < /dev/null | tee $HOME/pl; [ $(grep -ciE 'offset|fuzz|FAILED' $HOME/pl) = 0 ]
+            w $n; echo "stage $n: new warnings $(comm -13 $HOME/w.base $HOME/w.$n | wc -l)"; comm -13 $HOME/w.base $HOME/w.$n
+            ls fs/ufs/super.o
+          done

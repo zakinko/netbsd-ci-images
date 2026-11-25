@@ -1,0 +1,141 @@
+From e31ee38674437e5dba0b3e9fe194edcfdfe92a7c Mon Sep 17 00:00:00 2001
+From: Showta Ishizaki <zakinko@snowrabbit.org>
+Date: Thu, 26 Nov 2026 03:02:05 +0900
+Subject: [PATCH 1/4] ufs: clear fs_clean of a 44bsd filesystem while it is
+ read-write
+
+FreeBSD has fs_clean at 0 and NetBSD at 2 while a filesystem is mounted
+read-write, and they set it to 1 at unmount, so that fsck checks it
+after a crash.  ufs leaves it at 1, and after a crash of Linux
+fsck_ffs -p on FreeBSD does not look at the filesystem:
+
+  /dev/md0: FILE SYSTEM CLEAN; SKIPPING CHECKS
+
+Set it to 0 when the filesystem becomes read-write, and to 1 when it
+stops being so and the rest is on the disk, if it was 1 to begin with.
+One that was not clean and was made read-write with remount stays not
+clean, as it does on the BSDs.
+
+I copied the disk under a mounted filesystem while files were created,
+renamed and removed on it, and ran fsck_ffs of FreeBSD 15.0 on the copy.
+The filesystems were UFS1 and UFS2 with journaled soft updates, the UFS2
+with its check hashes turned off, as Linux does not keep them and fsck
+stops there first.  Without the patch fsck_ffs -p skipped all eight
+copies, and fsck_ffs -fn found 161 to 224 errors in each.  With it none
+was skipped.  After an unmount or a remount to read-only fsck_ffs -fn
+finds nothing.
+
+Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
+---
+ fs/ufs/super.c | 53 +++++++++++++++++++++++++++++++++++++++++++++++++-
+ fs/ufs/ufs.h   |  1 +
+ 2 files changed, 53 insertions(+), 1 deletion(-)
+
+diff --git a/fs/ufs/super.c b/fs/ufs/super.c
+index ecf422e41..cbb034a87 100644
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -599,6 +599,51 @@ static void ufs_put_cstotal(struct super_block *sb)
+ 	UFSD("EXIT\n");
+ }
+ 
++/*
++ * FreeBSD keeps fs_clean at 0 and NetBSD at 2 or 0 while a filesystem is
++ * mounted read-write, and at 1 otherwise, so that their fsck checks it after
++ * a crash.  Use 0 here.
++ */
++static void ufs_44bsd_set_active(struct super_block *sb)
++{
++	struct ufs_sb_info *sbi = UFS_SB(sb);
++	struct ufs_super_block_first *usb1 = ubh_get_usb_first(sbi->s_uspi);
++
++	if ((sbi->s_flags & UFS_ST_MASK) != UFS_ST_44BSD)
++		return;
++	sbi->s_was_clean = usb1->fs_clean == UFS_FSCLEAN;
++	usb1->fs_clean = UFS_FSACTIVE;
++	ubh_mark_buffer_dirty(USPI_UBH(sbi->s_uspi));
++	ubh_sync_block(USPI_UBH(sbi->s_uspi));
++}
++
++/*
++ * Nothing here has repaired a filesystem that was not clean to begin with,
++ * so leave it to fsck.
++ */
++static void ufs_44bsd_set_clean(struct super_block *sb)
++{
++	struct ufs_sb_info *sbi = UFS_SB(sb);
++	struct ufs_super_block_first *usb1 = ubh_get_usb_first(sbi->s_uspi);
++	int err;
++
++	if ((sbi->s_flags & UFS_ST_MASK) != UFS_ST_44BSD || !sbi->s_was_clean)
++		return;
++	/* Everything else has to be on the disk before it is called clean. */
++	err = sync_blockdev(sb->s_bdev);
++	/* The error has been reported; fs_clean stays as that left it. */
++	if (sb_emergency_ro(sb))
++		return;
++	if (err) {
++		pr_err("(device %s): not marking the filesystem clean, error %d\n",
++		       sb->s_id, err);
++		return;
++	}
++	usb1->fs_clean = UFS_FSCLEAN;
++	ubh_mark_buffer_dirty(USPI_UBH(sbi->s_uspi));
++	ubh_sync_block(USPI_UBH(sbi->s_uspi));
++}
++
+ /**
+  * ufs_put_super_internal() - put on-disk intrenal structures
+  * @sb: pointer to super_block structure
+@@ -712,8 +757,10 @@ static void ufs_put_super(struct super_block *sb)
+ 	UFSD("ENTER\n");
+ 
+ 	/* NULL if a remount to read-only freed the cylinder groups */
+-	if (sbi->s_ucg)
++	if (sbi->s_ucg) {
+ 		ufs_put_super_internal(sb);
++		ufs_44bsd_set_clean(sb);
++	}
+ 	cancel_delayed_work_sync(&sbi->sync_work);
+ 
+ 	ubh_brelse_uspi (sbi->s_uspi);
+@@ -1246,6 +1293,8 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
+ 		ret = -ENOMEM;
+ 		goto failed_cg;
+ 	}
++	if (!sb_rdonly(sb))
++		ufs_44bsd_set_active(sb);
+ 
+ 	UFSD("EXIT\n");
+ 	return 0;
+@@ -1308,6 +1357,7 @@ static int ufs_reconfigure(struct fs_context *fc)
+ 				ufs_set_fs_state(sb, usb1, usb3,
+ 					UFS_FSOK - fs32_to_cpu(sb, usb1->fs_time));
+ 			ubh_mark_buffer_dirty (USPI_UBH(uspi));
++			ufs_44bsd_set_clean(sb);
+ 		}
+ 		sb->s_flags |= SB_RDONLY;
+ 	} else {
+@@ -1333,6 +1383,7 @@ static int ufs_reconfigure(struct fs_context *fc)
+ 			mutex_unlock(&UFS_SB(sb)->s_lock);
+ 			return -EPERM;
+ 		}
++		ufs_44bsd_set_active(sb);
+ 		sb->s_flags &= ~SB_RDONLY;
+ #endif
+ 	}
+diff --git a/fs/ufs/ufs.h b/fs/ufs/ufs.h
+index 541566f5b..86e045f20 100644
+--- a/fs/ufs/ufs.h
++++ b/fs/ufs/ufs.h
+@@ -26,6 +26,7 @@ struct ufs_sb_info {
+ 	unsigned short s_cg_loaded;
+ 	unsigned s_flavour;
+ 	unsigned s_on_err;
++	bool s_was_clean;	/* 44bsd: clean when it became read-write */
+ 	struct super_block *sb;
+ 	int work_queued; /* non-zero if the delayed work is queued */
+ 	struct delayed_work sync_work; /* FS sync delayed work */
+-- 
+2.54.0 (Apple Git-157)
+
