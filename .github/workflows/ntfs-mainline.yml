@@ -11,9 +11,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { tree: mainline, url: 'https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git', branch: master, patches: 'ntfs3-03 ntfs3-02 ntfs3-01a ntfs3-01b ntfs-01' }
-          - { tree: paragon, url: 'https://github.com/Paragon-Software-Group/linux-ntfs3.git', branch: master, patches: 'ntfs3-03 ntfs3-02 ntfs3-01a ntfs3-01b' }
-          - { tree: ntfs-next, url: 'https://git.kernel.org/pub/scm/linux/kernel/git/linkinjeon/ntfs.git', branch: ntfs-next, patches: 'ntfs-01' }
+          - { tree: mainline, url: 'https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git', branch: master, drv: ntfs3, patches: 'ntfs3-03 ntfs3-02 ntfs3-01a ntfs3-01b' }
+          - { tree: paragon, url: 'https://github.com/Paragon-Software-Group/linux-ntfs3.git', branch: master, drv: ntfs3, patches: 'ntfs3-03 ntfs3-02 ntfs3-01a ntfs3-01b' }
+          - { tree: mainline-ntfs, url: 'https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git', branch: master, drv: ntfs, patches: 'ntfs-01' }
+          - { tree: ntfs-next, url: 'https://git.kernel.org/pub/scm/linux/kernel/git/linkinjeon/ntfs.git', branch: ntfs-next, drv: ntfs, patches: 'ntfs-01' }
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -35,12 +36,15 @@ jobs:
           set -e
           cd $HOME/linux
           make -s x86_64_defconfig kvm_guest.config
-          scripts/config -e BLK_DEV_LOOP -e NTFS3_FS -e NTFS3_LZX_XPRESS -e NTFS_FS -e NLS_UTF8 -e VIRTIO_FS -e FUSE_FS -e OVERLAY_FS -e NET_9P -e NET_9P_VIRTIO -e 9P_FS -e TMPFS
+          scripts/config -e BLK_DEV_LOOP -e NLS_UTF8 -e VIRTIO_FS -e FUSE_FS -e OVERLAY_FS -e NET_9P -e NET_9P_VIRTIO -e 9P_FS -e TMPFS
+          # 両方を y にはできず、NTFS3_FS が m になって測れなかった (run 45610654414)。
+          if [ ${{ matrix.drv }} = ntfs3 ]; then scripts/config -d NTFS_FS -e NTFS3_FS -e NTFS3_LZX_XPRESS; else scripts/config -d NTFS3_FS -e NTFS_FS; fi
           make -s olddefconfig
+          if [ ${{ matrix.drv }} = ntfs3 ]; then grep -q '^CONFIG_NTFS3_FS=y' .config; else grep -q '^CONFIG_NTFS_FS=y' .config; fi
           grep -E 'CONFIG_NTFS|CONFIG_BLK_DEV_LOOP=' .config
           make -s -j$(nproc) bzImage
           cp arch/x86/boot/bzImage $HOME/bz-base
-          w() { touch fs/ntfs3/*.c fs/ntfs/*.c; make W=1 C=1 fs/ntfs3/ fs/ntfs/ 2>&1 | grep -E 'warning:|error:' | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$1 || true; }
+          w() { touch fs/ntfs3/*.c fs/ntfs/*.c; make W=1 C=1 fs/${{ matrix.drv }}/ 2>&1 | grep -E 'warning:|error:' | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$1 || true; }
           w base; echo "base warnings $(wc -l < $HOME/ws-base)"
           for p in ${{ matrix.patches }}; do
             echo "== $p"
@@ -55,10 +59,11 @@ jobs:
         run: |
           mkdir -p out
           for x in base ${{ matrix.patches }}; do
-            timeout 2400 vng --run $HOME/bz-$x --user root --memory 10G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/ntfs-guest.sh $PWD/in $PWD/out $x $HOME/xt/ltp/fsstress < /dev/null || echo "vng exit $?"
+            timeout 2400 vng --run $HOME/bz-$x --user root --memory 10G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/ntfs-guest.sh $PWD/in $PWD/out $x $HOME/xt/ltp/fsstress ${{ matrix.drv }} < /dev/null || echo "vng exit $?"
           done
           cat out/*.txt | tee -a $GITHUB_STEP_SUMMARY
-          test -s out/base.txt
+          ! grep -h '^!!' out/*.txt
+          for x in base ${{ matrix.patches }}; do grep -q '^END' out/$x.txt; done
           cp in/win-ntfs.reparse out/
       - uses: actions/upload-artifact@v4
         if: always()
