@@ -13,7 +13,8 @@ show() {
 	[ -e /mnt/now ] && echo "T $1 now $(stat -f '%Sm' -t '%Y-%m-%d' /mnt/now)"
 }
 date 204001020304 > /dev/null 2>&1; echo "T date $(date)"
-P=/new; [ $K = new ] || P=
+P=/new; [ $K = new ] || P=/sbin
+TMPDIR=/w; export TMPDIR
 for t in "ld1 1 le" "ld2 0 le" "ld3 1 be"; do
 	set -- $t; d=$1; o=$2; e=$3; n=ffsv1-O$o-$e
 	if [ $K = new ]; then
@@ -31,13 +32,13 @@ for t in "ld1 1 le" "ld2 0 le" "ld3 1 be"; do
 	$P/fsck_ffs -fn /dev/r${d}d > /w/fk 2>&1; echo "T $n fsck exit $? $(grep -vE '^\*\*|files,|^$' /w/fk | head -3 | tr '\n' ';')"
 	if [ $K = new ]; then
 		printf 'inode 2\nlookup w2040\nquit\n' | $P/fsdb -n -f /dev/r${d}d 2>&1 | grep -E 'TIME=' | tail -3 | sed "s/^/T $n fsdb /"
-		$P/dump -0 -a -f /w/d0 /dev/r${d}d > /w/dl 2>&1; echo "T $n dump exit $?"
-		$P/newfs -I -O 1 /dev/rld4d > /dev/null 2>&1 && mount -t ffs /dev/ld4d /mnt && (cd /mnt && $P/restore -rf /w/d0 > /w/rl 2>&1; echo "T $n restore exit $?")
+		$P/dump -0 -a -f /w/d0 /dev/r${d}d > /w/dl 2>&1; echo "T $n dump exit $? $(ls -l /w/d0) $(tail -3 /w/dl | tr '\n' ';')"
+		$P/newfs -I -O 1 /dev/rld4d > /dev/null 2>&1 && mount -t ffs /dev/ld4d /mnt && (cd /mnt && $P/restore -rf /w/d0 > /w/rl 2>&1; echo "T $n restore exit $? $(tail -4 /w/rl | tr '\n' ';')")
 		show "$n restored"; umount /mnt
 		# 増分: 2039 年を基準にして、2040 年の file が入るか
 		for w in $P/dump /sbin/dump; do
 			$w -1 -a -T "Sun Jan  2 00:00:00 2039" -f /w/d1 /dev/r${d}d > /w/dl 2>&1
-			echo "T $n incremental $w exit $?: $($P/restore -tf /w/d1 2>/dev/null | grep -cE '/(now|w2040|w2100)$') of 3"
+			echo "T $n incremental $w exit $? $(tail -2 /w/dl | tr '\n' ';') list: $($P/restore -tf /w/d1 2>&1 | tail -6 | tr '\n' ';'): $($P/restore -tf /w/d1 2>/dev/null | grep -cE '/(now|w2040|w2100)$') of 3"
 		done
 		rm -f /w/d0 /w/d1
 	fi
