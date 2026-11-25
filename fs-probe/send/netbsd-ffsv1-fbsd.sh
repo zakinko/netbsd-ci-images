@@ -2,6 +2,8 @@
 # FreeBSD の上で、NetBSD が書いた FFSv1 を読み、次に rw で mount して触る。
 # fbin/d1.raw.gz (-O 1) と fbin/d2.raw.gz (-O 0) を読み、触った後のものを
 # fbout/d<n>-<時計の年>.raw.gz に置く。時計は今のままと 2040 年の二通り。
+# 2040 年の方は file の日付 (2040-01-02) の翌日にする。同じ日だと、数秒の差で
+# 「今より先」になったりならなかったりする。
 uname -a; export TZ=UTC
 mkdir -p fbout
 real=$(date -u +%Y%m%d%H%M.%S)
@@ -13,7 +15,7 @@ show() {
 }
 {
 for y in 2026 2040; do
-	[ $y = 2040 ] && date 204001020304 > /dev/null
+	[ $y = 2040 ] && date 204001030304 > /dev/null
 	echo "T now $(date)"
 	for i in 1 2; do
 		n=fbsd$y-d$i
