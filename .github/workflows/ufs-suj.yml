@@ -1,0 +1,96 @@
+name: SUJ の付いた UFS を書いている最中に落ちたとき
+
+# 手で回すだけ。FreeBSD の fsck が古い journal を信じるかを見る。
+on:
+  workflow_dispatch:
+    inputs:
+      images_run: { description: 'src-freebsd の artifact を持つ run', type: string, default: '42963051880' }
+
+concurrency: { group: ufs-suj, cancel-in-progress: true }
+
+jobs:
+  ufs1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: |
+            truncate -s 256M freebsd-ufs1-suj.img
+            md=$(mdconfig -a -t vnode -f freebsd-ufs1-suj.img)
+            newfs -O 1 -U -j /dev/$md
+            mkdir -p m; mount /dev/$md m; cp -R /usr/share/misc m/; ls -la m | head; umount m
+            dumpfs /dev/$md | head -24; mdconfig -d -u $md
+      - uses: actions/upload-artifact@v4
+        with: { name: suj-ufs1, path: freebsd-ufs1-suj.img, retention-days: 7, if-no-files-found: error }
+
+  linux:
+    needs: ufs1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: src-freebsd, path: in, run-id: '${{ inputs.images_run }}', github-token: '${{ github.token }}' }
+      - uses: actions/download-artifact@v4
+        with: { name: suj-ufs1, path: in }
+      - run: |
+          sudo apt-get -q update
+          sudo apt-get -qy install virtme-ng qemu-system-x86 flex bison bc libelf-dev libssl-dev dwarves sparse dmsetup
+          sudo chmod 666 /dev/kvm
+          git clone -q --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git $HOME/linux
+          git -C $HOME/linux log -1 --format='%H %ad'
+      - name: 三通りを建てる
+        run: |
+          set -e
+          cd $HOME/linux
+          make -s x86_64_defconfig kvm_guest.config
+          scripts/config -e BLK_DEV_LOOP -e MD -e BLK_DEV_DM -e MISC_FILESYSTEMS -e UFS_FS -e UFS_FS_WRITE -e VIRTIO_FS -e FUSE_FS -e OVERLAY_FS -e NET_9P -e NET_9P_VIRTIO -e 9P_FS -e TMPFS
+          make -s olddefconfig
+          grep -E 'CONFIG_UFS_FS|CONFIG_BLK_DEV_(LOOP|DM)=' .config
+          make -s -j$(nproc) bzImage; cp arch/x86/boot/bzImage $HOME/bz-base
+          touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-base 2>&1
+          for x in clean mtime; do
+            patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/ufs-suj-$x.diff < /dev/null
+            touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-$x 2>&1
+            make -s -j$(nproc) bzImage; cp arch/x86/boot/bzImage $HOME/bz-$x
+          done
+          for x in base clean mtime; do grep -E 'warning:|error:' $HOME/w-$x | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$x || true; done
+          for x in clean mtime; do echo "new warnings $x: $(comm -13 $HOME/ws-base $HOME/ws-$x | wc -l)"; comm -13 $HOME/ws-base $HOME/ws-$x; done
+      - name: 写す
+        run: |
+          mkdir -p out
+          for x in base clean mtime; do
+            timeout 1500 vng --run $HOME/bz-$x --user root --memory 10G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/ufs-suj-guest.sh $PWD/in $PWD/out $x < /dev/null || echo "vng exit $?"
+          done
+          ls -l out; cat out/*.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: suj-out, path: out, retention-days: 7 }
+
+  fsck:
+    needs: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: suj-out, path: out }
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: |
+            for g in out/*.img.gz; do
+              [ -e $g ] || continue
+              gunzip -f $g; i=${g%.gz}
+              echo "R == $(basename $i .img)"
+              md=$(mdconfig -a -t vnode -f $i)
+              echo "R    before $(dumpfs /dev/$md 2>&1 | awk '/clean/ { for (n = 1; n < NF; n++) if ($n == "clean") { print "clean", $(n + 1); exit } }')"
+              fsck_ffs -p /dev/$md > p.txt 2>&1; echo "R    -p exit $? lines $(wc -l < p.txt) hash $(grep -ci 'check.hash' p.txt)"
+              grep -viE 'check.hash' p.txt | head -8 | sed 's/^/R    p| /'
+              echo "R    after $(dumpfs /dev/$md 2>&1 | awk '/clean/ { for (n = 1; n < NF; n++) if ($n == "clean") { print "clean", $(n + 1); exit } }')"
+              fsck_ffs -f -n /dev/$md > f.txt 2>&1
+              echo "R    -fn exit $? hash $(grep -ci 'check.hash' f.txt) errors $(grep -E 'UNREF|BAD|DUP|MISSING|LINK COUNT|UNALLOCATED|SUMMARY|INCORRECT BLOCK|FREE BLK|PARTIALLY|MARKED FREE|MARKED USED|EXTRA' f.txt | grep -viE 'check.hash' | wc -l)"
+              grep -E 'UNREF|BAD|DUP|MISSING|LINK COUNT|UNALLOCATED|SUMMARY|INCORRECT BLOCK|FREE BLK|PARTIALLY|MARKED FREE|MARKED USED|EXTRA' f.txt | grep -viE 'check.hash' | sed 's/[0-9][0-9]*/N/g; s/=[^ ]*/=/g' | sort | uniq -c | sort -rn | head -5 | sed 's/^/R    f| /'
+              mdconfig -d -u $md; rm -f $i
+            done

@@ -1,0 +1,69 @@
+diff --git a/fs/ufs/super.c b/fs/ufs/super.c
+index f629e7bb7..7146e0e2a 100644
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -575,6 +575,30 @@ static void ufs_put_cstotal(struct super_block *sb)
+ 	UFSD("EXIT\n");
+ }
+ 
++/*
++ * FreeBSD's fsck takes the soft updates journal as current when the time
++ * kept with it is fs_mtime, and then skips the full check.  FreeBSD sets
++ * fs_mtime at each read-write mount; do the same, as the journal knows
++ * nothing about what is written here.
++ */
++static void ufs_44bsd_set_mtime(struct super_block *sb)
++{
++	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
++	struct ufs_super_block_first *usb1 = ubh_get_usb_first(uspi);
++	struct ufs_super_block_third *usb3 = ubh_get_usb_third(uspi);
++	time64_t now = ktime_get_real_seconds();
++	__fs64 mtime;
++
++	if (uspi->fs_magic != UFS2_MAGIC &&
++	    !(usb1->fs_flags & UFS_FLAGS_UPDATED))
++		return;
++	memcpy(&mtime, usb3->fs_un2.fs_44.fs_mtime, sizeof(mtime));
++	if (now == fs64_to_cpu(sb, mtime))
++		now++;
++	mtime = cpu_to_fs64(sb, now);
++	memcpy(usb3->fs_un2.fs_44.fs_mtime, &mtime, sizeof(mtime));
++}
++
+ /*
+  * FreeBSD and NetBSD have fs_clean at 0 (NetBSD: 2, FS_WASCLEAN) while a
+  * filesystem is mounted read-write and set it to 1 when it is unmounted, so
+@@ -591,6 +615,8 @@ static void ufs_44bsd_set_clean(struct super_block *sb, bool clean)
+ 	/* Everything else has to be on the disk before it is called clean. */
+ 	if (clean)
+ 		sync_blockdev(sb->s_bdev);
++	else
++		ufs_44bsd_set_mtime(sb);
+ 	usb1->fs_clean = clean ? UFS_FSCLEAN : UFS_FSACTIVE;
+ 	ubh_mark_buffer_dirty(USPI_UBH(uspi));
+ 	/* FreeBSD's ffs_mountfs() waits for this write, too. */
+diff --git a/fs/ufs/ufs_fs.h b/fs/ufs/ufs_fs.h
+index b8dc354ae..63cd9ef91 100644
+--- a/fs/ufs/ufs_fs.h
++++ b/fs/ufs/ufs_fs.h
+@@ -149,6 +149,9 @@ typedef __u16 __bitwise __fs16;
+ #define UFS_FSOSF1    ((__s8)0x03)	/* is this correct for DEC OSF/1? */
+ #define UFS_FSBAD     ((__s8)0xff)
+ 
++/* fs_flags of 44bsd: the fields beyond UFS1's old superblock are in use */
++#define UFS_FLAGS_UPDATED	0x80
++
+ /* Solaris-specific fs_clean values */
+ #define UFS_FSSUSPEND ((__s8)0xfe)	/* temporarily suspended */
+ #define UFS_FSLOG     ((__s8)0xfd)	/* logging fs */
+@@ -937,7 +940,9 @@ struct ufs_super_block_third {
+ 			__fs32	fs_qfmask[2];	/* ~usb_fmask */
+ 		} fs_sunx86;
+ 		struct {
+-			__fs32	fs_sparecon[50];/* reserved for future constants */
++			__fs32	fs_sparecon[23];/* reserved for future constants */
++			__fs32	fs_mtime[2];	/* last mount or fsck time */
++			__fs32	fs_sparecon2[25];/* reserved for future constants */
+ 			__fs32	fs_contigsumsize;/* size of cluster summary array */
+ 			__fs32	fs_maxsymlinklen;/* max length of an internal symlink */
+ 			__fs32	fs_inodefmt;	/* format of on-disk inodes */
