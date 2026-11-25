@@ -1,0 +1,88 @@
+#!/bin/sh
+# mainline の ntfs3 と ntfs の、当て物が直す所だけを見る。
+#   ntfs-guest.sh <in> <out> <label> <fsstress>
+in=$1 out=$2 label=$3 fss=$4
+w=/run/w
+mkdir -p $out $w && mount -t tmpfs -o size=7g none $w && mkdir $w/m
+sum=$out/$label.txt; : > $sum
+note() { printf '%s\n' "$*" | tee -a $sum; }
+note "# $label kernel $(uname -r) $(uname -v)"
+dmesg -C
+# --- Windows が作った junction と symlink (ntfs3-01a/b)
+cp --sparse=always $in/win-ntfs.vhd $w/win.vhd
+l=$(losetup -f -P --show $w/win.vhd)
+for p in ${l}p1 ${l}p2; do [ -b $p ] && [ "$(blkid -o value -s TYPE $p)" = ntfs ] && part=$p; done
+if mount -i -t ntfs3 -o ro $part $w/m; then
+	for r in junction sym_dir sym_file sym_rel; do
+		note "win $r -> '$(readlink $w/m/src/$r 2>&1)' follows: $(stat -L -c %F $w/m/src/$r 2>&1 | sed 's/.*: //')"
+	done
+	umount $w/m
+else note "!! win mount failed"; fi
+losetup -d $l; rm -f "${w:?}"/win.vhd
+mk() {	# name size
+	truncate -s $2 $w/$1.raw; echo 'type=7' | sfdisk -q $w/$1.raw
+	l=$(losetup -f -P --show $w/$1.raw); mkntfs -Q -q -L T ${l}p1 > /dev/null 2>&1
+}
+# --- 長い symlink の d_type (ntfs3-02)
+mk sym 256M
+mount -i -t ntfs3 ${l}p1 $w/m || note "!! ntfs3 mount failed"
+for n in 10 100 200 500 1000; do ln -s $(printf "%0${n}d" 0 | tr 0 a) $w/m/s$n; done
+ty() { python3 -c '
+import os,sys
+print(" ".join(sorted("%s=%s" % (e.name, "lnk" if e.is_symlink() else "reg" if e.is_file(follow_symlinks=False) else "?") for e in os.scandir(sys.argv[1]) if e.name.startswith("s"))))' $w/m; }
+note "sym d_type cached: $(ty)"
+umount $w/m; mount -i -t ntfs3 ${l}p1 $w/m
+note "sym d_type after remount: $(ty); lstat: $(stat -c '%n=%F' $w/m/s* | sed "s,$w/m/,,g" | tr '\n' ' ')"
+umount $w/m; losetup -d $l; rm -f "${w:?}"/sym.raw
+# --- 0 に縮めたファイル (ntfs3-03)。断片化したものと、伸ばし直すものも。
+mk trunc 512M
+mount -i -t ntfs3 ${l}p1 $w/m
+bad=0
+for i in $(seq 1 60); do
+	dd if=/dev/urandom of=$w/m/t$i bs=64k count=$((i % 9 + 1)) status=none || bad=$((bad + 1))
+	sync $w/m/t$i
+done
+for i in $(seq 1 2 60); do truncate -s 0 $w/m/t$i || bad=$((bad + 1)); done
+sync
+for i in $(seq 1 4 60); do echo "again $i" > $w/m/t$i || bad=$((bad + 1)); done
+dd if=/dev/urandom of=$w/m/frag bs=4k count=2000 oflag=dsync status=none & dd if=/dev/urandom of=$w/m/frag2 bs=4k count=2000 oflag=dsync status=none; wait
+truncate -s 0 $w/m/frag || bad=$((bad + 1))
+note "truncate errors: $bad; sizes wrong: $(for i in $(seq 1 60); do s=$(stat -c %s $w/m/t$i); if [ $((i % 2)) = 0 ]; then e=$(((i % 9 + 1) * 65536)); elif [ $((i % 4)) = 1 ]; then e=$(printf 'again %s\n' $i | wc -c); else e=0; fi; [ $s = $e ] || echo $i; done | wc -l)"
+(cd $w/m && sha256sum t* | sort) > $w/h1
+(cd $w/m && find . -xdev -printf '%i %y %s %p\n') > $out/$label-trunc.inodes
+umount $w/m; mount -i -t ntfs3 ${l}p1 $w/m
+(cd $w/m && sha256sum t* | sort) > $w/h2
+note "trunc: differing after remount $(diff $w/h1 $w/h2 | grep -c '^[<>]') of $(wc -l < $w/h1)"
+umount $w/m
+awk '$2 == "f" && $3 == 0 { print $1 }' $out/$label-trunc.inodes > $w/z
+note "trunc: empty \$DATA with runs left: $(python3 -I $(dirname $0)/../mftattr.py ${l}p1 $(cat $w/z) | grep -c STALE-RUNS) of $(wc -l < $w/z)"
+losetup -d $l
+qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on $w/trunc.raw $w/out.vhd && gzip -1 -c $w/out.vhd > $out/$label-trunc.vhd.gz
+rm -f "${w:?}"/trunc.raw "${w:?}"/out.vhd
+# --- fsstress
+mk fss 2G
+mount -i -t ntfs3 ${l}p1 $w/m
+timeout 900 $fss -d $w/m/fss -n 4000 -p 4 -s 1 > $w/fss.log 2>&1
+note "fsstress exit $?"
+sync
+(cd $w/m && find . -xdev -printf '%i %y %s %p\n') > $out/$label-fss.inodes
+(cd $w/m && find . -type f -print0 | sort -z | xargs -0 -r sha256sum) > $w/h1 2>/dev/null
+umount $w/m; mount -i -t ntfs3 ${l}p1 $w/m && (cd $w/m && find . -type f -print0 | sort -z | xargs -0 -r sha256sum) > $w/h2 2>/dev/null
+note "fss: differing after remount $(diff $w/h1 $w/h2 | grep -c '^[<>]') of $(wc -l < $w/h1)"
+umount $w/m
+awk '$2 == "f" && $3 == 0 { print $1 }' $out/$label-fss.inodes > $w/z
+note "fss: empty \$DATA with runs left: $(python3 -I $(dirname $0)/../mftattr.py ${l}p1 $(cat $w/z) | grep -c STALE-RUNS) of $(wc -l < $w/z)"
+losetup -d $l
+qemu-img convert -f raw -O vpc -o subformat=fixed,force_size=on $w/fss.raw $w/out.vhd && gzip -1 -c $w/out.vhd > $out/$label-fss.vhd.gz
+rm -f "${w:?}"/fss.raw "${w:?}"/out.vhd
+# --- fs/ntfs のディレクトリの大きさ (ntfs-01)
+mk dir 256M
+if mount -i -t ntfs ${l}p1 $w/m; then
+	sz() { (cd $w/m && stat -c '%n=%s' new full g* | tr '\n' ' '); }
+	mkdir $w/m/new $w/m/full; for i in $(seq 1 300); do : > $w/m/full/f$i; done
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do mkdir $w/m/g$i; for j in $(seq 1 $i); do : > $w/m/g$i/file$j; done; done
+	note "dir size before umount: $(sz)"; umount $w/m; mount -i -t ntfs ${l}p1 $w/m; note "dir size after remount: $(sz)"
+	umount $w/m
+else note "!! ntfs mount failed"; fi
+losetup -d $l
+note "dmesg: $(dmesg | grep -iE 'ntfs|WARNING|BUG|KASAN' | head -6 | tr '\n' ';')"

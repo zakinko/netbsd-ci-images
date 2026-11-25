@@ -1,0 +1,87 @@
+name: upstream に送る ntfs の当て物を一本ずつ当てて測る
+
+on:
+  workflow_dispatch:
+    inputs:
+      images_run: { description: 'src-windows の artifact を持つ fs-probe の run', type: string, required: true }
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { tree: mainline, url: 'https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git', branch: master, patches: 'ntfs3-03 ntfs3-02 ntfs3-01a ntfs3-01b ntfs-01' }
+          - { tree: paragon, url: 'https://github.com/Paragon-Software-Group/linux-ntfs3.git', branch: master, patches: 'ntfs3-03 ntfs3-02 ntfs3-01a ntfs3-01b' }
+          - { tree: ntfs-next, url: 'https://git.kernel.org/pub/scm/linux/kernel/git/linkinjeon/ntfs.git', branch: ntfs-next, patches: 'ntfs-01' }
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: src-windows, path: in, run-id: '${{ inputs.images_run }}', github-token: '${{ github.token }}' }
+      - run: |
+          sudo apt-get -q update
+          sudo apt-get -qy install virtme-ng qemu-system-x86 qemu-utils flex bison bc libelf-dev libssl-dev dwarves sparse ntfs-3g autoconf automake libtool uuid-dev xfslibs-dev libaio-dev libacl1-dev libattr1-dev
+          sudo chmod 666 /dev/kvm
+          ls -l in
+          git clone -q --depth 1 -b ${{ matrix.branch }} ${{ matrix.url }} $HOME/linux
+          git -C $HOME/linux log -1 --format='%H %ad'
+          for i in 1 2 3 4; do git clone -q --depth 1 --branch v2026.10.15 https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git $HOME/xt && break; sleep 30; done
+          cd $HOME/xt && (make configure && ./configure && make -C lib && make -C ltp fsstress) > $HOME/xt.log 2>&1 || { tail -20 $HOME/xt.log; exit 1; }
+          ls -l ltp/fsstress
+      - name: 建てる
+        run: |
+          set -e
+          cd $HOME/linux
+          make -s x86_64_defconfig kvm_guest.config
+          scripts/config -e BLK_DEV_LOOP -e NTFS3_FS -e NTFS3_LZX_XPRESS -e NTFS_FS -e NLS_UTF8 -e VIRTIO_FS -e FUSE_FS -e OVERLAY_FS -e NET_9P -e NET_9P_VIRTIO -e 9P_FS -e TMPFS
+          make -s olddefconfig
+          grep -E 'CONFIG_NTFS|CONFIG_BLK_DEV_LOOP=' .config
+          make -s -j$(nproc) bzImage
+          cp arch/x86/boot/bzImage $HOME/bz-base
+          w() { touch fs/ntfs3/*.c fs/ntfs/*.c; make W=1 C=1 fs/ntfs3/ fs/ntfs/ 2>&1 | grep -E 'warning:|error:' | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$1 || true; }
+          w base; echo "base warnings $(wc -l < $HOME/ws-base)"
+          for p in ${{ matrix.patches }}; do
+            echo "== $p"
+            if [ $p = ntfs3-01b ]; then patch -p1 -f -i $GITHUB_WORKSPACE/fs-probe/send/ntfs3-01a.diff < /dev/null; fi
+            patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/$p.diff < /dev/null
+            w $p; echo "$p new warnings: $(comm -13 $HOME/ws-base $HOME/ws-$p | wc -l)"; comm -13 $HOME/ws-base $HOME/ws-$p
+            make -s -j$(nproc) bzImage
+            cp arch/x86/boot/bzImage $HOME/bz-$p
+            git checkout -q fs
+          done
+      - name: 測る
+        run: |
+          mkdir -p out
+          for x in base ${{ matrix.patches }}; do
+            timeout 2400 vng --run $HOME/bz-$x --user root --memory 10G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/ntfs-guest.sh $PWD/in $PWD/out $x $HOME/xt/ltp/fsstress < /dev/null || echo "vng exit $?"
+          done
+          cat out/*.txt | tee -a $GITHUB_STEP_SUMMARY
+          test -s out/base.txt
+          cp in/win-ntfs.reparse out/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: 'ntfs-out-${{ matrix.tree }}', path: out, retention-days: 14 }
+
+  chkdsk:
+    needs: linux
+    if: always()
+    strategy: { fail-fast: false, matrix: { tree: [mainline, paragon] } }
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: 'ntfs-out-${{ matrix.tree }}', path: out }
+      - shell: bash
+        run: |
+          cd out
+          for g in *.vhd.gz; do gunzip -f $g; done
+      - shell: pwsh
+        run: ./fs-probe/win-check.ps1 out chk
+      - shell: bash
+        run: for f in chk/*.check; do echo "$(basename $f .check) $(tr -d '\r' < $f | grep -E 'chkdsk exit') corrupt lines $(grep -c corrupt $f)"; done | tee -a $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: 'ntfs-chk-${{ matrix.tree }}', path: chk }
