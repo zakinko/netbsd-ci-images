@@ -74,7 +74,7 @@ jobs:
           # 試験の道具、当てた rump の FFS、ATF の試験。無ければ試験の側が飛ばす
           $HOME/tools/bin/x86_64--netbsd-gcc --sysroot=$HOME/dest -O -Wall -o out/bin/ffsv1-probe fs-probe/send/netbsd-ffsv1-probe.c || echo "no probe"
           mkdir -p out/lib out/atf
-          cp $(find $HOME/obj -name 'librumpfs_ffs.so.*.*' -type f | head -1) out/lib/ || echo "no librumpfs_ffs"
+          cp $(find $HOME/obj -name 'librumpfs_ffs.so.[0-9]*.[0-9]*' ! -name '*.map' -type f | head -1) out/lib/ || echo "no librumpfs_ffs"
           cp $(find $HOME/obj -path '*tests/fs/ffs/t_ufs1time' -type f | head -1) out/atf/ || echo "no t_ufs1time"
           ls -l out out/bin out/lib out/atf
       - name: 対照のカーネル (nfs_serv.c の直しだけを抜いたもの)

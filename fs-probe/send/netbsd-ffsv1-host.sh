@@ -93,6 +93,7 @@ check)
 	want new ' remounted badnsec[-0-9]* 2209086245 ' 15 "new: seconds kept with bad nanoseconds"
 	want new '^T ffsv1-.* fsck exit 0 ' 3 "new: fsck_ffs clean"
 	want new '^T makefs-.. m2040 2209086245 ' 2 "new: makefs 2040"
+	want new '^T atf uses .*=> /w/lib/librumpfs_ffs' 1 "new: ATF runs on the patched rump FFS"
 	want new '^T atf ufs1time_[a-z]* exit 0 result passed' 3 "new: ATF passed"
 	want ctl '^T atf ufs1time_[a-z]* exit 0 result passed' 0 "ctl: ATF does not pass unpatched"
 	want new '^T nfs-ffsv1 exclusive create: ok 40 failed 0 ' 1 "new: NFS exclusive create on FFSv1"

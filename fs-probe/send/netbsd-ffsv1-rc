@@ -137,10 +137,10 @@ makefstest() {
 atftest() {
 	[ -x $ATF/t_ufs1time ] || { echo "T atf: the test was not built"; return; }
 	# 当てた rump の FFS は /w/lib に置いて LD_LIBRARY_PATH で先に引かせる
-	L=$(ls /usr/lib/librumpfs_ffs.so.*.* | head -1)
+	L=$(ls /usr/lib/librumpfs_ffs.so.[0-9]*.[0-9]* | head -1)
 	rm -rf /w/lib; mkdir /w/lib
 	if [ $K = new ]; then
-		cp $NEW/librumpfs_ffs.so.*.* /w/lib/$(basename $L) || echo "T atf: no patched librumpfs_ffs"
+		cp $NEW/librumpfs_ffs.so.[0-9]*.[0-9]* /w/lib/$(basename $L) || echo "T atf: no patched librumpfs_ffs"
 		ln -s $(basename $L) /w/lib/$(basename ${L%.*})
 	fi
 	LD_LIBRARY_PATH=/w/lib; export LD_LIBRARY_PATH
