@@ -75,7 +75,7 @@ jobs:
                      echo "ref=v2.2.6"  >> $GITHUB_OUTPUT
                      echo "dir=netbsd-builder"  >> $GITHUB_OUTPUT ;;
           freebsd-*) echo "repo=anyvm-org/freebsd-builder" >> $GITHUB_OUTPUT
-                     echo "ref=v2.2.8" >> $GITHUB_OUTPUT
+                     echo "ref=v2.2.9" >> $GITHUB_OUTPUT
                      echo "dir=freebsd-builder" >> $GITHUB_OUTPUT ;;
           # pfSense には builder が無い。OPNsense がここで一番近く (同じく
           # FreeBSD 由来の appliance で、serial console で全部を駆動する)
@@ -107,6 +107,13 @@ jobs:
               cp -v "vmactions/${{ steps.b.outputs.dir }}/$d"/* "builder/$d/" || true
             fi
           done
+          # 上流の hook は dist set の取得先を powerpc64 に固定しているので、
+          # le の媒体から be の base と kernel を入れてしまう。
+          case "${{ matrix.conf }}" in
+          freebsd-*-powerpc64le)
+            sed -i 's#^_FBSD_ARCH_PATH = "powerpc/powerpc64"$#_FBSD_ARCH_PATH = "powerpc/powerpc64le"#' builder/hooks/host_installOpts.py
+            grep -x '_FBSD_ARCH_PATH = "powerpc/powerpc64le"' builder/hooks/host_installOpts.py ;;
+          esac
           echo "--- 置いた conf"
           cat "builder/conf/$(basename "$c")"
 
