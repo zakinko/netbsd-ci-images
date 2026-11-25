@@ -314,7 +314,7 @@ for drv in $drivers; do
 		dmesg -c > $out/$w.ro.dmesg
 		if nmount $drv ${loop}p1 2>>$out/$w.err; then
 			note "rw: $(awk '$2 == "/mnt/p" { print $3, $4 }' /proc/mounts)"
-			sh $here/mktree.sh /mnt/p/linux > $out/$w.mktree 2>&1
+			WINDOWS_NAMES=1 sh $here/mktree.sh /mnt/p/linux > $out/$w.mktree 2>&1
 			note "rw: mktree exit $? $(grep -c FAIL $out/$w.mktree) FAIL $(grep FAIL $out/$w.mktree | head -6 | tr "\n" ";")"
 			mani /mnt/p/linux > $out/$w.linux.manifest 2>>$out/$w.err
 			umount /mnt/p
@@ -338,7 +338,7 @@ for drv in $drivers; do
 	mkntfs -Q -L ALMA ${loop}p1 > $out/$a.mkntfs 2>&1
 	if nmount $drv ${loop}p1 2>>$out/$a.err; then
 		note "rw: $(awk '$2 == "/mnt/p" { print $3, $4 }' /proc/mounts)"
-		sh $here/mktree.sh /mnt/p/linux > $out/$a.mktree 2>&1
+		WINDOWS_NAMES=1 sh $here/mktree.sh /mnt/p/linux > $out/$a.mktree 2>&1
 		note "mktree exit $? $(grep -c FAIL $out/$a.mktree) FAIL $(grep FAIL $out/$a.mktree | head -6 | tr "\n" ";")"
 		note "sym_long while mounted: $(ls -ld /mnt/p/linux/sym_long 2>&1 | cut -c1-80)"
 		mani /mnt/p/linux > $out/$a.linux.manifest

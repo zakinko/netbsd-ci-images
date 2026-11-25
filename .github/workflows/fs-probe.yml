@@ -310,7 +310,7 @@ jobs:
           name: alma-${{ matrix.kernel }}
           path: fsp/alma
       - shell: pwsh
-        run: ./fs-probe/win-check.ps1 fsp/alma fsp/check-windows-${{ matrix.kernel }}
+        run: ./fs-probe/win-check.ps1 fsp/alma fsp/check-windows-${{ matrix.kernel }} -Strict
       - shell: pwsh
         if: always()
         # hashFiles() は存在を見るためだけに数 GB の vhd を全部読み、120 秒で

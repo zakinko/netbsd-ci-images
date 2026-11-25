@@ -55,10 +55,14 @@ printf 'ja\n' > "$(printf '\346\227\245\346\234\254\350\252\236').txt"
 chk "printf ja\n > \$(printf \346\227\245\346\234\254\35"
 true > 'with space'
 chk ": > with space"
-true > 'colon:name'
-chk ": > colon:name"
-true > 'back\slash'
-chk ": > back\slash"
+# Windows に無い名前。NTFS に書くと chkdsk が必ず exit 3 を返し、ほかの異常と
+# 見分けられない。NTFS へ書く側は WINDOWS_NAMES=1 で呼ぶ。
+if [ -z "$WINDOWS_NAMES" ]; then
+	true > 'colon:name'
+	chk ": > colon:name"
+	true > 'back\slash'
+	chk ": > back\slash"
+fi
 true > 'Case'
 chk ": > Case"
 true > 'case'

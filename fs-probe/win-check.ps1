@@ -1,7 +1,8 @@
 # Linux (ntfs-3g) が書いた NTFS を Windows の chkdsk にかけ、書いたはずの
 # 中身が Windows から同じに読めるかを突き合わせる。
 #   pwsh win-check.ps1 <indir> <outdir>
-param([string]$In, [string]$Out)
+param([string]$In, [string]$Out, [switch]$Strict)
+$bad = @()
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $In = (Resolve-Path $In).Path; $Out = (Resolve-Path $Out).Path
@@ -22,7 +23,9 @@ foreach ($f in Get-ChildItem -LiteralPath $In -Filter *.vhd) {
 	$d = "$($part.DriveLetter):"
 	$log += "-- chkdsk $d (read-only)"
 	$log += (chkdsk $d 2>&1 | Out-String)
-	$log += "chkdsk exit $LASTEXITCODE"
+	$rc = $LASTEXITCODE
+	$log += "chkdsk exit $rc"
+	if ($rc -ne 0) { $bad += "$name (exit $rc)" }
 	# chkdsk は file record の番号 (16 進) で言う。Linux 側が残した
 	# inode 番号と path の表 (stress.sh) があれば、path に引き直す。
 	$map = Join-Path $In "$name.inodes"
@@ -69,5 +72,7 @@ foreach ($f in Get-ChildItem -LiteralPath $In -Filter *.vhd) {
 	$log | Set-Content -Encoding utf8 $r
 	Get-Content $r
 }
-# chkdsk の exit 3 は「見つけた」という報告で、この step の失敗ではない。
+# 以前は常に 0 を返し、chkdsk の異常が job の成功に隠れていた。
+if ($bad) { Write-Output "chkdsk reported errors: $($bad -join ', ')" }
+if ($bad -and $Strict) { exit 1 }
 exit 0
