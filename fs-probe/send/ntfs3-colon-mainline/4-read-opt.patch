@@ -15,6 +15,13 @@ the default and leaves readlink() as it is, so a link made on Linux to
 C:/x still reads back as it was written.  Junctions are translated with
 either value, as before.
 
+On a volume made on Windows Server 2025, symlinks to T:\src\target_dir
+and T:\src\small read back as T:/src/target_dir and T:/src/small and
+gave ENOENT.  With native_symlink=rel they read back as
+./../src/target_dir and ./../src/small and can be followed.  A relative
+symlink reads the same with both values.  Without the option, 43
+symlinks made on Linux, C:/x among them, read back as written.
+
 Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
 ---
  Documentation/filesystems/ntfs3.rst |  8 +++++++

@@ -10,16 +10,26 @@ With the default mount options a symlink target is cut at its first
   # readlink /mnt/l
   a
 
-ntfs_nls_to_utf16() now splits "file:stream" at the ':' so that a
-lookup can find the stream.  ntfs_create_reparse_buffer() and
-ntfs_set_label() convert with the same function, though neither string
-is a file name.  ntfs_set_label() adds the two lengths back together,
-but by then the ':' has been overwritten with a NUL.
+ntfs_nls_to_utf16() splits "file:stream" at the ':' so that a lookup
+can find the stream.  ntfs_create_reparse_buffer() and ntfs_set_label()
+convert with the same function, though neither string is a file name.
+ntfs_set_label() adds the two lengths back together, but by then the
+':' has been overwritten with a NUL.
 
 Let the caller say whether a stream name is to be split off, and do
 not split for these two.  File names are converted as before.
 
+I made 43 symlinks with a ':' at different places in the target, some
+of them long or not ASCII.  Without the patch 34 read back cut short;
+with it all 43 read back as written, with iocharset=utf8 and with
+iso8859-1, also after a remount.  A link to file:stream opened the
+file and now opens the stream.  The label "a:b" written to
+/proc/fs/ntfs3/<dev>/label was "a" after a remount and is now "a:b".
+Creating, reading, listing and removing a stream gave the same results
+before and after.
+
 Fixes: be310476e886 ("fs/ntfs3: Add basic support for alternative data streams")
+Cc: stable@vger.kernel.org
 Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
 ---
  fs/ntfs3/dir.c     | 26 +++++++++++++++++++++-----

@@ -12,6 +12,11 @@ puts \??\ in front of the substitute name.  That includes "a:b" and
 Do this only for a drive letter, a ':' and a separator, as in C:/dir.
 ntfs_reparse_set_native_symlink() in fs/ntfs makes the same test.
 
+"ln -s C:data.txt l" used to store the substitute name \??\C:data.txt
+without SYMLINK_FLAG_RELATIVE and now stores C:data.txt with it.  A
+link to C:/Windows/System32/drivers/etc/hosts is stored as before, and
+Windows Server 2025 opens the file through it.
+
 Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
 ---
  fs/ntfs3/inode.c | 16 +++++++++++++++-
