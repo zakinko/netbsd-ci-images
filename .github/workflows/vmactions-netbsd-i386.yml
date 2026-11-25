@@ -44,13 +44,17 @@ jobs:
         with:
           repository: vmactions/${{ matrix.c.os }}-vm
           path: act
+      - uses: actions/checkout@v4
+        with:
+          path: .self
+      - run: cp -r .self/.github/e2e .e2e
       - name: conf を足し、取得先を替える
         run: |
           cd act
           case "${{ matrix.c.arch }}" in ppc64le) b=15.1-powerpc64 ;; *) b=11.1 ;; esac
           sed 's/^BUILDER_VERSION=.*/BUILDER_VERSION=9.9.9/' conf/$b.conf > conf/${{ matrix.c.rel }}-${{ matrix.c.arch }}.conf
           cat conf/${{ matrix.c.rel }}-${{ matrix.c.arch }}.conf
-          sed -i 's#^\( *\)await downloadFile(anyvmUrl, anyvmPath);#&\n\1(await import("child_process")).execSync(`sed -i "s,anyvm-org/{}-builder\\".format(config\\[.os.\\]),zakinko/netbsd-ci-images\\"," ${anyvmPath} \&\& grep -n zakinko/netbsd-ci-images ${anyvmPath}`, {stdio: "inherit"});#' index.js
+          python3 ../.e2e/patch.py index.js
           git diff | cat
           git diff --quiet index.js && exit 1 || true
       - uses: ./act
