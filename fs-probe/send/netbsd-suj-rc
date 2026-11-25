@@ -10,6 +10,15 @@ echo "T# $K $M $(uname -v | cut -c1-60)"
 n=0
 for i in $(cat /testimages); do
 	n=$((n + 1)); d=ld$n
+	if [ $M = fsckit ]; then
+		mount -t ffs -o ro /dev/${d}d /mnt > /w/m 2>&1; echo "T $i unclean ro mount exit $? $(tail -1 /w/m)"; umount /mnt 2>/dev/null
+		mount -t ffs -o rw /dev/${d}d /mnt > /w/m 2>&1; echo "T $i unclean rw mount exit $? $(tail -1 /w/m)"; umount /mnt 2>/dev/null
+		/new/fsck_ffs -y -f /dev/r${d}d > /w/f 2>&1; echo "T $i fsck -y exit $? unknown-flags $(grep -c 'UNKNOWN FLAGS' /w/f) $(tail -2 /w/f | tr '\n' ';')"
+		/new/fsck_ffs -n -f /dev/r${d}d > /w/f 2>&1; echo "T $i fsck -n exit $? $(grep -vE '^\*\*|files,|^$' /w/f | head -3 | tr '\n' ';')"
+		dumpfs /dev/r${d}d 2>/dev/null | grep -iE 'clean|^flags' | head -3 | sed "s/^/T $i dumpfs /"
+		mount -t ffs -o rw /dev/${d}d /mnt > /w/m 2>&1; echo "T $i after fsck rw mount exit $? $(tail -1 /w/m)"; umount /mnt 2>/dev/null
+		continue
+	fi
 	mount -t ffs -o ro /dev/${d}d /mnt > /w/m 2>&1; echo "T $i ro mount exit $? $(tail -1 /w/m)"
 	[ -f /mnt/seed/f1 ] && echo "T $i ro reads seed: $(cksum < /mnt/seed/f1)"
 	umount /mnt 2>/dev/null

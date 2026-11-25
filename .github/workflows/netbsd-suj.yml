@@ -107,7 +107,10 @@ jobs:
             run $k clean clean ufs1-suj ufs1-su ufs2-suj-nohash ufs2-suj-hash
             for i in ufs1-suj ufs2-suj-nohash; do run $k kill kill $i; done
           done
-          # 新しいカーネルで殺した image を NetBSD の fsck で直した写し
+          # 新しいカーネルで殺した image を、次の起動で NetBSD の fsck で直す
+          for i in ufs1-suj ufs2-suj-nohash; do gzip -1 -c res/kill-new-$i.img > img/k-$i.img.gz; done
+          run new fsckit fsckit k-ufs1-suj k-ufs2-suj-nohash
+          grep -E "ckhash|hash" res/*.log | head -3 || true
           gzip -1 res/*.img; ls -l res
       - uses: actions/upload-artifact@v4
         if: always()
@@ -132,7 +135,7 @@ jobs:
               dumpfs /dev/$md | grep -E '^flags|clean' | sed "s/^/F $b dumpfs /" | cut -c1-120
               fsck_ffs -n -f /dev/$md > n.txt 2>&1; echo "F $b before -p: fsck -fn exit $?, $(grep -cE 'INCORRECT|BAD|MISSING|UNREF|UNALLOC|WRONG|DUP|ZERO|PARTIALLY' n.txt) complaints"
               cp $i c.img; m2=$(mdconfig -a -t vnode -f c.img)
-              fsck_ffs -p /dev/$m2 > p.txt 2>&1; echo "F $b -p exit $? : $(grep -E 'SU\+J|Journal|journal|CLEAN|clean|UNEXPECTED|MANUALLY|DEPTH' p.txt | head -5 | tr '\n' ';')"
+              fsck_ffs -p /dev/$m2 > p.txt 2>&1; echo "F $b -p exit $? : $(grep -E 'SU\+J|Journal|journal|CLEAN|clean|UNEXPECTED|MANUALLY|DEPTH|HASH|MODIFIED' p.txt | head -6 | tr '\n' ';')"
               fsck_ffs -n -f /dev/$m2 > a.txt 2>&1; echo "F $b after -p: fsck -fn exit $?, $(grep -cE 'INCORRECT|BAD|MISSING|UNREF|UNALLOC|WRONG|DUP|ZERO|PARTIALLY' a.txt) complaints: $(grep -E 'INCORRECT|BAD|MISSING|UNREF|UNALLOC|WRONG|DUP|ZERO' a.txt | head -3 | tr '\n' ';')"
               mount -o ro /dev/$m2 /mnt > m.txt 2>&1 && { echo "F $b seed $(cksum < /mnt/seed/f1) files $(find /mnt -type f | wc -l)"; umount /mnt; }
               # 書いて使う: 深さ 0 の directory の下へ FreeBSD が mkdir する
