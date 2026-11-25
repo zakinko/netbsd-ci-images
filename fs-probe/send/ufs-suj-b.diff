@@ -1,0 +1,17 @@
+diff --git a/fs/ufs/super.c b/fs/ufs/super.c
+index adc41f5d3..c0700198f 100644
+--- a/fs/ufs/super.c
++++ b/fs/ufs/super.c
+@@ -1132,6 +1132,12 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
+ 			UFSD("fs is clean\n");
+ 			break;
+ 		case UFS_FSSTABLE:
++			/* NetBSD's FS_WASCLEAN: mounted, or not unmounted */
++			if ((flags & UFS_ST_MASK) == UFS_ST_44BSD) {
++				pr_err("%s(): fs is active\n", __func__);
++				sb->s_flags |= SB_RDONLY;
++				break;
++			}
+ 			UFSD("fs is stable\n");
+ 			break;
+ 		case UFS_FSLOG:

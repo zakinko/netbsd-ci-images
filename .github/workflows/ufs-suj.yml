@@ -30,7 +30,7 @@ jobs:
   linux:
     needs: ufs1
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -41,7 +41,7 @@ jobs:
           sudo apt-get -q update
           sudo apt-get -qy install virtme-ng qemu-system-x86 flex bison bc libelf-dev libssl-dev dwarves sparse dmsetup
           sudo chmod 666 /dev/kvm
-          git clone -q --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git $HOME/linux
+          git clone -q --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git $HOME/linux
           git -C $HOME/linux log -1 --format='%H %ad'
       - name: 三通りを建てる
         run: |
@@ -53,17 +53,19 @@ jobs:
           grep -E 'CONFIG_UFS_FS|CONFIG_BLK_DEV_(LOOP|DM)=' .config
           make -s -j$(nproc) bzImage; cp arch/x86/boot/bzImage $HOME/bz-base
           touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-base 2>&1
-          for x in clean mtime; do
-            patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/ufs-suj-$x.diff < /dev/null
+          for x in a b c d; do
+            patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/ufs-suj-$x.diff < /dev/null | tee $HOME/p-$x
+            ! grep -E 'offset|fuzz' $HOME/p-$x
             touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-$x 2>&1
-            make -s -j$(nproc) bzImage; cp arch/x86/boot/bzImage $HOME/bz-$x
+            case $x in a|d) make -s -j$(nproc) bzImage; cp arch/x86/boot/bzImage $HOME/bz-$x ;; esac
           done
-          for x in base clean mtime; do grep -E 'warning:|error:' $HOME/w-$x | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$x || true; done
-          for x in clean mtime; do echo "new warnings $x: $(comm -13 $HOME/ws-base $HOME/ws-$x | wc -l)"; comm -13 $HOME/ws-base $HOME/ws-$x; done
+          mv $HOME/bz-d $HOME/bz-all
+          for x in base a b c d; do grep -E 'warning:|error:' $HOME/w-$x | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$x || true; done
+          for x in a b c d; do echo "new warnings $x: $(comm -13 $HOME/ws-base $HOME/ws-$x | wc -l)"; comm -13 $HOME/ws-base $HOME/ws-$x; done
       - name: 写す
         run: |
           mkdir -p out
-          for x in base clean mtime; do
+          for x in base a all; do
             timeout 1500 vng --run $HOME/bz-$x --user root --memory 10G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/ufs-suj-guest.sh $PWD/in $PWD/out $x < /dev/null || echo "vng exit $?"
           done
           ls -l out; cat out/*.txt
