@@ -138,8 +138,11 @@ jobs:
           timeout 600 $SSH sh /root/p/ck/t7.sh v4 | tee v4-t7.txt
           $SSH "cd /root/p/ck/t7 && tar cf - v4.img" > after-t7.tar || true
           tail -n 6 *-atf.txt
-          # 途中で失敗させる remount。何が起きるか分からないので最後に。
+          # 途中で失敗させる remount。何が起きるか分からないので後ろに。
           timeout 600 $SSH sh /root/p/ck/t7.sh v4f fail | tee v4-t7fail.txt || true
+          # snapshot。止まるかもしれないので最後に。
+          timeout 900 $SSH sh /root/p/ck/ck.sh v4 T13 | tee v4-t13.txt || true
+          timeout 120 $SSH "cd /root/p/ck/v4 && tar cf - n-nolog.img" > after-snap.tar || true
       - name: VM を止める
         if: always()
         run: |

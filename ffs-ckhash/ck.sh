@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs inside the NetBSD guest as root: ck.sh <label> [T0 T1 ... T12]
+# Runs inside the NetBSD guest as root: ck.sh <label> [T0 T1 ... T13]
 # Check-hash tests on FreeBSD UFS2 images, plus quota2 and a benchmark.
 # With no test named, runs T1 to T5.
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
@@ -178,6 +178,30 @@ b=$(dumpfs -F a.img 2>/dev/null | awk '{ for (i = 1; i < NF; i++) { if ($i == "s
 echo "alternate at sector ${b:-?}"
 [ -n "$b" ] && fk -b $b -f -n a.img
 rm -f a.img
+
+}
+want T13 && {
+echo "===== T13 a snapshot kept inside a mounted file system with check-hashes"
+mkdir -p /mnt/s
+for o in nolog log; do
+	xz -dc ../plain.img.xz > n-$o.img
+	if [ $o = log ]; then mnt n-$o.img -o log; else mnt n-$o.img; fi && {
+		echo x > $M/before
+		fssconfig fss0 $M $M/snap; echo "$o: fssconfig rc=$?"
+		cp -R /usr/share/misc $M/misc; rm $M/hello; mkdir $M/d; echo y > $M/d/y; sync
+		../fh $M/before; echo "$o: fh rc=$?"
+		mount -t ffs -o ro /dev/fss0 /mnt/s && {
+			ls /mnt/s | tr '\n' ' '; echo
+			cat /mnt/s/hello; echo "$o: cat from the snapshot rc=$?"
+			umount /mnt/s
+		}
+		echo "--- $o: fsck_ffs -f -n of the snapshot"
+		fsck_ffs -f -n /dev/rfss0 2>&1 | q | head -8
+		fssconfig -u fss0; echo "$o: fssconfig -u rc=$?"
+		rm -f $M/snap; sync
+	}; un
+	fk -f -n n-$o.img
+done
 
 }
 echo "=== $L done"
