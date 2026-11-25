@@ -36,6 +36,7 @@ jobs:
     timeout-minutes: 180
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         conf: ${{ fromJSON(inputs.confs != '' && inputs.confs || '["netbsd-11.0-i386","netbsd-10.2-i386","netbsd-10.1-i386","netbsd-10.0-i386","netbsd-9.5-i386","netbsd-9.4-i386","netbsd-9.3-i386","netbsd-9.2-i386","netbsd-9.1-i386","netbsd-9.0-i386"]') }}
     steps:
@@ -71,8 +72,8 @@ jobs:
         id: b
         run: |
           case "${{ matrix.conf }}" in
-          netbsd-*)  echo "repo=anyvm-org/netbsd-builder"  >> $GITHUB_OUTPUT
-                     echo "ref=v2.2.6"  >> $GITHUB_OUTPUT
+          netbsd-*)  echo "repo=zakinko/netbsd-builder"  >> $GITHUB_OUTPUT
+                     echo "ref=i386"  >> $GITHUB_OUTPUT
                      echo "dir=netbsd-builder"  >> $GITHUB_OUTPUT ;;
           freebsd-*) echo "repo=zakinko/freebsd-builder" >> $GITHUB_OUTPUT
                      echo "ref=powerpc64le" >> $GITHUB_OUTPUT
