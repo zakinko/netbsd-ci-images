@@ -22,7 +22,7 @@ jobs:
           git -C $HOME/src log -1 --format='%H %cd'
           mkdir $HOME/dest
           for s in base comp; do
-            curl -sSfL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/latest/amd64/binary/sets/$s.tar.xz | tar -xJf - -C $HOME/dest
+            curl -sSfL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/latest/amd64/binary/sets/$s.tar.xz | tar -xJf - -C $HOME/dest; chmod -R u+w $HOME/dest
           done
       - name: ツール
         run: |
@@ -34,8 +34,8 @@ jobs:
           patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-time.diff < /dev/null | tee $HOME/patch.log
           [ "$(grep -c '^patching file' $HOME/patch.log)" = "$(grep -c '^+++ ' $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-time.diff)" ]
           ! grep -E 'offset|fuzz' $HOME/patch.log
-          cp sys/ufs/ufs/dinode.h $HOME/dest/usr/include/ufs/ufs/
-          cp sys/ufs/ufs/inode.h $HOME/dest/usr/include/ufs/ufs/
+          cp -f sys/ufs/ufs/dinode.h $HOME/dest/usr/include/ufs/ufs/
+          cp -f sys/ufs/ufs/inode.h $HOME/dest/usr/include/ufs/ufs/
       - name: コマンド
         run: |
           cd $HOME/src
