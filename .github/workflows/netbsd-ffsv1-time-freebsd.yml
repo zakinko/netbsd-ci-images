@@ -1,0 +1,30 @@
+name: NetBSD が書いた FFSv1 の 2040 年を FreeBSD で読む
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_run: { description: 'netbsd-ffsv1-time-test の run', type: string, required: true }
+
+jobs:
+  freebsd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: ffsv1-time-test, path: in, run-id: '${{ inputs.test_run }}', github-token: '${{ github.token }}' }
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: |
+            uname -a; export TZ=UTC
+            for now in 202611250000 204001020304; do
+              date $now > /dev/null; echo "T now $(date)"
+              for i in 1 2; do
+                gunzip -c in/d$i.raw.gz > d.img; md=$(mdconfig -a -t vnode -f d.img)
+                mount -t ufs -o ro /dev/$md /mnt || { echo "T d$i mount failed"; mdconfig -d -u $md; continue; }
+                for f in w1960 w2030 w2040 w2100 w2200; do echo "T d$i $f $(stat -f '%m %Sm nsec %Fm' -t %Y-%m-%d /mnt/$f | sed 's/nsec [^.]*\./nsec /')"; done
+                cp -p /mnt/w2040 c1 2>&1; echo "T d$i cp -p exit $? $(stat -f %Sm -t %Y-%m-%d c1)"; rm -f c1
+                umount /mnt; fsck_ffs -fn /dev/$md > f.txt 2>&1; echo "T d$i fsck $? $(grep -vE '^\*\*|^$|files,' f.txt | head -3 | tr '\n' ';')"
+                mdconfig -d -u $md
+              done
+            done
