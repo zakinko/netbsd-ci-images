@@ -50,7 +50,7 @@ jobs:
           case "${{ matrix.c.arch }}" in ppc64le) b=15.1-powerpc64 ;; *) b=11.1 ;; esac
           sed 's/^BUILDER_VERSION=.*/BUILDER_VERSION=9.9.9/' conf/$b.conf > conf/${{ matrix.c.rel }}-${{ matrix.c.arch }}.conf
           cat conf/${{ matrix.c.rel }}-${{ matrix.c.arch }}.conf
-          sed -i 's#^\( *\)await downloadFile(anyvmUrl, anyvmPath);#&\n\1require("child_process").execSync(`sed -i "s,anyvm-org/{}-builder\\".format(config\\[.os.\\]),zakinko/netbsd-ci-images\\"," ${anyvmPath} \&\& grep -n zakinko/netbsd-ci-images ${anyvmPath}`, {stdio: "inherit"});#' index.js
+          sed -i 's#^\( *\)await downloadFile(anyvmUrl, anyvmPath);#&\n\1(await import("child_process")).execSync(`sed -i "s,anyvm-org/{}-builder\\".format(config\\[.os.\\]),zakinko/netbsd-ci-images\\"," ${anyvmPath} \&\& grep -n zakinko/netbsd-ci-images ${anyvmPath}`, {stdio: "inherit"});#' index.js
           git diff | cat
           git diff --quiet index.js && exit 1 || true
       - uses: ./act
