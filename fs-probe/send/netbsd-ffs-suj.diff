@@ -1,0 +1,259 @@
+diff --git a/sbin/fsck_ffs/setup.c b/sbin/fsck_ffs/setup.c
+index e6b9291d..219369c3 100644
+--- a/sbin/fsck_ffs/setup.c
++++ b/sbin/fsck_ffs/setup.c
+@@ -59,6 +59,7 @@ __RCSID("$NetBSD: setup.c,v 1.112 2025/12/18 08:21:44 nia Exp $");
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <time.h>
+ 
+ #include "fsck.h"
+ #include "extern.h"
+@@ -281,6 +282,18 @@ setup(const char *dev, const char *origdev)
+ 			sbdirty();
+ 		}
+ 	}
++	if ((sblock->fs_flags & FS_SUJ) && fswritefd != -1 &&
++	    (is_ufs2 || (sblock->fs_old_flags & FS_FLAGS_UPDATED))) {
++		/*
++		 * FreeBSD's fsck trusts the journal while fs_mtime has not
++		 * changed.  It must not once we have repaired something.
++		 */
++		time_t now = time(NULL);
++
++		sblock->fs_mtime = sblock->fs_mtime == now ? now + 1 : now;
++		sbdirty();
++		flush(fswritefd, &sblk);
++	}
+ 	if (sblock->fs_optim != FS_OPTTIME && sblock->fs_optim != FS_OPTSPACE) {
+ 		pfatal("UNDEFINED OPTIMIZATION IN SUPERBLOCK");
+ 		if (reply("SET TO DEFAULT") == 1) {
+@@ -1037,6 +1050,8 @@ cmpsblks44(const struct fs *sb, struct fs *asb)
+ 	asb->fs_avgfilesize = sb->fs_avgfilesize;
+ 	asb->fs_avgfpdir = sb->fs_avgfpdir;
+ 	asb->fs_save_cgsize = sb->fs_save_cgsize;
++	asb->fs_mtime = sb->fs_mtime;
++	asb->fs_sujfree = sb->fs_sujfree;
+ 	memmove(asb->fs_sparecon32,
+ 		sb->fs_sparecon32, sizeof sb->fs_sparecon32);
+ 	asb->fs_flags = sb->fs_flags;
+diff --git a/sys/ufs/ffs/ffs_bswap.c b/sys/ufs/ffs/ffs_bswap.c
+index 9ccae992..93db470b 100644
+--- a/sys/ufs/ffs/ffs_bswap.c
++++ b/sys/ufs/ffs/ffs_bswap.c
+@@ -97,7 +97,9 @@ ffs_sb_swap(const struct fs *o, struct fs *n)
+ 		n->fs_snapinum[i] = bswap32(o->fs_snapinum[i]);
+ 	n->fs_avgfilesize = bswap32(o->fs_avgfilesize);
+ 	n->fs_avgfpdir = bswap32(o->fs_avgfpdir);
+-	/* fs_sparecon[28] - ignore for now */
++	n->fs_mtime = bswap64(o->fs_mtime);
++	n->fs_sujfree = bswap32(o->fs_sujfree);
++	/* fs_sparecon32 - ignore for now */
+ 	n->fs_flags = bswap32(o->fs_flags);
+ 	n->fs_contigsumsize = bswap32(o->fs_contigsumsize);
+ 	n->fs_maxsymlinklen = bswap32(o->fs_maxsymlinklen);
+@@ -160,6 +162,7 @@ ffs_dinode2_swap(struct ufs2_dinode *o, struct ufs2_dinode *n)
+ 	n->di_kernflags = bswap32(o->di_kernflags);
+ 	n->di_flags = bswap32(o->di_flags);
+ 	n->di_extsize = bswap32(o->di_extsize);
++	n->di_dirdepth = bswap32(o->di_dirdepth);
+ 	memcpy(n->di_extb, o->di_extb, sizeof(n->di_extb));
+ 	memcpy(n->di_db, o->di_db, sizeof(n->di_db));
+ 	memcpy(n->di_ib, o->di_ib, sizeof(n->di_ib));
+diff --git a/sys/ufs/ffs/ffs_vfsops.c b/sys/ufs/ffs/ffs_vfsops.c
+index 647916d7..bc05d51f 100644
+--- a/sys/ufs/ffs/ffs_vfsops.c
++++ b/sys/ufs/ffs/ffs_vfsops.c
+@@ -117,6 +117,7 @@ MODULE(MODULE_CLASS_VFS, ffs, "ufs");
+ static int ffs_vfs_fsync(vnode_t *, int);
+ static int ffs_superblock_validate(struct fs *);
+ static int ffs_is_appleufs(struct vnode *, struct fs *);
++static int ffs_suj_check(struct mount *, struct fs *, int);
+ 
+ static int ffs_init_vnode(struct ufsmount *, struct vnode *, ino_t);
+ static void ffs_deinit_vnode(struct ufsmount *, struct vnode *);
+@@ -663,7 +664,8 @@ ffs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
+ 
+ 			if (ffs_cgupdate(ump, MNT_WAIT) == 0 &&
+ 			    fs->fs_clean & FS_WASCLEAN) {
+-				if (mp->mnt_flag & MNT_SOFTDEP)
++				if ((mp->mnt_flag & MNT_SOFTDEP) &&
++				    (fs->fs_flags & FS_SUJ) == 0)
+ 					fs->fs_flags &= ~FS_DOSOFTDEP;
+ 				fs->fs_clean = FS_ISCLEAN;
+ 				(void) ffs_sbupdate(ump, MNT_WAIT);
+@@ -705,6 +707,11 @@ ffs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
+ 			/*
+ 			 * Changing from read-only to read/write
+ 			 */
++			error = ffs_suj_check(mp, fs, 0);
++			if (error) {
++				DPRINTF("ffs_suj_check returned %d", error);
++				return error;
++			}
+ #ifndef QUOTA2
+ 			if (fs->fs_flags & FS_DOQUOTA2) {
+ 				ump->um_flags |= UFS_QUOTA2;
+@@ -776,7 +783,9 @@ ffs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
+ 	(void)strncpy(fs->fs_fsmnt, mp->mnt_stat.f_mntonname,
+ 	    sizeof(fs->fs_fsmnt));
+ 
+-	fs->fs_flags &= ~FS_DOSOFTDEP;
++	/* ffs_sbupdate() takes care of it with FS_SUJ. */
++	if ((fs->fs_flags & FS_SUJ) == 0)
++		fs->fs_flags &= ~FS_DOSOFTDEP;
+ 
+ 	if ((fs->fs_ronly && (fs->fs_clean & FS_ISCLEAN) == 0) ||
+ 	    (!fs->fs_ronly && (fs->fs_clean & FS_WASCLEAN) == 0)) {
+@@ -813,6 +822,46 @@ fail:
+ 	return (error);
+ }
+ 
++/*
++ * Check a filesystem which FreeBSD uses with journaled soft updates, and
++ * make its journal invalid if we are going to write.
++ */
++static int
++ffs_suj_check(struct mount *mp, struct fs *fs, int ronly)
++{
++
++	if ((fs->fs_flags & FS_SUJ) == 0)
++		return 0;
++
++	/* There is no fs_mtime in the old superblock layout. */
++	if (fs->fs_magic == FS_UFS1_MAGIC &&
++	    (fs->fs_old_flags & FS_FLAGS_UPDATED) == 0 &&
++	    (mp->mnt_flag & MNT_FORCE) == 0) {
++		uprintf("%s: journaled soft updates in an old superblock, "
++		    "not mounting\n", mp->mnt_stat.f_mntonname);
++		return EINVAL;
++	}
++	if (ronly)
++		return 0;
++
++	/* Only FreeBSD can tell what its journal has to say. */
++	if ((fs->fs_clean & FS_ISCLEAN) == 0 &&
++	    (mp->mnt_flag & MNT_FORCE) == 0) {
++		uprintf("%s: journaled soft updates and not clean, "
++		    "mount it read-only or run fsck\n",
++		    mp->mnt_stat.f_mntonname);
++		return EPERM;
++	}
++	if (fs->fs_magic == FS_UFS1_MAGIC &&
++	    (fs->fs_old_flags & FS_FLAGS_UPDATED) == 0)
++		return 0;
++	if (fs->fs_mtime == time_second)
++		fs->fs_mtime++;
++	else
++		fs->fs_mtime = time_second;
++	return 0;
++}
++
+ /*
+  * Reload all incore data for a filesystem (used after running fsck on
+  * the root filesystem and finding things to fix). The filesystem must
+@@ -1401,6 +1450,12 @@ ffs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
+ 		}
+ 	}
+ 
++	error = ffs_suj_check(mp, fs, ronly);
++	if (error) {
++		DPRINTF("ffs_suj_check returned %d", error);
++		goto out;
++	}
++
+ 	fs->fs_fmod = 0;
+ 	if (fs->fs_pendingblocks != 0 || fs->fs_pendinginodes != 0) {
+ 		fs->fs_pendingblocks = 0;
+@@ -2319,6 +2374,15 @@ ffs_newvnode(struct mount *mp, struct vnode *dvp, struct vnode *vp,
+ 	DIP_ASSIGN(ip, flags, 0);
+ 	ip->i_mode = mode;
+ 	DIP_ASSIGN(ip, mode, mode);
++	/*
++	 * FreeBSD may have left the depth of a removed directory, or the
++	 * link of a list of unlinked inodes.  0 is an unknown depth, which
++	 * its fsck fills in.
++	 */
++	if (fs->fs_magic == FS_UFS2_MAGIC)
++		ip->i_ffs2_dirdepth = 0;
++	else if (fs->fs_old_inodefmt >= FS_44INODEFMT)
++		ip->i_ffs1_ouid = ip->i_ffs1_ogid = 0;
+ 	if (vap->va_rdev != VNOVAL) {
+ 		/*
+ 		 * Want to be able to use this to make badblock
+@@ -2457,6 +2521,15 @@ ffs_sbupdate(struct ufsmount *mp, int waitfor)
+ 	bfs = (struct fs *)bp->b_data;
+ 
+ 	bfs->fs_flags &= ~FS_INTERNAL;
++	/*
++	 * FreeBSD takes any fs_clean but 0 as clean when it mounts, and
++	 * FS_DOSOFTDEP as a sign that what a crash left can be checked in
++	 * the background.  Neither holds while we are writing.
++	 */
++	if ((bfs->fs_flags & FS_SUJ) && (bfs->fs_clean & FS_ISCLEAN) == 0) {
++		bfs->fs_clean = 0;
++		bfs->fs_flags &= ~FS_DOSOFTDEP;
++	}
+ 	ffs_oldfscompat_write((struct fs *)bp->b_data, mp);
+ 	if (mp->um_flags & UFS_EA) {
+ 		KASSERT(bfs->fs_magic == FS_UFS2_MAGIC);
+diff --git a/sys/ufs/ffs/fs.h b/sys/ufs/ffs/fs.h
+index ae80600b..aa24d2af 100644
+--- a/sys/ufs/ffs/fs.h
++++ b/sys/ufs/ffs/fs.h
+@@ -354,7 +354,9 @@ struct fs {
+ 	u_int32_t fs_avgfilesize;	/* expected average file size */
+ 	u_int32_t fs_avgfpdir;		/* expected # of files per directory */
+ 	int32_t	 fs_save_cgsize;	/* save real cg size to use fs_bsize */
+-	int32_t	 fs_sparecon32[26];	/* reserved for future constants */
++	int64_t	 fs_mtime;		/* last mount or fsck time (FBSD) */
++	int32_t	 fs_sujfree;		/* SUJ free list (FBSD, unused) */
++	int32_t	 fs_sparecon32[23];	/* reserved for future constants */
+ 	uint32_t fs_flags;		/* see FS_ flags below */
+ /* back to stuff that has been around a while (again) */
+ 	int32_t	 fs_contigsumsize;	/* size of cluster summary array */
+@@ -443,8 +445,14 @@ struct fs {
+ #define	FS_TRIM		0x400	/* discard deleted blocks in storage layer */
+ #define	FS_NFS4ACLS	0x800	/* file system has NFSv4 ACLs enabled */
+ 
++/*
++ * FS_SUJ is kept, but the journal is neither used nor written.  FreeBSD's
++ * fsck trusts the journal while the di_modrev of its inode is the fs_mtime
++ * of the superblock, so fs_mtime has to change before anything is written.
++ */
++
+ /* File system flags that are ok for NetBSD if set in fs_flags */
+-#define	FS_KNOWN_FLAGS	(FS_DOSOFTDEP | FS_DOWAPBL | FS_DOQUOTA2 | \
++#define	FS_KNOWN_FLAGS	(FS_DOSOFTDEP | FS_SUJ | FS_DOWAPBL | FS_DOQUOTA2 | \
+ 	FS_POSIX1EACLS | FS_NFS4ACLS)
+ 
+ /*
+diff --git a/sys/ufs/ufs/dinode.h b/sys/ufs/ufs/dinode.h
+index 172e3e33..2cf29f17 100644
+--- a/sys/ufs/ufs/dinode.h
++++ b/sys/ufs/ufs/dinode.h
+@@ -124,7 +124,10 @@ struct ufs2_dinode {
+ 	int64_t		di_db[UFS_NDADDR]; /* 112: Direct disk blocks. */
+ 	int64_t		di_ib[UFS_NIADDR]; /* 208: Indirect disk blocks. */
+ 	uint64_t	di_modrev;	/* 232: i_modrev for NFSv4 */
+-	int64_t		di_spare[2];	/* 240: Reserved; currently unused */
++	uint32_t	di_dirdepth;	/* 240: FBSD: directory depth, or */
++					/*      SUJ: next unlinked inode */
++	uint32_t	di_spare32;	/* 244: Reserved; currently unused */
++	int64_t		di_spare;	/* 248: Reserved; currently unused */
+ };
+ 
+ /*
+diff --git a/sys/ufs/ufs/inode.h b/sys/ufs/ufs/inode.h
+index 51e34159..f205e59e 100644
+--- a/sys/ufs/ufs/inode.h
++++ b/sys/ufs/ufs/inode.h
+@@ -202,6 +202,7 @@ struct inode {
+ #define	i_ffs2_blksize		i_din.ffs2_din->di_blksize
+ #define	i_ffs2_ctime		i_din.ffs2_din->di_ctime
+ #define	i_ffs2_ctimensec	i_din.ffs2_din->di_ctimensec
++#define	i_ffs2_dirdepth		i_din.ffs2_din->di_dirdepth
+ #define	i_ffs2_db		i_din.ffs2_din->di_db
+ #define	i_ffs2_flags		i_din.ffs2_din->di_flags
+ #define	i_ffs2_gen		i_din.ffs2_din->di_gen

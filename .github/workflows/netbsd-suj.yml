@@ -1,0 +1,142 @@
+name: NetBSD で FreeBSD の SUJ と directory depth の UFS を書く
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run: { description: '建てたカーネルを使い回す run (空なら建てる)', type: string, default: '' }
+
+permissions: { contents: read, actions: read }
+
+jobs:
+  mkimg:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: |
+            set -e
+            mkdir -p img
+            mk() {
+              n=$1; shift
+              truncate -s 256M img/$n.img; md=$(mdconfig -a -t vnode -f img/$n.img)
+              newfs "$@" /dev/$md > /dev/null; mount /dev/$md /mnt
+              mkdir -p /mnt/seed/d1/e1/g1; for k in 1 2 3 4 5; do dd if=/dev/random of=/mnt/seed/f$k bs=10k count=$k 2> /dev/null; done
+              cp /mnt/seed/f1 /mnt/seed/d1/e1/g1/; cksum < /mnt/seed/f1
+              umount /mnt
+              if [ -n "$NOHASH" ]; then
+                # fs_flags (superblock 65536 + 1312、LE) の 0x200 を落とす。tunefs には無い
+                b=$(dd if=img/$n.img bs=1 skip=$((65536+1313)) count=1 2> /dev/null | od -An -tu1 | tr -d ' ')
+                printf "\\$(printf %o $((b & ~2)))" | dd of=img/$n.img bs=1 seek=$((65536+1313)) conv=notrunc 2> /dev/null
+              fi
+              echo "== $n"; dumpfs /dev/$md | grep -E '^flags|check hashes|clean' ; fsck_ffs -n -f /dev/$md > f.txt 2>&1; echo "fsck exit $?"; grep -vE '^\*\*' f.txt | head -5; mdconfig -d -u $md
+            }
+            NOHASH= mk ufs1-suj -O 1 -U -j
+            NOHASH= mk ufs1-su -O 1 -U
+            NOHASH=1 mk ufs2-suj-nohash -O 2 -U -j
+            NOHASH= mk ufs2-suj-hash -O 2 -U -j
+            gzip -1 img/*.img; ls -l img
+      - uses: actions/upload-artifact@v4
+        with: { name: suj-img, path: img, if-no-files-found: error, retention-days: 14 }
+
+  build:
+    if: inputs.build_run == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get -q update; sudo apt-get -qy install zlib1g-dev
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          git clone -q --depth 1 https://github.com/NetBSD/src.git $HOME/src
+          git -C $HOME/src log -1 --format='%H %cd'
+          mkdir $HOME/dest
+          for s in base comp; do curl -sSfL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/latest/amd64/binary/sets/$s.tar.xz | tar -xJf - -C $HOME/dest; done
+          chmod -R u+w $HOME/dest/usr/include/ufs
+          cd $HOME/src
+          patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffs-suj.diff < /dev/null | tee $HOME/patch.log
+          [ "$(grep -c '^patching file' $HOME/patch.log)" = "$(grep -c '^+++ ' $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffs-suj.diff)" ]
+          cp -f sys/ufs/ufs/dinode.h sys/ufs/ufs/inode.h $HOME/dest/usr/include/ufs/ufs/; cp -f sys/ufs/ffs/fs.h $HOME/dest/usr/include/ufs/ffs/
+          ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest tools > $HOME/tools.log 2>&1 || { tail -60 $HOME/tools.log; exit 1; }
+      - run: |
+          cd $HOME/src
+          for d in sbin/fsck_ffs sbin/fsdb sbin/newfs sbin/tunefs usr.sbin/dumpfs; do
+            echo "== $d"; (cd $d && $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no obj dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; exit 1; }
+            grep -E 'warning:|error:' $HOME/l || true
+          done
+          ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest kernel=GENERIC > $HOME/k.log 2>&1 || { grep -E 'error' $HOME/k.log | head; tail -40 $HOME/k.log; exit 1; }
+          cd $GITHUB_WORKSPACE; mkdir -p out
+          gzip -c $(find $HOME/obj -path '*GENERIC/netbsd' | head -1) > out/netbsd.gz
+          cp $(find $HOME/obj -path '*sbin/fsck_ffs/fsck_ffs' -type f | head -1) out/
+      - uses: actions/upload-artifact@v4
+        with: { name: suj-build, path: out, if-no-files-found: error, retention-days: 14 }
+
+  test:
+    needs: [mkimg, build]
+    if: always() && needs.mkimg.result == 'success' && (needs.build.result == 'success' || inputs.build_run != '')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: suj-img, path: img }
+      - uses: actions/download-artifact@v4
+        with: { name: suj-build, path: in, run-id: "${{ inputs.build_run || github.run_id }}", github-token: "${{ github.token }}" }
+      - run: |
+          sudo apt-get -q update; sudo apt-get -qy install qemu-system-x86 e2fsprogs; sudo chmod 666 /dev/kvm
+          mkdir root k res; B=https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/latest/amd64/binary
+          for s in base rescue etc; do curl -sSfL $B/sets/$s.tar.xz | sudo tar -xJpf - -C root; done
+          curl -sSfL $B/sets/kern-GENERIC.tar.xz | tar -xJf - -C k; mv k/netbsd netbsd-old; gunzip -c in/netbsd.gz > netbsd-new
+          sudo mkdir -p root/new root/mnt root/w; sudo cp in/fsck_ffs root/new/; sudo chmod 755 root/new/*
+          sudo cp fs-probe/send/netbsd-suj-rc root/etc/rc
+          run() { # kernel mode tag images...
+            k=$1; m=$2; t=$3; shift 3
+            echo $k | sudo tee root/testkernel > /dev/null; echo $m | sudo tee root/testmode > /dev/null; echo "$@" | sudo tee root/testimages > /dev/null
+            rm -f r.raw; truncate -s 1500M r.raw; sudo mke2fs -q -t ext2 -O none,filetype,sparse_super -I 128 -b 4096 -d root -F r.raw; sudo chmod 666 r.raw
+            D="-drive if=virtio,format=raw,file=r.raw"
+            for i; do gunzip -c img/$i.img.gz > res/$t-$k-$i.img; D="$D -drive if=virtio,format=raw,cache=writeback,file=res/$t-$k-$i.img"; done
+            rm -f c.log
+            timeout 400 qemu-system-x86_64 -M q35 -enable-kvm -cpu host -smp 2 -m 2048 -kernel netbsd-$k -append "console=com root=ld0d rw" $D -display none -serial file:c.log -monitor none -no-reboot &
+            q=$!
+            if [ $m = kill ]; then for x in $(seq 200); do grep -q KILLME c.log 2>/dev/null && break; sleep 1; done; sleep 3; kill -9 $q; pkill -9 -f qemu-system-x86_64; fi
+            wait $q || true
+            echo "##### $k $m"; tr -d '\r' < c.log | grep -E '^T' || tail -40 c.log; cp c.log res/$t-$k-$1.log
+          }
+          for k in old new; do
+            run $k clean clean ufs1-suj ufs1-su ufs2-suj-nohash ufs2-suj-hash
+            for i in ufs1-suj ufs2-suj-nohash; do run $k kill kill $i; done
+          done
+          # 新しいカーネルで殺した image を NetBSD の fsck で直した写し
+          gzip -1 res/*.img; ls -l res
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: suj-res, path: res, retention-days: 14 }
+
+  fsck:
+    needs: test
+    if: always() && needs.test.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: suj-res, path: res }
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: |
+            for g in res/*.img.gz; do
+              gunzip -f $g; i=${g%.gz}; b=$(basename $i .img)
+              md=$(mdconfig -a -t vnode -f $i)
+              echo "F == $b"
+              dumpfs /dev/$md | grep -E '^flags|clean' | sed "s/^/F $b dumpfs /" | cut -c1-120
+              fsck_ffs -n -f /dev/$md > n.txt 2>&1; echo "F $b before -p: fsck -fn exit $?, $(grep -cE 'INCORRECT|BAD|MISSING|UNREF|UNALLOC|WRONG|DUP|ZERO|PARTIALLY' n.txt) complaints"
+              cp $i c.img; m2=$(mdconfig -a -t vnode -f c.img)
+              fsck_ffs -p /dev/$m2 > p.txt 2>&1; echo "F $b -p exit $? : $(grep -E 'SU\+J|Journal|journal|CLEAN|clean|UNEXPECTED|MANUALLY|DEPTH' p.txt | head -5 | tr '\n' ';')"
+              fsck_ffs -n -f /dev/$m2 > a.txt 2>&1; echo "F $b after -p: fsck -fn exit $?, $(grep -cE 'INCORRECT|BAD|MISSING|UNREF|UNALLOC|WRONG|DUP|ZERO|PARTIALLY' a.txt) complaints: $(grep -E 'INCORRECT|BAD|MISSING|UNREF|UNALLOC|WRONG|DUP|ZERO' a.txt | head -3 | tr '\n' ';')"
+              mount -o ro /dev/$m2 /mnt > m.txt 2>&1 && { echo "F $b seed $(cksum < /mnt/seed/f1) files $(find /mnt -type f | wc -l)"; umount /mnt; }
+              # 書いて使う: 深さ 0 の directory の下へ FreeBSD が mkdir する
+              fsck_ffs -y -f /dev/$m2 > y.txt 2>&1
+              mount /dev/$m2 /mnt > m.txt 2>&1 && { mkdir -p /mnt/nb/b/c/new/x/y/z && j=0; while [ $j -lt 50 ]; do mkdir -p /mnt/nb/reuse/m$j/q; j=$((j+1)); done; echo "F $b freebsd mkdir below ok, mount rw ok"; umount /mnt; fsck_ffs -n -f /dev/$m2 > z.txt 2>&1; echo "F $b after freebsd use: exit $? $(grep -cE 'INCORRECT|BAD|MISSING|UNREF' z.txt) complaints"; }
+              mdconfig -d -u $m2; mdconfig -d -u $md; rm -f c.img $i
+            done
