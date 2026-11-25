@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.c.img }} ${{ matrix.c.n }}
+          name: ${{ matrix.c.img }}
           run-id: ${{ matrix.c.run }}
           github-token: ${{ github.token }}
           path: art
