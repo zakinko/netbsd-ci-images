@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Showta Ishizaki <zakinko@snowrabbit.org>
+Date: Thu, 26 Nov 2026 00:30:00 +0900
+Subject: [PATCH] fs/ntfs3: do not split a symlink target or a label at ':'
+
+With the default mount options a symlink target is cut at its first
+':':
+
+  # ln -s a:b /mnt/l
+  # readlink /mnt/l
+  a
+
+ntfs_nls_to_utf16() now splits "file:stream" at the ':' so that a
+lookup can find the stream.  ntfs_create_reparse_buffer() and
+ntfs_set_label() convert with the same function, though neither string
+is a file name.  ntfs_set_label() adds the two lengths back together,
+but by then the ':' has been overwritten with a NUL.
+
+Let the caller say whether a stream name is to be split off, and do
+not split for these two.  File names are converted as before.
+
+Fixes: be310476e886 ("fs/ntfs3: Add basic support for alternative data streams")
+Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
+---
+ fs/ntfs3/dir.c     | 13 ++++++++-----
+ fs/ntfs3/fsntfs.c  | 10 ++--------
+ fs/ntfs3/inode.c   |  6 +++---
+ fs/ntfs3/ntfs_fs.h | 14 +++++++++++---
+ 4 files changed, 24 insertions(+), 19 deletions(-)
+
+diff --git a/fs/ntfs3/dir.c b/fs/ntfs3/dir.c
+index 7ee1a5d..1bf3edb 100644
+--- a/fs/ntfs3/dir.c
++++ b/fs/ntfs3/dir.c
+@@ -171,12 +171,15 @@ static int _utf8s_to_utf16s(const u8 *s, int inlen, enum utf16_endian endian,
+ }
+ 
+ /*
+- * ntfs_nls_to_utf16 - Convert input string to UTF-16.
++ * ntfs_nls_to_utf16_ex - Convert input string to UTF-16.
+  * @name:	Input name.
+  * @name_len:	Input name length.
+  * @uni:	Destination memory.
+  * @max_ulen:	Destination memory.
+  * @endian:	Endian of target UTF-16 string.
++ * @split_ads:	Split the name of a stream off at ':' (mount option 'ads').
++ *		Only a file name has one; a symlink target and a volume
++ *		label keep their ':'.
+  *
+  * This function is called:
+  * - to create NTFS name
+@@ -184,9 +187,9 @@ static int _utf8s_to_utf16s(const u8 *s, int inlen, enum utf16_endian endian,
+  *
+  * Return: UTF-16 string length or error (if negative).
+  */
+-int ntfs_nls_to_utf16(struct ntfs_sb_info *sbi, const u8 *name, u32 name_len,
+-		      struct cpu_str *uni, u32 max_ulen,
+-		      enum utf16_endian endian)
++int ntfs_nls_to_utf16_ex(struct ntfs_sb_info *sbi, const u8 *name,
++			 u32 name_len, struct cpu_str *uni, u32 max_ulen,
++			 enum utf16_endian endian, bool split_ads)
+ {
+ 	int ret, slen, i;
+ 	const u8 *end;
+@@ -201,7 +204,7 @@ int ntfs_nls_to_utf16(struct ntfs_sb_info *sbi, const u8 *name, u32 name_len,
+ 	rcu_read_lock();
+ 	opts = READ_ONCE(sbi->options);
+ 	nls = opts->nls;
+-	ads = opts->ads;
++	ads = split_ads && opts->ads;
+ 	rcu_read_unlock();
+ 
+ 	if (!nls) {
+diff --git a/fs/ntfs3/fsntfs.c b/fs/ntfs3/fsntfs.c
+index 90cb733..38cbc88 100644
+--- a/fs/ntfs3/fsntfs.c
++++ b/fs/ntfs3/fsntfs.c
+@@ -2678,17 +2678,11 @@ int ntfs_set_label(struct ntfs_sb_info *sbi, u8 *label, int len)
+ 	if (!uni)
+ 		return -ENOMEM;
+ 
+-	err = ntfs_nls_to_utf16(sbi, label, len, uni, (PATH_MAX - 2) / 2,
+-				UTF16_LITTLE_ENDIAN);
++	err = ntfs_nls_to_utf16_ex(sbi, label, len, uni, (PATH_MAX - 2) / 2,
++				   UTF16_LITTLE_ENDIAN, false);
+ 	if (err < 0)
+ 		goto out;
+ 
+-	if (uni->ads_len) {
+-		/* Undo delimiter parse */
+-		uni->len += uni->ads_len + 1;
+-		uni->ads_len = 0;
+-	}
+-
+ 	uni_bytes = uni->len * sizeof(u16);
+ 	if (uni_bytes > NTFS_LABEL_MAX_LENGTH * sizeof(u16)) {
+ 		ntfs_warn(sbi->sb, "new label is too long");
+diff --git a/fs/ntfs3/inode.c b/fs/ntfs3/inode.c
+index 86d9ba8..0cf6835 100644
+--- a/fs/ntfs3/inode.c
++++ b/fs/ntfs3/inode.c
+@@ -1331,9 +1331,9 @@ ntfs_create_reparse_buffer(struct ntfs_sb_info *sbi, const char *symname,
+ 	rp_name = rs->PathBuffer;
+ 
+ 	/* Convert link name to UTF-16. */
+-	err = ntfs_nls_to_utf16(sbi, symname, size,
+-				(struct cpu_str *)(rp_name - 1), 2 * size,
+-				UTF16_LITTLE_ENDIAN);
++	err = ntfs_nls_to_utf16_ex(sbi, symname, size,
++				   (struct cpu_str *)(rp_name - 1), 2 * size,
++				   UTF16_LITTLE_ENDIAN, false);
+ 	if (err < 0)
+ 		goto out;
+ 
+diff --git a/fs/ntfs3/ntfs_fs.h b/fs/ntfs3/ntfs_fs.h
+index f400cf9..7a02091 100644
+--- a/fs/ntfs3/ntfs_fs.h
++++ b/fs/ntfs3/ntfs_fs.h
+@@ -539,9 +539,17 @@ size_t get_set_bits_ex(const void *map, size_t bit, size_t nbits);
+ /* Globals from dir.c */
+ int ntfs_utf16_to_nls(struct ntfs_sb_info *sbi, const __le16 *name, u32 len,
+ 		      u8 *buf, int buf_len);
+-int ntfs_nls_to_utf16(struct ntfs_sb_info *sbi, const u8 *name, u32 name_len,
+-		      struct cpu_str *uni, u32 max_ulen,
+-		      enum utf16_endian endian);
++int ntfs_nls_to_utf16_ex(struct ntfs_sb_info *sbi, const u8 *name,
++			 u32 name_len, struct cpu_str *uni, u32 max_ulen,
++			 enum utf16_endian endian, bool split_ads);
++/* Convert a file name. With 'ads', "file:stream" is split at ':'. */
++static inline int ntfs_nls_to_utf16(struct ntfs_sb_info *sbi, const u8 *name,
++				    u32 name_len, struct cpu_str *uni,
++				    u32 max_ulen, enum utf16_endian endian)
++{
++	return ntfs_nls_to_utf16_ex(sbi, name, name_len, uni, max_ulen, endian,
++				    true);
++}
+ struct inode *dir_search_flags(struct inode *dir, const struct cpu_str *uni,
+ 			       struct ntfs_fnd *fnd, u32 flags);
+ static inline struct inode *dir_search(struct inode *dir,

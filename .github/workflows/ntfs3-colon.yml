@@ -1,0 +1,97 @@
+name: ntfs3 の ':' と Windows の絶対 symlink を、当て物を積みながら測る
+
+# 核: base、colon (1)、opt (1 + 01a + create + native_symlink の read)、
+# uncond (同、read が無条件の版)。KASAN 付き。
+on:
+  workflow_dispatch:
+    inputs:
+      images_run: { description: 'src-windows の artifact を持つ fs-probe の run', type: string, default: '45574974831' }
+
+concurrency: { group: ntfs3-colon, cancel-in-progress: true }
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { tree: mainline, url: 'https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git' }
+          - { tree: paragon, url: 'https://github.com/Paragon-Software-Group/linux-ntfs3.git' }
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: src-windows, path: in, run-id: '${{ inputs.images_run }}', github-token: '${{ github.token }}' }
+      - run: |
+          sudo apt-get -q update
+          sudo apt-get -qy install virtme-ng qemu-system-x86 qemu-utils flex bison bc libelf-dev libssl-dev dwarves sparse ntfs-3g
+          sudo chmod 666 /dev/kvm
+          ls -l in
+          for i in 1 2 3 4; do git clone -q --depth 1 -b master ${{ matrix.url }} $HOME/linux && break; sleep 30; done
+          git -C $HOME/linux log -1 --format='%H %ad'
+      - name: 建てる
+        run: |
+          set -e
+          P=$GITHUB_WORKSPACE/fs-probe/send/ntfs3-colon-${{ matrix.tree }}
+          cd $HOME/linux
+          make -s x86_64_defconfig kvm_guest.config
+          scripts/config -e BLK_DEV_LOOP -e NLS_UTF8 -e NLS_ISO8859_1 -e VIRTIO_FS -e FUSE_FS -e OVERLAY_FS -e NET_9P -e NET_9P_VIRTIO -e 9P_FS -e TMPFS \
+            -d NTFS_FS -e NTFS3_FS -e NTFS3_LZX_XPRESS -e KASAN -e KASAN_GENERIC -d KASAN_INLINE -e KASAN_OUTLINE
+          make -s olddefconfig
+          grep -q '^CONFIG_NTFS3_FS=y' .config; grep -q '^CONFIG_KASAN=y' .config
+          grep -E 'CONFIG_NTFS|CONFIG_KASAN|CONFIG_NLS_ISO8859_1=|CONFIG_NLS_DEFAULT=' .config
+          make -s -j$(nproc) bzImage
+          cp arch/x86/boot/bzImage $HOME/bz-base
+          w() { touch fs/ntfs3/*.c; make W=1 C=1 fs/ntfs3/ 2>&1 | grep -E 'warning:|error:' | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$1 || true; }
+          w base; echo "base warnings $(wc -l < $HOME/ws-base)"
+          # 一段ずつ、ずれも fuzz も無く当たり、W=1 と sparse の警告が増えず、建つこと
+          stage() {	# patch [-R]
+            patch -p1 -F0 -f $2 -i $P/$1.patch < /dev/null > $HOME/pl; cat $HOME/pl
+            [ $(grep -ciE 'offset|fuzz' $HOME/pl) = 0 ] || { echo "stage $1: offset or fuzz"; exit 1; }
+            [ -n "$2" ] && return 0
+            perl scripts/checkpatch.pl --strict $P/$1.patch > $HOME/ck-$1 || true
+            echo "stage $1 checkpatch: $(grep '^total:' $HOME/ck-$1)"; grep -E '^(WARNING|ERROR|CHECK)' $HOME/ck-$1 | sort | uniq -c || true
+            w $1; k=$(comm -13 $HOME/ws-base $HOME/ws-$1 | wc -l); comm -13 $HOME/ws-base $HOME/ws-$1
+            make -s -j$(nproc) bzImage
+            echo "stage $1: exact, builds, new warnings $k"; [ $k = 0 ]
+          }
+          stage 1-colon; cp arch/x86/boot/bzImage $HOME/bz-colon
+          stage 2-01a; stage 3-create
+          stage 4-read-opt; cp arch/x86/boot/bzImage $HOME/bz-opt
+          stage 4-read-opt -R
+          stage 4-read-uncond; cp arch/x86/boot/bzImage $HOME/bz-uncond
+      - name: 測る
+        run: |
+          mkdir -p out
+          for x in base colon opt uncond; do
+            timeout 1500 vng --run $HOME/bz-$x --user root --memory 6G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/ntfs3-colon-guest.sh $PWD/in $PWD/out $x < /dev/null || echo "vng exit $?"
+          done
+          cat out/*.txt | tee -a $GITHUB_STEP_SUMMARY
+          for x in base colon opt uncond; do grep -q '^END' out/$x.txt; done
+          ! grep -h '^!!' out/*.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: 'colon-out-${{ matrix.tree }}', path: out, retention-days: 14 }
+
+  windows:
+    needs: linux
+    if: always()
+    strategy: { fail-fast: false, matrix: { tree: [mainline, paragon] } }
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: 'colon-out-${{ matrix.tree }}', path: out }
+      - shell: bash
+        run: |
+          cd out
+          for g in *.vhd.gz; do gunzip -f $g; done
+      - shell: pwsh
+        run: ./fs-probe/win-links.ps1 out chk
+      - shell: bash
+        run: cat chk/*.links | tr -d '\r' | tee -a $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: 'colon-win-${{ matrix.tree }}', path: chk }

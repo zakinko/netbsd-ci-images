@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Showta Ishizaki <zakinko@snowrabbit.org>
+Date: Thu, 26 Nov 2026 00:30:00 +0900
+Subject: [PATCH] fs/ntfs3: mark a new symlink absolute only for a full path on
+ a drive
+
+ntfs_create_reparse_buffer() takes any target whose second character is
+':' for an absolute Windows path: it clears SYMLINK_FLAG_RELATIVE and
+puts \??\ in front of the substitute name.  That includes "a:b" and
+"C:x", which are not full paths.
+
+Do this only for a drive letter, a ':' and a separator, as in C:/dir.
+ntfs_reparse_set_native_symlink() in fs/ntfs makes the same test.
+
+Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
+---
+ fs/ntfs3/inode.c | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/fs/ntfs3/inode.c b/fs/ntfs3/inode.c
+index b74fe86..b8b6b4a 100644
+--- a/fs/ntfs3/inode.c
++++ b/fs/ntfs3/inode.c
+@@ -1311,6 +1311,20 @@ static inline u32 ntfs_reparse_bytes(u32 uni_len, bool is_absolute)
+ 			SymbolicLinkReparseBuffer.PathBuffer);
+ }
+ 
++/*
++ * ntfs_path_on_drive - Is this a full path on a drive, such as C:/dir?
++ *
++ * Windows always has a separator after the colon of a full path.  Without
++ * it the colon is just a character of a name, as far as Linux is
++ * concerned.
++ */
++static bool ntfs_path_on_drive(const char *path)
++{
++	return ((path[0] >= 'A' && path[0] <= 'Z') ||
++		(path[0] >= 'a' && path[0] <= 'z')) &&
++	       path[1] == ':' && (path[2] == '/' || path[2] == '\\');
++}
++
+ static struct REPARSE_DATA_BUFFER *
+ ntfs_create_reparse_buffer(struct ntfs_sb_info *sbi, const char *symname,
+ 			   u32 size, u16 *nsize)
+@@ -1321,7 +1335,7 @@ ntfs_create_reparse_buffer(struct ntfs_sb_info *sbi, const char *symname,
+ 	typeof(rp->SymbolicLinkReparseBuffer) *rs;
+ 	bool is_absolute;
+ 
+-	is_absolute = symname[0] && symname[1] == ':';
++	is_absolute = ntfs_path_on_drive(symname);
+ 
+ 	rp = kzalloc(ntfs_reparse_bytes(2 * size + 2, is_absolute), GFP_NOFS);
+ 	if (!rp)

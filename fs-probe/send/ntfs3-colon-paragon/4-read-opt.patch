@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Showta Ishizaki <zakinko@snowrabbit.org>
+Date: Thu, 26 Nov 2026 00:30:00 +0900
+Subject: [PATCH] fs/ntfs3: add native_symlink=rel to follow absolute symlinks
+
+A symlink that Windows made to a full path, T:\dir, reads back as
+T:/dir and cannot be followed.  A junction has the same kind of target,
+and ntfs_translate_junction() already turns that into a path relative
+to the link.
+
+Add the mount option native_symlink=raw|rel, named as in fs/ntfs.  With
+"rel", a symlink without SYMLINK_FLAG_RELATIVE whose target starts with
+a drive letter is translated the same way (MS-FSCC 2.1.2.4).  "raw" is
+the default and leaves readlink() as it is, so a link made on Linux to
+C:/x still reads back as it was written.  Junctions are translated with
+either value, as before.
+
+Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
+---
+ Documentation/filesystems/ntfs3.rst |  8 +++++++
+ fs/ntfs3/inode.c                    | 33 ++++++++++++++++++++++++++---
+ fs/ntfs3/ntfs_fs.h                  |  1 +
+ fs/ntfs3/super.c                    | 22 ++++++++++++++++++-
+ 4 files changed, 60 insertions(+), 4 deletions(-)
+
+diff --git a/Documentation/filesystems/ntfs3.rst b/Documentation/filesystems/ntfs3.rst
+index e1d86dc..e79a6b9 100644
+--- a/Documentation/filesystems/ntfs3.rst
++++ b/Documentation/filesystems/ntfs3.rst
+@@ -124,6 +124,14 @@ this table marked with no it means default is without **no**.
+        Creating a file together with a stream in a single call, and
+        renaming a stream, are not supported. Enabled by default.
+ 
++   * - native_symlink=
++     - How readlink() gives the target of a symlink made by Windows to a
++       full path on a drive, such as C:\\dir. With ``raw``, the default, it
++       is given as it is stored, C:/dir, which cannot be followed. With
++       ``rel`` it is given as a path relative to the link, on the
++       assumption that the drive is this volume, as is always done for
++       junctions.
++
+    * - nocase
+      - Perform file name lookups case-insensitively.
+ 
+diff --git a/fs/ntfs3/inode.c b/fs/ntfs3/inode.c
+index 8552f18..94ca968 100644
+--- a/fs/ntfs3/inode.c
++++ b/fs/ntfs3/inode.c
+@@ -2055,7 +2055,8 @@ void ntfs_evict_inode(struct inode *inode)
+ /*
+  * ntfs_translate_junction
+  *
+- * Translate a Windows junction target to the Linux equivalent.
++ * Translate the target of a Windows junction, or of a symlink to a path
++ * on a drive, to the Linux equivalent.
+  * On junctions, targets are always absolute (they include the drive
+  * letter). We have no way of knowing if the target is for the current
+  * mounted device or not so we just assume it is.
+@@ -2235,6 +2236,27 @@ static int ntfs_strip_nt_prefix(char *name, int len)
+ 	return len - prefix_len;
+ }
+ 
++/*
++ * ntfs_symlink_on_drive - Is a symlink target a full path on a drive?
++ * @rp:		reparse data of the link.
++ * @target:	link target, already with '\' turned into '/'.
++ *
++ * MS-FSCC 2.1.2.4: without SYMLINK_FLAG_RELATIVE the target is a full
++ * path name.  Windows writes it with a drive letter, as in C:/dir, which
++ * means nothing on this side.  A full path without a drive letter, such
++ * as a UNC name, is not one of these.
++ */
++static bool ntfs_symlink_on_drive(const struct REPARSE_DATA_BUFFER *rp,
++				  const char *target)
++{
++	if (rp->ReparseTag != IO_REPARSE_TAG_SYMLINK)
++		return false;
++	if (le32_to_cpu(rp->SymbolicLinkReparseBuffer.Flags) &
++	    SYMLINK_FLAG_RELATIVE)
++		return false;
++	return ntfs_path_on_drive(target);
++}
++
+ static noinline int ntfs_readlink_hlp(const struct dentry *link_de,
+ 				      struct inode *inode, char *buffer,
+ 				      int buflen)
+@@ -2366,8 +2388,13 @@ static noinline int ntfs_readlink_hlp(const struct dentry *link_de,
+ 	if (nt_path)
+ 		err = ntfs_strip_nt_prefix(buffer, err);
+ 
+-	/* If this is a junction, translate the link target. */
+-	if (rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT)
++	/*
++	 * If this is a junction, translate the link target.  With
++	 * native_symlink=rel, also that of a symlink to a path on a drive.
++	 */
++	if (rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT ||
++	    (sbi->options->native_symlink_rel &&
++	     ntfs_symlink_on_drive(rp, buffer)))
+ 		err = ntfs_translate_junction(sb, link_de, buffer, err, buflen);
+ 
+ out:
+diff --git a/fs/ntfs3/ntfs_fs.h b/fs/ntfs3/ntfs_fs.h
+index 7a02091..47ee487 100644
+--- a/fs/ntfs3/ntfs_fs.h
++++ b/fs/ntfs3/ntfs_fs.h
+@@ -114,6 +114,7 @@ struct ntfs_mount_options {
+ 	unsigned delalloc : 1; /* delay allocation. */
+ 	unsigned ads : 1; /* ads support. */
+ 	unsigned ugm : 1; /* store user/group/mode in xattr. */
++	unsigned native_symlink_rel : 1; /* Translate absolute symlinks. */
+ };
+ 
+ /* Special value to unpack and deallocate. */
+diff --git a/fs/ntfs3/super.c b/fs/ntfs3/super.c
+index 29aabdc..5f8c75a 100644
+--- a/fs/ntfs3/super.c
++++ b/fs/ntfs3/super.c
+@@ -259,6 +259,17 @@ static void put_mount_options_rcu(struct rcu_head *head)
+ 	put_mount_options(container_of(head, struct ntfs_mount_options, rcu));
+ }
+ 
++enum {
++	NATIVE_SYMLINK_RAW,
++	NATIVE_SYMLINK_REL,
++};
++
++static const struct constant_table ntfs_native_symlink_enums[] = {
++	{ "raw",	NATIVE_SYMLINK_RAW },
++	{ "rel",	NATIVE_SYMLINK_REL },
++	{}
++};
++
+ enum Opt {
+ 	Opt_uid,
+ 	Opt_gid,
+@@ -285,6 +296,7 @@ enum Opt {
+ 	Opt_ads_bool,
+ 	Opt_ugm,
+ 	Opt_ugm_bool,
++	Opt_native_symlink,
+ 	Opt_err,
+ };
+ 
+@@ -315,6 +327,8 @@ static const struct fs_parameter_spec ntfs_fs_parameters[] = {
+ 	fsparam_bool("ads",		Opt_ads_bool),
+ 	fsparam_flag("ugm",		Opt_ugm),
+ 	fsparam_bool("ugm",		Opt_ugm_bool),
++	fsparam_enum("native_symlink",	Opt_native_symlink,
++		     ntfs_native_symlink_enums),
+ 	{}
+ };
+ // clang-format on
+@@ -357,7 +371,8 @@ static int ntfs_fs_parse_param(struct fs_context *fc,
+ 		pr_err("ntfs3: unknown option \"%s\". Use uid,gid,umask,"
+ 		       "dmask,fmask,sys_immutable,discard,force,sparse,"
+ 		       "nohidden,hide_dot_files,windows_names,showmeta,acl,"
+-		       "iocharset,prealloc,nocase,delalloc,ads,ugm",
++		       "iocharset,prealloc,nocase,delalloc,ads,ugm,"
++		       "native_symlink",
+ 		       param->key);
+ 		return -ENOPARAM;
+ 	}
+@@ -461,6 +476,9 @@ static int ntfs_fs_parse_param(struct fs_context *fc,
+ 	case Opt_ugm_bool:
+ 		opts->ugm = result.boolean;
+ 		break;
++	case Opt_native_symlink:
++		opts->native_symlink_rel = result.uint_32 == NATIVE_SYMLINK_REL;
++		break;
+ 	default:
+ 		/* Should not be here unless we forget add case. */
+ 		return -EINVAL;
+@@ -850,6 +868,8 @@ static int ntfs_show_options(struct seq_file *m, struct dentry *root)
+ 		seq_puts(m, ",delalloc");
+ 	if (opts->ads)
+ 		seq_puts(m, ",ads");
++	if (opts->native_symlink_rel)
++		seq_puts(m, ",native_symlink=rel");
+ 
+ 	return 0;
+ }

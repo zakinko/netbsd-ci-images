@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Showta Ishizaki <zakinko@snowrabbit.org>
+Date: Thu, 26 Nov 2026 00:30:00 +0900
+Subject: [PATCH] fs/ntfs3: translate absolute symlinks to a path on a drive
+
+A symlink that Windows made to a full path, T:\dir, reads back as
+T:/dir and cannot be followed.  Junctions already have their target
+translated to a path on the volume.  Do the same for a symlink without
+SYMLINK_FLAG_RELATIVE whose target starts with a drive letter
+(MS-FSCC 2.1.2.4).
+
+Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
+---
+ fs/ntfs3/inode.c | 33 ++++++++++++++++++++++++++++++---
+ 1 file changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/fs/ntfs3/inode.c b/fs/ntfs3/inode.c
+index b8b6b4a..747e228 100644
+--- a/fs/ntfs3/inode.c
++++ b/fs/ntfs3/inode.c
+@@ -2050,7 +2050,8 @@ void ntfs_evict_inode(struct inode *inode)
+ /*
+  * ntfs_translate_junction
+  *
+- * Translate a Windows junction target to the Linux equivalent.
++ * Translate the target of a Windows junction, or of a symlink to a path
++ * on a drive, to the Linux equivalent.
+  * On junctions, targets are always absolute (they include the drive
+  * letter). We have no way of knowing if the target is for the current
+  * mounted device or not so we just assume it is.
+@@ -2230,6 +2231,28 @@ static int ntfs_strip_nt_prefix(char *name, int len)
+ 	return len - prefix_len;
+ }
+ 
++/*
++ * ntfs_symlink_on_drive - Is a symlink target a full path on a drive?
++ * @rp:		reparse data of the link.
++ * @target:	link target, already with '\' turned into '/'.
++ *
++ * MS-FSCC 2.1.2.4: without SYMLINK_FLAG_RELATIVE the target is a full
++ * path name.  Windows writes it with a drive letter, as in C:/dir, which
++ * means nothing on this side, so such a target is translated the way a
++ * junction is.  A full path without a drive letter, such as a UNC name,
++ * is left as it is.
++ */
++static bool ntfs_symlink_on_drive(const struct REPARSE_DATA_BUFFER *rp,
++				  const char *target)
++{
++	if (rp->ReparseTag != IO_REPARSE_TAG_SYMLINK)
++		return false;
++	if (le32_to_cpu(rp->SymbolicLinkReparseBuffer.Flags) &
++	    SYMLINK_FLAG_RELATIVE)
++		return false;
++	return ntfs_path_on_drive(target);
++}
++
+ static noinline int ntfs_readlink_hlp(const struct dentry *link_de,
+ 				      struct inode *inode, char *buffer,
+ 				      int buflen)
+@@ -2361,8 +2384,12 @@ static noinline int ntfs_readlink_hlp(const struct dentry *link_de,
+ 	if (nt_path)
+ 		err = ntfs_strip_nt_prefix(buffer, err);
+ 
+-	/* If this is a junction, translate the link target. */
+-	if (rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT)
++	/*
++	 * If this is a junction or a symlink to a path on a drive,
++	 * translate the link target.
++	 */
++	if (rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT ||
++	    ntfs_symlink_on_drive(rp, buffer))
+ 		err = ntfs_translate_junction(sb, link_de, buffer, err, buflen);
+ 
+ out:
