@@ -1,0 +1,124 @@
+name: NetBSD の FFS check hash (v3) を建てて試す
+
+# 手で回すだけ。trunk (v3 の根元) と v3 を同じ道具で建て、同じ VM で比べる。
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ffs-ckhash
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - run: |
+          sudo apt-get -q update; sudo apt-get -qy install zlib1g-dev
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          git clone -q --depth 6 -b ffs-metackhash-v3 https://github.com/zakinko/NetBSD-src.git $HOME/src
+          git -C $HOME/src log --format='%H %cd %s'
+          SNAP=$(curl -fsSL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/ | grep -oE '20[0-9]{12}Z' | sort -u | tail -1)
+          curl -fsI https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/$SNAP/amd64/binary/sets/tests.tar.xz | head -1
+          mkdir -p $HOME/dest $GITHUB_WORKSPACE/out; echo $SNAP | tee $GITHUB_WORKSPACE/out/snap
+          for s in base comp; do
+            curl -sSfL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/$SNAP/amd64/binary/sets/$s.tar.xz | tar -xJf - -C $HOME/dest
+          done
+          chmod -R u+w $HOME/dest/usr/include
+      - name: ツール
+        run: |
+          cd $HOME/src
+          ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest tools > $HOME/tools.log 2>&1 || { tail -60 $HOME/tools.log; exit 1; }
+      - name: 対照と v3
+        run: |
+          cd $HOME/src
+          for v in ctl v3; do
+            if [ $v = ctl ]; then git checkout -q ffs-metackhash-v3~5; else git checkout -q ffs-metackhash-v3; fi
+            git log -1 --format='%H %s'
+            O=$HOME/obj.$v; D=$GITHUB_WORKSPACE/out/$v; mkdir -p $D $O
+            cp -f sys/ufs/ffs/*.h $HOME/dest/usr/include/ufs/ffs/; cp -f sys/ufs/ufs/*.h $HOME/dest/usr/include/ufs/ufs/
+            ./build.sh -U -u -V BUILDID= -m amd64 -j4 -O $O -T $HOME/tools -D $HOME/dest kernel=GENERIC > $HOME/k.log 2>&1 || { grep -E 'error' $HOME/k.log | head; tail -40 $HOME/k.log; exit 1; }
+            grep -E 'warning:' $HOME/k.log | sort -u | head
+            cp $(find $O -path '*GENERIC/netbsd' | head -1) $D/netbsd
+            for d in sbin/fsck_ffs sbin/fsdb sbin/tunefs sys/rump/fs/lib/libffs; do
+              echo "== $v $d"
+              (cd $d && export MAKEOBJDIRPREFIX=$O; $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no cleandir > /dev/null 2>&1; $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no obj dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; exit 1; }
+              grep -E 'warning:|error:' $HOME/l || true
+            done
+            for b in fsck_ffs fsdb tunefs; do cp $(find $HOME/obj* sbin/$b -path "*sbin/$b/*" -name $b -type f -newer $D/netbsd | head -1) $D/$b; done
+            cp $(find $HOME/obj* sys/rump/fs/lib/libffs -name 'librumpfs_ffs.so.*.*' -type f -newer $D/netbsd | head -1) $D/librumpfs_ffs.so
+            sha256sum $D/*
+          done
+      - uses: actions/upload-artifact@v4
+        with: { name: ffs-ckhash-build, path: out, retention-days: 14, if-no-files-found: error }
+
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: ffs-ckhash-build, path: ffs-ckhash }
+      - run: |
+          sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 netcat-openbsd
+          sudo chmod 666 /dev/kvm
+          B=https://github.com/${{ github.repository }}/releases/download/images
+          curl -fsSL -O $B/amd64-11.0.qcow2; curl -fsSL -O $B/amd64-11.0.qemu
+          KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
+      - name: 対照、v3
+        run: |
+          set -x
+          SNAP=$(cat ffs-ckhash/snap)
+          SSH=$(cat ./amd64-11.0.ssh)
+          alive() { n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && return 1; sleep 5; done; }
+          # shutdown(8) は -current の DIAGNOSTIC kernel で pg_remove() の KASSERT を踏む。
+          reboot_in() { $SSH "$1; (sleep 5; sync; sync; /sbin/reboot -q) >/dev/null 2>&1 &" || true; sleep 40; alive; }
+          (cd ffs-ckhash && tar cf - .) | $SSH 'mkdir -p /root/p/ck && cd /root/p/ck && tar xf -'
+          is() { v=$($SSH uname -v); echo "$v"; w=$(strings -a ffs-ckhash/$1/netbsd | grep -m1 -E '^NetBSD 11.*GENERIC' ); case "NetBSD $v" in *"$(echo "$w" | grep -oE '#[0-9]+: .* UTC 20[0-9]+')"*) ;; *) echo "expected $w"; exit 1;; esac; }
+          reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"; $SSH uname -v | grep 11.99
+          reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"; $SSH uname -v | grep 11.99
+          $SSH ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile
+          for v in ctl v3; do
+            reboot_in "sh /root/p/ck/install.sh $v"; is $v
+            if [ $v = v3 ]; then T="T1 T2 T4 T5 T6"; else T="T1 T4 T5"; fi
+            $SSH sh /root/p/ck/ck.sh $v $T | tee $v.txt
+            $SSH sh /root/p/ck/atf.sh $v | tee $v-atf.txt
+          done
+          $SSH "cd /root/p/ck/v3 && tar cf - e1.img c-sb.img c-cg.img c-ino.img q.img" > after.tar
+          # T3 は stock が止まるので v3 だけ、最後に。
+          timeout 900 $SSH sh /root/p/ck/ck.sh v3 T3 | tee v3-t3.txt
+          $SSH "cd /root/p/ck/v3 && tar cf - w.img" > after-w.tar
+          tail -n 6 *-atf.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ffs-ckhash-after
+          retention-days: 14
+          path: |
+            *.txt
+            *.tar
+            amd64-11.0.console.log
+      - if: always()
+        run: DIR=. sh stopvm.sh amd64-11.0 || true; tail -80 amd64-11.0.console.log || true
+
+  freebsd:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: ffs-ckhash-after, path: after }
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: |
+            cd after; for t in *.tar; do tar xf $t; done
+            for i in *.img; do
+              [ $i = q.img ] && continue
+              echo "== $i"; md=$(mdconfig -a -t vnode -f $i)
+              dumpfs /dev/$md | grep -E 'check hashes|flags' | head -3
+              fsck_ffs -n -f /dev/$md > f.txt 2>&1; echo "fsck exit $?"; grep -v '^\*\*' f.txt | head -14
+              mount -o ro /dev/$md /mnt && ls /mnt | tr '\n' ' ' && umount /mnt
+              mdconfig -d -u $md
+            done
