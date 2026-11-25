@@ -1,57 +1,73 @@
 name: vmactions 向け NetBSD イメージ
 
-# NetBSD/i386 10.0 が起動の途中で page fault する件を、runner の CPU と
-# -cpu の指定で分ける。
+# 焼けたイメージを、上流の action (vmactions/<os>-vm) から起動してみる。
+# action と anyvm.py は上流の物で、conf を足し、イメージの取得先だけ
+# この repo の仮 release に替える。
 on:
   workflow_dispatch:
     inputs:
       confs:
+        description: 'JSON の配列。{"run":"焼いた run","img":"freebsd-15.1-ppc64le","os":"freebsd","rel":"15.1","arch":"ppc64le"}'
         type: string
-        default: '[1,2,3,4,5,6,7,8,9,10,11,12]'
+        required: true
+
+permissions:
+  contents: write
+  actions: read
 
 jobs:
-  cpu:
-    name: cpu ${{ matrix.n }}
+  use:
+    name: ${{ matrix.c.img }} ${{ matrix.c.n }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 6
       matrix:
-        n: ${{ fromJSON(inputs.confs) }}
+        c: ${{ fromJSON(inputs.confs) }}
     steps:
-      - run: |
-          sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 zstd >/dev/null
-          sudo chmod 666 /dev/kvm
-          grep -m1 'model name' /proc/cpuinfo
-          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -E '^(amx|avx512f$|pku$|xsave)' | tr '\n' ' '; echo
-          grep -q amx_tile /proc/cpuinfo || [ ${{ matrix.n }} = 1 ] || { echo "RESULT noamx-host SKIP"; exit 0; }
-          for v in 10.0 10.1 10.2 11.0 11.1; do
-            curl -sfLO https://github.com/$GITHUB_REPOSITORY/releases/download/v9.9.9/netbsd-$v-i386.qcow2.zst
-            zstd -dq netbsd-$v-i386.qcow2.zst && rm netbsd-$v-i386.qcow2.zst
-          done
-          for v in 10.1 10.2 11.1; do
-            curl -sfL https://github.com/anyvm-org/netbsd-builder/releases/download/v2.2.9/netbsd-$v.qcow2.zst | zstd -dq > netbsd-$v-amd64.qcow2
-          done
-          one() { # name ver cpu
-            qemu-system-x86_64 -machine pc,accel=kvm -cpu "$3" -m 2048 -smp 2 -display none -serial none -monitor unix:m.sock,server,nowait \
-              -snapshot -drive file=netbsd-$2.qcow2,if=virtio -netdev user,id=n,hostfwd=tcp::2299-:22 -device e1000,netdev=n & p=$!
-            r=NO; i=0
-            while [ $i -lt 60 ]; do
-              if timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/2299; head -c 4 <&3' 2>/dev/null | grep -q SSH; then r=SSH; break; fi
-              sleep 2; i=$((i+1)); done
-            [ $r = NO ] && { sudo apt-get install -y -qq socat >/dev/null 2>&1; echo "screendump s-$1.ppm" | socat - UNIX-CONNECT:m.sock >/dev/null; sleep 1; }
-            kill $p; wait $p 2>/dev/null; rm -f m.sock; echo "RESULT $1 $r"
-          }
-          for v in 10.0 10.1 10.2 11.0 11.1; do
-            one $v-i386-host $v-i386 host
-            one $v-i386-qemu64 $v-i386 qemu64
-            one $v-i386-notiledata $v-i386 host,-amx-tile,-amx-int8,-amx-bf16
-          done
-          for v in 10.1 10.2 11.1; do one $v-amd64-host $v-amd64 host; done
-      - uses: actions/upload-artifact@v4
-        if: always()
+      - uses: actions/download-artifact@v4
         with:
-          name: shot-${{ matrix.n }}
-          path: s-*.ppm
-          if-no-files-found: ignore
-          retention-days: 2
+          name: ${{ matrix.c.img }} ${{ matrix.c.n }}
+          run-id: ${{ matrix.c.run }}
+          github-token: ${{ github.token }}
+          path: art
+      - run: grep -m1 'model name' /proc/cpuinfo; grep -om1 amx_tile /proc/cpuinfo || echo no-amx
+      - name: 仮の release に置く
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l art
+          gh release view v9.9.9 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create v9.9.9 -R "$GITHUB_REPOSITORY" --prerelease --title 'vmactions の試験用 (仮)' --notes '試験が終わったら消す' || true
+          true  # 前の run で置いた物を使う
+      - uses: actions/checkout@v4
+        with:
+          repository: vmactions/${{ matrix.c.os }}-vm
+          path: act
+      - uses: actions/checkout@v4
+        with:
+          path: .self
+      - run: cp -r .self/.github/e2e .e2e
+      - name: conf を足し、取得先を替える
+        run: |
+          cd act
+          case "${{ matrix.c.arch }}" in ppc64le) b=15.1-powerpc64 ;; *) b=11.1 ;; esac
+          sed 's/^BUILDER_VERSION=.*/BUILDER_VERSION=9.9.9/' conf/$b.conf > conf/${{ matrix.c.rel }}-${{ matrix.c.arch }}.conf
+          cat conf/${{ matrix.c.rel }}-${{ matrix.c.arch }}.conf
+          python3 ../.e2e/patch.py index.js
+          git diff | cat
+          git diff --quiet index.js && exit 1 || true
+      - uses: ./act
+        with:
+          release: ${{ matrix.c.rel }}
+          arch: ${{ matrix.c.arch }}
+          sync: scp
+          debug: true
+          usesh: true
+          run: |
+            uname -a
+            uname -m; uname -p; uname -r
+            echo "E2E-OK in guest"
+            df -h /
+            sh -c 'cat /etc/release 2>/dev/null | head -1; freebsd-version 2>/dev/null; true'
