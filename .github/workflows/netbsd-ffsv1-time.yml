@@ -52,9 +52,9 @@ jobs:
           cd $HOME/src
           ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest kernel=GENERIC > $HOME/k.log 2>&1 || { grep -E 'error' $HOME/k.log | head; tail -40 $HOME/k.log; exit 1; }
           tail -3 $HOME/k.log
-          mkdir -p out/bin
+          cd $GITHUB_WORKSPACE; mkdir -p out/bin
           gzip -c $(find $HOME/obj -path '*GENERIC/netbsd' | head -1) > out/netbsd.gz
           for b in sbin/fsck_ffs/fsck_ffs sbin/fsdb/fsdb sbin/dump/dump sbin/restore/restore sbin/newfs/newfs usr.sbin/makefs/makefs usr.sbin/dumpfs/dumpfs; do cp $(find $HOME/obj -path "*$b" -type f | head -1) out/bin/; done
           ls -l out out/bin
       - uses: actions/upload-artifact@v4
-        with: { name: netbsd-ffsv1-time, path: out, retention-days: 14 }
+        with: { name: netbsd-ffsv1-time, path: out, retention-days: 14, if-no-files-found: error }
