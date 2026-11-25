@@ -32,7 +32,7 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.conf }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -74,8 +74,8 @@ jobs:
           netbsd-*)  echo "repo=anyvm-org/netbsd-builder"  >> $GITHUB_OUTPUT
                      echo "ref=v2.2.6"  >> $GITHUB_OUTPUT
                      echo "dir=netbsd-builder"  >> $GITHUB_OUTPUT ;;
-          freebsd-*) echo "repo=anyvm-org/freebsd-builder" >> $GITHUB_OUTPUT
-                     echo "ref=v2.2.9" >> $GITHUB_OUTPUT
+          freebsd-*) echo "repo=zakinko/freebsd-builder" >> $GITHUB_OUTPUT
+                     echo "ref=powerpc64le" >> $GITHUB_OUTPUT
                      echo "dir=freebsd-builder" >> $GITHUB_OUTPUT ;;
           # pfSense には builder が無い。OPNsense がここで一番近く (同じく
           # FreeBSD 由来の appliance で、serial console で全部を駆動する)
@@ -95,25 +95,9 @@ jobs:
 
       - name: conf を置く
         run: |
-          c=vmactions/${{ steps.b.outputs.dir }}/conf/${{ matrix.conf }}.conf
-          test -f "$c" || { echo "!! $c が無い"; exit 1; }
-          cp "$c" builder/conf/
-          # 上流に無い files/ と hooks/ を持っている conf のために、
-          # 同じ名前の物が repo に在れば一緒に置く。sparc64 が既にやって
-          # いる「pinned QEMU を先に組む」仕掛けを ppc64 に写すのに要る。
-          for d in files hooks; do
-            if [ -d "vmactions/${{ steps.b.outputs.dir }}/$d" ]; then
-              mkdir -p "builder/$d"
-              cp -v "vmactions/${{ steps.b.outputs.dir }}/$d"/* "builder/$d/" || true
-            fi
-          done
-          # 上流の hook は dist set の取得先を powerpc64 に固定しているので、
-          # le の媒体から be の base と kernel を入れてしまう。
-          case "${{ matrix.conf }}" in
-          freebsd-*-powerpc64le)
-            sed -i 's#^_FBSD_ARCH_PATH = "powerpc/powerpc64"$#_FBSD_ARCH_PATH = "powerpc/powerpc64le"#' builder/hooks/host_installOpts.py
-            grep -x '_FBSD_ARCH_PATH = "powerpc/powerpc64le"' builder/hooks/host_installOpts.py ;;
-          esac
+          c=builder/conf/${{ matrix.conf }}.conf
+          test -f "$c"
+          git -C builder log -1 --format=%H
           echo "--- 置いた conf"
           cat "builder/conf/$(basename "$c")"
 
