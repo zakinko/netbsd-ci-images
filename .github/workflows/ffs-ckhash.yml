@@ -54,8 +54,8 @@ jobs:
               grep -E 'warning:|error:' $HOME/l || true
             done
             for b in fsck_ffs fsdb tunefs; do cp $(find $HOME/obj* sbin/$b -path "*sbin/$b/*" -name $b -type f -newer $D/netbsd | head -1) $D/$b; done
-            cp $(find $HOME/obj* sys/rump/fs/lib/libffs -name 'librumpfs_ffs.so.*.*' -type f -newer $D/netbsd | head -1) $D/librumpfs_ffs.so
-            sha256sum $D/*
+            cp $(find $HOME/obj* sys/rump/fs/lib/libffs -name 'librumpfs_ffs.so.*[0-9]' -type f -newer $D/netbsd | head -1) $D/librumpfs_ffs.so
+            sha256sum $D/*; file $D/*; file $D/librumpfs_ffs.so | grep -q 'ELF.*shared object'
           done
       - uses: actions/upload-artifact@v4
         with: { name: ffs-ckhash-build, path: out, retention-days: 14, if-no-files-found: error }
