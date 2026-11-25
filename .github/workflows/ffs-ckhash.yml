@@ -3,6 +3,8 @@ name: NetBSD の FFS check hash (v3) を建てて試す
 # 手で回すだけ。trunk (v3 の根元) と v3 を同じ道具で建て、同じ VM で比べる。
 on:
   workflow_dispatch:
+    inputs:
+      build_run: { description: '建てた run (空なら建てる)', type: string, default: '' }
 
 concurrency:
   group: ffs-ckhash
@@ -10,6 +12,7 @@ concurrency:
 
 jobs:
   build:
+    if: inputs.build_run == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 200
     steps:
@@ -59,18 +62,19 @@ jobs:
 
   test:
     needs: build
+    if: ${{ !cancelled() && needs.build.result != 'failure' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 200
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: ffs-ckhash-build, path: ffs-ckhash }
+        with: { name: ffs-ckhash-build, path: ffs-ckhash, run-id: '${{ inputs.build_run || github.run_id }}', github-token: '${{ github.token }}' }
       - run: |
           sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 netcat-openbsd
           sudo chmod 666 /dev/kvm
           B=https://github.com/${{ github.repository }}/releases/download/images
           curl -fsSL -O $B/amd64-11.0.qcow2; curl -fsSL -O $B/amd64-11.0.qemu
-          KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
+          EXTRAARGS= KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
       - name: 対照、v3
         run: |
           set -x
@@ -109,6 +113,7 @@ jobs:
 
   freebsd:
     needs: test
+    if: ${{ !cancelled() && needs.test.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:

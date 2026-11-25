@@ -18,7 +18,7 @@ jobs:
           sudo chmod 666 /dev/kvm
           B=https://github.com/${{ github.repository }}/releases/download/images
           curl -fsSL -O $B/amd64-11.0.qcow2; curl -fsSL -O $B/amd64-11.0.qemu
-          KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
+          EXTRAARGS= KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
       - name: 対照、v3
         run: |
           set -x
