@@ -58,7 +58,7 @@ jobs:
           # rump の FFS と ATF の試験。落ちても先へ進み、試験の側が「無い」と言う
           for d in sys/rump/fs/lib/libffs tests/fs/common tests/fs/ffs; do
             echo "== $d"
-            (cd $d && $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no MKPIC=yes obj dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; echo "FAILED (not fatal): $d"; }
+            (cd $d && $HOME/tools/bin/nbmake-amd64 MKMAN=no MKPIC=yes obj && $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no MKPIC=yes dependall) > $HOME/l 2>&1 || { grep -E -m12 'error|No such file|not found' $HOME/l; tail -15 $HOME/l; echo "FAILED (not fatal): $d"; }
             grep -E 'warning:|error:' $HOME/l || true
           done
           test -z "$bad" || { echo "failed:$bad"; exit 1; }

@@ -4,11 +4,12 @@
 #	netbsd-ffsv1-host.sh back <建てたものの dir>	FreeBSD が触った image を読む
 #	netbsd-ffsv1-host.sh check			結果を数える。合わなければ落ちる
 # 記録は ./res に、FreeBSD に渡す image は ./fbin に置く。大きなものは
-# workspace の外 ($RUNNER_TEMP) に置く。workspace は FreeBSD の VM へ写されるので。
+# $HOME の直下に置く。vmactions は /home/runner/work を丸ごと FreeBSD の VM へ
+# 写すので、その下 ($RUNNER_TEMP も) に root の持ち物の木を置くと rsync が落ちる。
 set -u
 stage=$1
 HERE=$(cd "$(dirname "$0")" && pwd)
-W=${RUNNER_TEMP:-/tmp}/ffsv1
+W=${FFSV1_WORK:-$HOME/ffsv1-test}
 RES=$PWD/res
 mkdir -p "$W" "$RES"
 B=https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/latest/amd64/binary
