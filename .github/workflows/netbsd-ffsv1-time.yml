@@ -1,0 +1,58 @@
+name: NetBSD の FFSv1 の日付の差分を trunk で建てる
+
+# 手で回すだけ。ツール (gcc) から建てるので重い。
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: netbsd-ffsv1-time
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get -q update
+          sudo apt-get -qy install zlib1g-dev
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          git clone -q --depth 1 https://github.com/NetBSD/src.git $HOME/src
+          git -C $HOME/src log -1 --format='%H %cd'
+          mkdir $HOME/dest
+          for s in base comp; do
+            curl -sSfL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/latest/amd64/binary/sets/$s.tar.xz | tar -xJf - -C $HOME/dest
+          done
+      - name: ツール
+        run: |
+          cd $HOME/src
+          ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest tools > $HOME/tools.log 2>&1 || { tail -60 $HOME/tools.log; exit 1; }
+      - name: 当てる
+        run: |
+          cd $HOME/src
+          patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-time.diff < /dev/null | tee $HOME/patch.log
+          [ "$(grep -c '^patching file' $HOME/patch.log)" = "$(grep -c '^+++ ' $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-time.diff)" ]
+          ! grep -E 'offset|fuzz' $HOME/patch.log
+          cp sys/ufs/ufs/dinode.h $HOME/dest/usr/include/ufs/ufs/
+          cp sys/ufs/ufs/inode.h $HOME/dest/usr/include/ufs/ufs/
+      - name: コマンド
+        run: |
+          cd $HOME/src
+          for d in sbin/fsck_ffs sbin/fsdb sbin/dump sbin/restore sbin/newfs usr.sbin/makefs usr.sbin/dumpfs; do
+            echo "== $d"
+            (cd $d && $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no MKPIC=yes obj dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; bad="$bad $d"; }
+            grep -E 'warning:|error:' $HOME/l || true
+          done
+          test -z "$bad" || { echo "failed:$bad"; exit 1; }
+      - name: カーネル
+        run: |
+          cd $HOME/src
+          ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest kernel=GENERIC > $HOME/k.log 2>&1 || { grep -E 'error' $HOME/k.log | head; tail -40 $HOME/k.log; exit 1; }
+          tail -3 $HOME/k.log
+          mkdir -p out/bin
+          gzip -c $(find $HOME/obj -path '*GENERIC/netbsd' | head -1) > out/netbsd.gz
+          for b in sbin/fsck_ffs/fsck_ffs sbin/fsdb/fsdb sbin/dump/dump sbin/restore/restore sbin/newfs/newfs usr.sbin/makefs/makefs usr.sbin/dumpfs/dumpfs; do cp $(find $HOME/obj -path "*$b" -type f | head -1) out/bin/; done
+          ls -l out out/bin
+      - uses: actions/upload-artifact@v4
+        with: { name: netbsd-ffsv1-time, path: out, retention-days: 14 }
