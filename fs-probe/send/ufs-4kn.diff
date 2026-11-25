@@ -1,5 +1,5 @@
 diff --git a/fs/ufs/super.c b/fs/ufs/super.c
-index 3569ac92b..da7520b5f 100644
+index 3569ac92b..4e1bb7578 100644
 --- a/fs/ufs/super.c
 +++ b/fs/ufs/super.c
 @@ -725,6 +725,7 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
@@ -26,7 +26,7 @@ index 3569ac92b..da7520b5f 100644
 +	logical_size = bdev_logical_block_size(sb->s_bdev);
 +	if (block_size < logical_size) {
 +		block_size = logical_size;
-+		super_block_size = max(super_block_size, logical_size);
++		super_block_size = round_up(super_block_size, logical_size);
 +		uspi->s_fsize = block_size;
 +		uspi->s_fmask = ~(block_size - 1);
 +		uspi->s_fshift = (unsigned int)ilog2(block_size);

@@ -10,7 +10,7 @@ note() { printf '%s\n' "$*" | tee -a $sum; }
 note "# $label kernel $(uname -r) $(uname -v)"
 for n in freebsd-ufs2 freebsd-ufs1 netbsd-ffs2 netbsd-ffs1; do
 	case $n in *ffs1|*ufs1) t=44bsd ;; *) t=ufs2 ;; esac
-	for ss in 512 4096; do
+	for ss in 512 1024 2048 4096; do
 		cp --sparse=always $in/$n.img $w/i.img
 		l=$(losetup -f --show --sector-size $ss $w/i.img) || { note "!! losetup"; exit 1; }
 		note "## $n sector $(blockdev --getss $l)"
