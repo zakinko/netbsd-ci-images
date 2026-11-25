@@ -1,0 +1,58 @@
+diff --git a/sbin/dump/itime.c b/sbin/dump/itime.c
+index 95b6ac3f..5c51adaa 100644
+--- a/sbin/dump/itime.c
++++ b/sbin/dump/itime.c
+@@ -156,9 +156,9 @@ getdumptime(void)
+ 		    (trueinc && (ddp->dd_level > level))) */
+ 		if (!trueinc && (ddp->dd_level >= level))
+ 			continue;
+-		if (ddp->dd_ddate <= iswap32(spcl.c_ddate))
++		if (ddp->dd_ddate <= (time_t)iswap64(spcl.c_ddate))
+ 			continue;
+-		spcl.c_ddate = iswap32(ddp->dd_ddate);
++		spcl.c_ddate = iswap64(ddp->dd_ddate);
+ 		lastlevel = ddp->dd_level;
+ 	}
+ }
+@@ -204,7 +204,7 @@ putdumptime(void)
+   found:
+ 	(void) strlcpy(dtwalk->dd_name, fname, sizeof(dtwalk->dd_name));
+ 	dtwalk->dd_level = level;
+-	dtwalk->dd_ddate = iswap32(spcl.c_date);
++	dtwalk->dd_ddate = iswap64(spcl.c_date);
+ 	dtfound = dtwalk;
+ 
+ 	ITITERATE(i, dtwalk) {
+diff --git a/sbin/dump/main.c b/sbin/dump/main.c
+index c93a4d3a..b1fa352b 100644
+--- a/sbin/dump/main.c
++++ b/sbin/dump/main.c
+@@ -528,15 +528,15 @@ main(int argc, char *argv[])
+ 	/* true incremental is always a level 10 dump */
+ 	spcl.c_level = trueinc? iswap32(10): iswap32(level - '0');
+ 	spcl.c_type = iswap32(TS_TAPE);
+-	spcl.c_date = iswap32(spcl.c_date);
+-	spcl.c_ddate = iswap32(spcl.c_ddate);
++	spcl.c_date = iswap64(spcl.c_date);
++	spcl.c_ddate = iswap64(spcl.c_ddate);
+ 	if (!Tflag)
+ 		getdumptime();		/* /etc/dumpdates snarfed */
+ 
+-	date = iswap32(spcl.c_date);
++	date = iswap64(spcl.c_date);
+ 	msg("Date of this level %c dump: %s", level,
+ 		spcl.c_date == 0 ? "the epoch\n" : ctime(&date));
+-	date = iswap32(spcl.c_ddate);
++	date = iswap64(spcl.c_ddate);
+  	msg("Date of last level %c dump: %s", lastlevel,
+ 		spcl.c_ddate == 0 ? "the epoch\n" : ctime(&date));
+ 	msg("Dumping ");
+@@ -694,7 +694,7 @@ main(int argc, char *argv[])
+ 		    (long long)iswap64(spcl.c_tapea), iswap32(spcl.c_volume),
+ 		    (iswap32(spcl.c_volume) == 1) ? "" : "s");
+ 	tnow = do_stats();
+-	date = iswap32(spcl.c_date);
++	date = iswap64(spcl.c_date);
+ 	msg("Date of this level %c dump: %s", level,
+ 		spcl.c_date == 0 ? "the epoch\n" : ctime(&date));
+ 	msg("Date this dump completed:  %s", ctime(&tnow));
