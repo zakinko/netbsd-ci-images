@@ -38,6 +38,13 @@ print(" ".join(sorted("%s=%s" % (e.name, "lnk" if e.is_symlink() else "reg" if e
 note "sym d_type cached: $(ty)"
 umount $w/m; nm ${l}p1
 note "sym d_type after remount: $(ty); lstat: $(stat -c '%n=%F' $w/m/s* | sed "s,$w/m/,,g" | tr '\n' ' ')"
+# 作った後に時刻、持ち主、hard link を変えると、親の $I30 の複製が書き直される
+touch -h -d 2020-01-02 $w/m/s*; sync
+umount $w/m; nm ${l}p1; note "sym d_type after touch -h and remount: $(ty)"
+chown -h 1:1 $w/m/s*; sync
+umount $w/m; nm ${l}p1; note "sym d_type after chown -h and remount: $(ty)"
+for n in 10 200 1000; do mv $w/m/s$n $w/m/sr$n; done; sync
+umount $w/m; nm ${l}p1; note "sym d_type after rename and remount: $(ty)"
 umount $w/m; losetup -d $l; rm -f "${w:?}"/sym.raw
 # --- 0 に縮めたファイル (ntfs3-03)。断片化したものと、伸ばし直すものも。
 mk trunc 512M
