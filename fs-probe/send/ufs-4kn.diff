@@ -1,5 +1,5 @@
 diff --git a/fs/ufs/super.c b/fs/ufs/super.c
-index 3569ac92b..8981f57d0 100644
+index 3569ac92b..da7520b5f 100644
 --- a/fs/ufs/super.c
 +++ b/fs/ufs/super.c
 @@ -725,6 +725,7 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
@@ -10,12 +10,10 @@ index 3569ac92b..8981f57d0 100644
  	unsigned flags;
  	unsigned super_block_offset;
  	unsigned maxsymlen;
-@@ -921,7 +922,26 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
- 			pr_err("unknown ufstype\n");
+@@ -922,6 +923,25 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
  		goto failed;
  	}
--	
-+
+ 	
 +	/*
 +	 * The sizes above are what each flavour usually has, and are only
 +	 * used to read the superblock.  The buffer cache cannot use a block
