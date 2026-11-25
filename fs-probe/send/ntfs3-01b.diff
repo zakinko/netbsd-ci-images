@@ -1,5 +1,5 @@
 diff --git a/fs/ntfs3/inode.c b/fs/ntfs3/inode.c
-index 1e99620..d9f405c 100644
+index bf24598..effbfbc 100644
 --- a/fs/ntfs3/inode.c
 +++ b/fs/ntfs3/inode.c
 @@ -6,6 +6,7 @@
@@ -10,7 +10,46 @@ index 1e99620..d9f405c 100644
  #include <linux/fs.h>
  #include <linux/mpage.h>
  #include <linux/namei.h>
-@@ -2221,6 +2222,29 @@ static int ntfs_strip_nt_prefix(char *name, int len)
+@@ -1311,6 +1312,19 @@ static inline u32 ntfs_reparse_bytes(u32 uni_len, bool is_absolute)
+ 			SymbolicLinkReparseBuffer.PathBuffer);
+ }
+ 
++/*
++ * ntfs_path_on_drive - Is this a full path on a drive, such as C:/dir?
++ *
++ * Windows always has a separator after the colon of a full path.  Without
++ * it the colon is just a character of a name, as far as Linux is
++ * concerned.
++ */
++static bool ntfs_path_on_drive(const char *path)
++{
++	return isalpha(path[0]) && path[1] == ':' &&
++	       (path[2] == '/' || path[2] == '\\');
++}
++
+ static struct REPARSE_DATA_BUFFER *
+ ntfs_create_reparse_buffer(struct ntfs_sb_info *sbi, const char *symname,
+ 			   u32 size, u16 *nsize)
+@@ -1321,7 +1335,7 @@ ntfs_create_reparse_buffer(struct ntfs_sb_info *sbi, const char *symname,
+ 	typeof(rp->SymbolicLinkReparseBuffer) *rs;
+ 	bool is_absolute;
+ 
+-	is_absolute = symname[0] && symname[1] == ':';
++	is_absolute = ntfs_path_on_drive(symname);
+ 
+ 	rp = kzalloc(ntfs_reparse_bytes(2 * size + 2, is_absolute), GFP_NOFS);
+ 	if (!rp)
+@@ -2036,7 +2050,8 @@ void ntfs_evict_inode(struct inode *inode)
+ /*
+  * ntfs_translate_junction
+  *
+- * Translate a Windows junction target to the Linux equivalent.
++ * Translate the target of a Windows junction, or of a symlink to a path
++ * on a drive, to the Linux equivalent.
+  * On junctions, targets are always absolute (they include the drive
+  * letter). We have no way of knowing if the target is for the current
+  * mounted device or not so we just assume it is.
+@@ -2216,6 +2231,28 @@ static int ntfs_strip_nt_prefix(char *name, int len)
  	return len - prefix_len;
  }
  
@@ -18,7 +57,6 @@ index 1e99620..d9f405c 100644
 + * ntfs_symlink_on_drive - Is a symlink target a full path on a drive?
 + * @rp:		reparse data of the link.
 + * @target:	link target, already with '\' turned into '/'.
-+ * @len:	its length.
 + *
 + * MS-FSCC 2.1.2.4: without SYMLINK_FLAG_RELATIVE the target is a full
 + * path name.  Windows writes it with a drive letter, as in C:/dir, which
@@ -27,20 +65,20 @@ index 1e99620..d9f405c 100644
 + * is left as it is.
 + */
 +static bool ntfs_symlink_on_drive(const struct REPARSE_DATA_BUFFER *rp,
-+				  const char *target, int len)
++				  const char *target)
 +{
 +	if (rp->ReparseTag != IO_REPARSE_TAG_SYMLINK)
 +		return false;
 +	if (le32_to_cpu(rp->SymbolicLinkReparseBuffer.Flags) &
 +	    SYMLINK_FLAG_RELATIVE)
 +		return false;
-+	return len >= 2 && isalpha(target[0]) && target[1] == ':';
++	return ntfs_path_on_drive(target);
 +}
 +
  static noinline int ntfs_readlink_hlp(const struct dentry *link_de,
  				      struct inode *inode, char *buffer,
  				      int buflen)
-@@ -2352,8 +2376,12 @@ static noinline int ntfs_readlink_hlp(const struct dentry *link_de,
+@@ -2347,8 +2384,12 @@ static noinline int ntfs_readlink_hlp(const struct dentry *link_de,
  	if (nt_path)
  		err = ntfs_strip_nt_prefix(buffer, err);
  
@@ -51,7 +89,7 @@ index 1e99620..d9f405c 100644
 +	 * translate the link target.
 +	 */
 +	if (rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT ||
-+	    ntfs_symlink_on_drive(rp, buffer, err))
++	    ntfs_symlink_on_drive(rp, buffer))
  		err = ntfs_translate_junction(sb, link_de, buffer, err, buflen);
  
  out:

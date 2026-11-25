@@ -28,6 +28,14 @@ if :; then
 	umount $w/m
 else note "!! win mount failed"; fi
 losetup -d $l; rm -f "${w:?}"/win.vhd
+# --- Linux で作った symlink が書いたとおりに返るか (ntfs3-01b)
+mk rt 64M
+nm ${l}p1
+mkdir $w/m/x $w/m/sub; i=0
+for t in a:b C: C:x C:/x 'C:\x' 1:/x /abs/x rel/x x; do i=$((i + 1)); ln -s "$t" $w/m/sub/r$i; note "rt cached '$t' -> '$(readlink $w/m/sub/r$i)'"; done
+umount $w/m; nm ${l}p1; i=0
+for t in a:b C: C:x C:/x 'C:\x' 1:/x /abs/x rel/x x; do i=$((i + 1)); note "rt remount '$t' -> '$(readlink $w/m/sub/r$i)' follows: $(stat -L -c %F $w/m/sub/r$i 2>&1 | sed 's/.*: //')"; done
+umount $w/m; losetup -d $l; rm -f "${w:?}"/rt.raw
 # --- 長い symlink の d_type (ntfs3-02)
 mk sym 256M
 nm ${l}p1
