@@ -17,7 +17,7 @@ P=/new; [ $K = new ] || P=
 for t in "ld1 1 le" "ld2 0 le" "ld3 1 be"; do
 	set -- $t; d=$1; o=$2; e=$3; n=ffsv1-O$o-$e
 	if [ $K = new ]; then
-		$P/newfs -O $o -B $e /dev/r${d}d > /w/nf 2>&1 || { echo "T $n newfs failed: $(tail -1 /w/nf)"; continue; }
+		$P/newfs -I -O $o -B $e /dev/r${d}d > /w/nf 2>&1 || { echo "T $n newfs failed: $(tail -1 /w/nf)"; continue; }
 	fi
 	mount -t ffs /dev/${d}d /mnt || { echo "T $n mount failed"; continue; }
 	if [ $K = new ]; then
@@ -32,7 +32,7 @@ for t in "ld1 1 le" "ld2 0 le" "ld3 1 be"; do
 	if [ $K = new ]; then
 		printf 'inode 2\nlookup w2040\nquit\n' | $P/fsdb -n -f /dev/r${d}d 2>&1 | grep -E 'TIME=' | tail -3 | sed "s/^/T $n fsdb /"
 		$P/dump -0 -a -f /w/d0 /dev/r${d}d > /w/dl 2>&1; echo "T $n dump exit $?"
-		$P/newfs -O 1 /dev/rld4d > /dev/null 2>&1 && mount -t ffs /dev/ld4d /mnt && (cd /mnt && $P/restore -rf /w/d0 > /w/rl 2>&1; echo "T $n restore exit $?")
+		$P/newfs -I -O 1 /dev/rld4d > /dev/null 2>&1 && mount -t ffs /dev/ld4d /mnt && (cd /mnt && $P/restore -rf /w/d0 > /w/rl 2>&1; echo "T $n restore exit $?")
 		show "$n restored"; umount /mnt
 		# 増分: 2039 年を基準にして、2040 年の file が入るか
 		for w in $P/dump /sbin/dump; do

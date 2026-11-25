@@ -34,6 +34,8 @@ jobs:
             echo "##### $k"; tr -d '\r' < $k.log | grep -E '^T' || tail -60 $k.log
           done
           tr -d '\r' < new.log | grep -q '^T ALLDONE' && tr -d '\r' < old.log | grep -q '^T ALLDONE'
+          ! cat new.log old.log | tr -d '\r' | grep -E '^T .*(newfs failed|mount failed)'
+          [ $(tr -d '\r' < new.log | grep -c ' restored w2040 ') = 3 ]
       - if: always()
         run: mkdir -p out; cp *.log out/; for i in 1 2 3; do gzip -c d$i.raw > out/d$i.raw.gz; done
       - if: always()
