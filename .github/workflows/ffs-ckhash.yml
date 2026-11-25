@@ -117,7 +117,7 @@ jobs:
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"; $SSH uname -v | grep 11.99
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"; $SSH uname -v | grep 11.99
           $SSH ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile
-          $SSH sysctl -n machdep.cpu_brand
+          $SSH /sbin/sysctl -n machdep.cpu_brand || true
           for v in ctl v5; do
             reboot_in "sh /root/p/ck/install.sh $v"; is $v
             case $v in
