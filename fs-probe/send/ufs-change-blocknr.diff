@@ -1,0 +1,31 @@
+diff --git a/fs/ufs/balloc.c b/fs/ufs/balloc.c
+index 628edfde3..df19519bf 100644
+--- a/fs/ufs/balloc.c
++++ b/fs/ufs/balloc.c
+@@ -301,6 +301,26 @@ static void ufs_change_blocknr(struct inode *inode, sector_t beg,
+ 			bh->b_blocknr = newb + pos;
+ 			clean_bdev_bh_alias(bh);
+ 			mark_buffer_dirty(bh);
++			/*
++			 * We are inside a write that has not moved i_size
++			 * yet.  Writeback drops a folio wholly past i_size
++			 * without writing it, and skips the buffers past it in
++			 * one that straddles i_size, so leaving such a buffer
++			 * to writeback put nothing at the new place: the file
++			 * later showed what the device held there before.  The
++			 * folio was left clean with the buffer still dirty, so
++			 * later writes to it never reached the device either.
++			 * The folio being written stays locked until the write
++			 * has moved i_size, so only the others need this.
++			 */
++			if (folio != locked_folio &&
++			    (loff_t)(beg + pos) << inode->i_blkbits >=
++			    i_size_read(inode)) {
++				/* A folio's buffers carry no reference. */
++				get_bh(bh);
++				sync_dirty_buffer(bh);
++				put_bh(bh);
++			}
+ 			++j;
+ 			bh = bh->b_this_page;
+ 		} while (bh != head);

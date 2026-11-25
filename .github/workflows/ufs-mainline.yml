@@ -20,7 +20,7 @@ concurrency:
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -54,11 +54,22 @@ jobs:
           comm -13 $HOME/ws-base $HOME/ws-new
           make -s -j$(nproc) bzImage
           cp arch/x86/boot/bzImage $HOME/bz-new
+      - name: fsstress を建てる
+        if: inputs.patch == 'ufs-change-blocknr'
+        run: |
+          sudo apt-get -qy install autoconf automake libtool libtool-bin uuid-dev xfslibs-dev libaio-dev libacl1-dev libattr1-dev pkg-config gettext
+          for i in 1 2 3; do git clone -q --depth 1 --branch v2026.10.15 https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git $HOME/xfstests && break; sleep 60; done
+          cd $HOME/xfstests && (make configure && ./configure && make -C lib && make -C ltp fsstress) > $HOME/xb.log 2>&1 || { tail -30 $HOME/xb.log; exit 1; }
+          echo "FSSTRESS=$HOME/xfstests/ltp/fsstress" >> $GITHUB_ENV
       - name: 測る
         run: |
           mkdir -p out
           for x in base new; do
-            timeout 1500 vng --run $HOME/bz-$x --user root --memory 8G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/${{ inputs.patch }}-guest.sh $PWD/fsp/in $PWD/out $x < /dev/null || echo "vng exit $?"
+            D=
+            case ${{ inputs.patch }} in ufs-zeroout|ufs-readahead)
+              for n in netbsd-ffs2 freebsd-ufs2; do cp --sparse=always fsp/in/$n.img $HOME/$x-$n.raw; D="$D --disk $HOME/$x-$n.raw"; done ;;
+            esac
+            timeout 2700 vng --run $HOME/bz-$x --user root --memory 8G --cpus 4 $D --rwdir=$PWD/out -- env FSSTRESS=$FSSTRESS sh $PWD/fs-probe/send/${{ inputs.patch }}-guest.sh $PWD/fsp/in $PWD/out $x < /dev/null || echo "vng exit $?"
           done
           ls -l out; cat out/*.txt | tee -a $GITHUB_STEP_SUMMARY
           test -s out/base.txt && test -s out/new.txt
