@@ -603,7 +603,7 @@ index 833035b1..787d8723 100644
  LDADD+=-lrumpfs_ffs						# ffs
 diff --git a/tests/fs/ffs/t_ufs1time.c b/tests/fs/ffs/t_ufs1time.c
 new file mode 100644
-index 00000000..77fd4795
+index 00000000..8f0668d6
 --- /dev/null
 +++ b/tests/fs/ffs/t_ufs1time.c
 @@ -0,0 +1,185 @@
@@ -735,7 +735,7 @@ index 00000000..77fd4795
 +	RL(rump_sys_chdir("/"));
 +	RL(rump_sys_unmount(FSTEST_MNTNAME, 0));
 +
-+	snprintf(cmd, sizeof(cmd), "fsck_ffs -fn %s > /dev/null",
++	snprintf(cmd, sizeof(cmd), "fsck_ffs -fn -F %s > /dev/null",
 +	    FSTEST_IMGNAME);
 +	if (system(cmd) != 0)
 +		atf_tc_fail("fsck_ffs does not find the file system clean");

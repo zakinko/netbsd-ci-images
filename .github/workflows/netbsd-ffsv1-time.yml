@@ -8,9 +8,10 @@ on:
   workflow_dispatch:
     inputs:
       form: { description: 'epoch か era', type: string, default: epoch }
+      tag: { description: '同じ form をもう一本並べて回すときの名前', type: string, default: '' }
 
 concurrency:
-  group: netbsd-ffsv1-time-${{ inputs.form }}
+  group: netbsd-ffsv1-time-${{ inputs.form }}${{ inputs.tag }}
   cancel-in-progress: true
 
 jobs:

@@ -7,10 +7,14 @@
 #	back	当てたカーネルで、FreeBSD が rw で mount した後のものを読む
 #	nonfs	当てたものから nfs_serv.c の直しだけを抜いたカーネルで、NFS だけ
 PATH=/sbin:/bin:/usr/sbin:/usr/bin; export PATH; TZ=UTC; export TZ
-mount -u -o rw / 2>&1
+# root は読むだけのまま使う (fstab が無いので mount -u は効かない)。
+# 書く所は tmpfs にする。
 (cd /dev && sh MAKEDEV ld1 ld2 ld3 ld4 > /dev/null 2>&1)
-mount -t tmpfs tmpfs /w
+mount | grep -q ' on /w ' || mount -t tmpfs tmpfs /w
+mount -t tmpfs tmpfs /var/run
+mount -t tmpfs tmpfs /var/db
 TMPDIR=/w; export TMPDIR; HOME=/w; export HOME
+ATF=${ATF:-/atf}		# ATF の試験の在る所
 K=$(cat /testkernel)
 echo "T# mode $K kernel $(uname -rv)"
 date 204001020304 > /dev/null 2>&1; echo "T date $(date)"
@@ -109,13 +113,14 @@ fstest() {	# ディスク 版 並び
 
 makefstest() {
 	rm -rf /w/tree; mkdir /w/tree
-	for y in 1960 2040 2200; do
-		echo $y > /w/tree/m$y
-		touch -d "$y-01-02T03:04:05.123456789Z" /w/tree/m$y
-	done
 	for e in le be; do
 		n=makefs-$e
 		rm -f /w/mk.img
+		# makefs が読むと atime が動くので、毎回付け直す
+		for y in 1960 2040 2200; do
+			echo $y > /w/tree/m$y
+			touch -d "$y-01-02T03:04:05.123456789Z" /w/tree/m$y
+		done
 		$MAKEFS -t ffs -B $e -o version=1 -s 16m /w/mk.img /w/tree > /w/mk.log 2>&1 || { echo "T $n failed: $(tail -1 /w/mk.log)"; continue; }
 		dd if=/w/mk.img of=/dev/rld4d bs=1m > /dev/null 2>&1
 		mount -r -t ffs /dev/ld4d /mnt || { echo "T $n mount failed"; continue; }
@@ -126,28 +131,30 @@ makefstest() {
 }
 
 atftest() {
-	[ -x /atf/t_ufs1time ] || { echo "T atf: the test was not built"; return; }
+	[ -x $ATF/t_ufs1time ] || { echo "T atf: the test was not built"; return; }
+	# 当てた rump の FFS は /w/lib に置いて LD_LIBRARY_PATH で先に引かせる
 	L=$(ls /usr/lib/librumpfs_ffs.so.*.* | head -1)
-	echo "T atf $L before $(cksum < $L)"
+	rm -rf /w/lib; mkdir /w/lib
 	if [ $K = new ]; then
-		cp /new/librumpfs_ffs.so.*.* $L || echo "T atf: could not replace $L"
+		cp /new/librumpfs_ffs.so.*.* /w/lib/$(basename $L) || echo "T atf: no patched librumpfs_ffs"
+		ln -s $(basename $L) /w/lib/$(basename ${L%.*})
 	fi
-	echo "T atf $L in use $(cksum < $L)"
+	LD_LIBRARY_PATH=/w/lib; export LD_LIBRARY_PATH
+	echo "T atf uses $(ldd $ATF/t_ufs1time | grep rumpfs_ffs | tr -s ' \t' ' '), cksum $(cksum < $L) in /usr/lib and $(cksum 2> /dev/null < /w/lib/$(basename $L)) in /w/lib"
 	for c in ufs1time_le ufs1time_be ufs1time_old; do
 		rm -rf /w/atfwork; mkdir /w/atfwork
-		(cd /w/atfwork && PATH=$(dirname $NEWFS):$PATH /atf/t_ufs1time -r /w/res $c > /w/atf.out 2>&1)
+		(cd /w/atfwork && PATH=$(dirname $NEWFS):$PATH $ATF/t_ufs1time -r /w/res $c > /w/atf.out 2>&1)
 		echo "T atf $c exit $? result $(cat /w/res 2>/dev/null) : $(grep -a -m4 -iE 'fail|time of' /w/atf.out | tr '\n' ';')"
 		rm -f /w/res
 	done
-	printf 'syntax(2)\ntest_suite("NetBSD")\natf_test_program{name="t_ufs1time"}\n' > /atf/Kyuafile
-	(cd /atf && PATH=$(dirname $NEWFS):$PATH kyua test 2>&1 | tail -6 | sed 's/^/T kyua /')
+	unset LD_LIBRARY_PATH
 	rm -rf /w/atfwork
 }
 
 nfsone() {	# 名前 mount の型
 	n=nfs-$1
 	mount -t $2 /dev/ld4d /mnt || { echo "T $n mount failed"; return; }
-	mountd; sleep 2
+	mountd /w/exports; sleep 2
 	if mount_nfs -T -s -i -x 3 127.0.0.1:/mnt /nfs 2> /w/e; then
 		ok=0; bad=0; : > /w/e2
 		for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
@@ -182,8 +189,9 @@ nfstest() {
 	(sleep 300; echo "T nfs: gave up after 300 s"; echo "T ALLDONE with NFS stuck"; sync; halt -p) &
 	wd=$!
 	ifconfig lo0 inet 127.0.0.1 up; hostname ffsv1
-	echo "/mnt -maproot=root 127.0.0.1" > /etc/exports
-	rpcbind; nfsd -tun 2; sleep 1
+	echo "/mnt -maproot=root 127.0.0.1" > /w/exports
+	rpcbind || { echo "T nfs: rpcbind did not start"; kill $wd; return; }
+	nfsd -n 2; sleep 1
 	$NEWFS -I -O 1 /dev/rld4d > /dev/null 2>&1 && nfsone ffsv1 ffs
 	$NEWFS -I -O 2 /dev/rld4d > /dev/null 2>&1 && nfsone ffsv2 ffs
 	newfs_ext2fs -I /dev/rld4d > /w/nf 2>&1 && { echo "T nfs-ext2fs $(grep -ai 'inode' /w/nf | head -2 | tr '\n' ';')"; nfsone ext2fs ext2fs; }
