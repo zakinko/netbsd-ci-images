@@ -123,14 +123,14 @@ jobs:
             case $v in
             ctl) T="T1 T4 T5 T9 T10" ;;
             v3)  T="T8 T9 T10" ;;
-            v4)  T="T0 T1 T2 T4 T5 T6 T8 T9 T10" ;;
+            v4)  T="T0 T1 T2 T4 T5 T6 T8 T9 T10 T11 T12" ;;
             esac
             $SSH sh /root/p/ck/ck.sh $v $T | tee $v.txt
             [ $v = v3 ] || $SSH sh /root/p/ck/atf.sh $v | tee $v-atf.txt
             [ $v = v4 ] || $SSH "rm -f /root/p/ck/$v/*.img" || true
             $SSH df -h / | tail -1
           done
-          $SSH 'cd /root/p/ck/v4 && tar cf - $(ls e1.img c-sb.img c-cg.img c-ino.img q.img h.img r.img g.img 2>/dev/null)' > after.tar || true
+          $SSH 'cd /root/p/ck/v4 && tar cf - $(ls e1.img c-sb.img c-cg.img c-ino.img q.img h.img r.img g.img s.img 2>/dev/null)' > after.tar || true
           # T3 は stock が止まるので v4 だけ。
           timeout 900 $SSH sh /root/p/ck/ck.sh v4 T3 | tee v4-t3.txt
           $SSH "cd /root/p/ck/v4 && tar cf - w.img" > after-w.tar || true

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs inside the NetBSD guest as root: ck.sh <label> [T0 T1 ... T10]
+# Runs inside the NetBSD guest as root: ck.sh <label> [T0 T1 ... T12]
 # Check-hash tests on FreeBSD UFS2 images, plus quota2 and a benchmark.
 # With no test named, runs T1 to T5.
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
@@ -154,6 +154,30 @@ resize_ffs -y g.img; echo "resize_ffs rc=$?"
 fk -f -n g.img
 mnt g.img && { cat $M/hello; echo "cat rc=$?"; echo y > $M/after; echo "write rc=$?"; df -k $M | tail -1; }; un
 fk -f -n g.img
+
+}
+want T11 && {
+echo "===== T11 the other byte order: fsck_ffs -B be, write, check, fsck_ffs -B le"
+xz -dc ../plain.img.xz > s.img
+fsck_ffs -B be -f -y s.img > s.out 2>&1; echo "fsck_ffs -B be rc=$?"; q < s.out | tail -5
+fk -f -n s.img
+mnt s.img && {
+	cat $M/hello; echo "cat rc=$?"
+	cp -R /usr/share/misc $M/misc; rm -f $M/misc/a*; mkdir $M/d; echo y > $M/d/y
+	../fh $M/hello; echo "fh rc=$?"
+}; un
+fk -f -n s.img
+fsck_ffs -B le -f -y s.img > s.out 2>&1; echo "fsck_ffs -B le rc=$?"; q < s.out | tail -5
+fk -f -n s.img
+
+}
+want T12 && {
+echo "===== T12 fsck_ffs -b: the first alternate superblock"
+xz -dc ../plain.img.xz > a.img
+b=$(dumpfs -F a.img 2>/dev/null | awk '{ for (i = 1; i < NF; i++) { if ($i == "sblkno") s = $(i+1); if ($i == "fsize") f = $(i+1) } } END { if (s > 0 && f > 0) print s * f / 512 }')
+echo "alternate at sector ${b:-?}"
+[ -n "$b" ] && fk -b $b -f -n a.img
+rm -f a.img
 
 }
 echo "=== $L done"
