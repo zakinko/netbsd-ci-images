@@ -23,8 +23,8 @@ jobs:
                 gunzip -c in/d$i.raw.gz > d.img; md=$(mdconfig -a -t vnode -f d.img)
                 mount -t ufs -o ro /dev/$md /mnt || { echo "T d$i mount failed"; mdconfig -d -u $md; continue; }
                 for f in w1960 w2030 w2040 w2100 w2200; do echo "T d$i $f $(stat -f '%m %Sm nsec %Fm' -t %Y-%m-%d /mnt/$f | sed 's/nsec [^.]*\./nsec /')"; done
-                cp -p /mnt/w2040 c1 2>&1; echo "T d$i cp -p exit $? $(stat -f %Sm -t %Y-%m-%d c1)"; rm -f c1
-                umount /mnt; fsck_ffs -fn /dev/$md > f.txt 2>&1; echo "T d$i fsck $? $(grep -vE '^\*\*|^$|files,' f.txt | head -3 | tr '\n' ';')"
+                rc=0; cp -p /mnt/w2040 c1 > cp.log 2>&1 || rc=$?; echo "T d$i cp -p exit $rc $(cat cp.log) $(stat -f %Sm -t %Y-%m-%d c1)"; rm -f c1
+                umount /mnt; rc=0; fsck_ffs -fn /dev/$md > f.txt 2>&1 || rc=$?; echo "T d$i fsck $rc $(grep -vE '^\*\*|^$|files,' f.txt | head -3 | tr '\n' ';')"
                 mdconfig -d -u $md
               done
             done
