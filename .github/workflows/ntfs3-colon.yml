@@ -1,6 +1,6 @@
 name: ntfs3 の ':' と Windows の絶対 symlink を、当て物を積みながら測る
 
-# 核: base、colon (1)、opt (1 + 01a + create + native_symlink の read)、
+# 核: base、colon (1)、lin (list に既に出ている直し)、opt (1 + 01a + create + native_symlink の read)、
 # uncond (同、read が無条件の版)。KASAN 付き。
 on:
   workflow_dispatch:
@@ -61,14 +61,24 @@ jobs:
           stage 4-read-opt; cp arch/x86/boot/bzImage $HOME/bz-opt
           stage 4-read-opt -R
           stage 4-read-uncond; cp arch/x86/boot/bzImage $HOME/bz-uncond
+          # 2026-10-29 に Hungyu Lin が list に出した同じ後退の直し二本 (lore)。その上にも 01b が当たること
+          git checkout -q fs Documentation
+          for f in 1-symlink 2-label; do patch -p1 -f -i $GITHUB_WORKSPACE/fs-probe/send/ntfs3-colon-lin/$f.patch < /dev/null; done
+          w lin; echo "lin new warnings: $(comm -13 $HOME/ws-base $HOME/ws-lin | wc -l)"; comm -13 $HOME/ws-base $HOME/ws-lin
+          make -s -j$(nproc) bzImage; cp arch/x86/boot/bzImage $HOME/bz-lin
+          for f in 2-01a 3-create 4-read-opt; do
+            patch -p1 -F0 -f -i $P/$f.patch < /dev/null > $HOME/pl; cat $HOME/pl
+            [ $(grep -ciE 'offset|fuzz' $HOME/pl) = 0 ] || { echo "$f on lin: offset or fuzz"; exit 1; }
+          done
+          make -s -j$(nproc) fs/ntfs3/; echo "01a, create and read-opt apply exactly on the earlier fix and build"
       - name: 測る
         run: |
           mkdir -p out
-          for x in base colon opt uncond; do
+          for x in base colon lin opt uncond; do
             timeout 1500 vng --run $HOME/bz-$x --user root --memory 6G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/ntfs3-colon-guest.sh $PWD/in $PWD/out $x < /dev/null || echo "vng exit $?"
           done
           cat out/*.txt | tee -a $GITHUB_STEP_SUMMARY
-          for x in base colon opt uncond; do grep -q '^END' out/$x.txt; done
+          for x in base colon lin opt uncond; do grep -q '^END' out/$x.txt; done
           ! grep -h '^!!' out/*.txt
       - uses: actions/upload-artifact@v4
         if: always()

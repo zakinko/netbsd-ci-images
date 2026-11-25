@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Showta Ishizaki <zakinko@snowrabbit.org>
-Date: Thu, 26 Nov 2026 00:30:00 +0900
+Date: Thu, 26 Nov 2026 01:30:00 +0900
 Subject: [PATCH] fs/ntfs3: add native_symlink=rel to follow absolute symlinks
 
 A symlink that Windows made to a full path, T:\dir, reads back as
@@ -101,7 +101,7 @@ index 8552f18..94ca968 100644
  
  out:
 diff --git a/fs/ntfs3/ntfs_fs.h b/fs/ntfs3/ntfs_fs.h
-index 7a02091..47ee487 100644
+index 7f0d221..2594f21 100644
 --- a/fs/ntfs3/ntfs_fs.h
 +++ b/fs/ntfs3/ntfs_fs.h
 @@ -114,6 +114,7 @@ struct ntfs_mount_options {

@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Showta Ishizaki <zakinko@snowrabbit.org>
-Date: Thu, 26 Nov 2026 00:30:00 +0900
+Date: Thu, 26 Nov 2026 01:30:00 +0900
 Subject: [PATCH] fs/ntfs3: translate absolute symlinks to a path on a drive
 
 A symlink that Windows made to a full path, T:\dir, reads back as

@@ -1,0 +1,59 @@
+From: Hungyu Lin <dennylin0707@gmail.com>
+Subject: [PATCH] fs/ntfs3: preserve colons in volume labels
+Date: Thu, 29 Oct 2026 22:58:56 +0000
+Message-ID: <20261029225856.1173-1-dennylin0707@gmail.com>
+
+With the ads mount option enabled, ntfs_nls_to_utf16() replaces an
+interior colon with NUL. ntfs_set_label() restores the full length, but
+does not restore the overwritten character before writing ATTR_LABEL.
+
+For example, xfs_io -c 'label -s Backup:2026' succeeds on an NTFS3 mount,
+but the label becomes "Backup" after unmounting and mounting it again.
+The same-mount cached label still contains the original input, hiding
+the on-disk corruption.
+
+Disable ADS parsing when converting a volume label and remove the
+incomplete attempt to undo the split. Volume labels are not stream
+pathnames and should retain their complete contents.
+
+Reported-by: 晓风残月 <xfcyhuang@gmail.com>
+Link: https://lore.kernel.org/ntfs3/CAC_Ok8x21q=Fy4n7V5j78G3rn5ByHpLVRiM4FrYGaJnmdFiP_w@mail.gmail.com/
+Fixes: be310476e886 ("fs/ntfs3: Add basic support for alternative data streams")
+Cc: stable@vger.kernel.org
+Signed-off-by: Hungyu Lin <dennylin0707@gmail.com>
+---
+This applies on top of:
+  [PATCH] fs/ntfs3: preserve colons in symlink targets
+  https://lore.kernel.org/ntfs3/20261029203457.59990-1-dennylin0707@gmail.com/
+
+ fs/ntfs3/fsntfs.c | 8 +-------
+ 1 file changed, 1 insertion(+), 7 deletions(-)
+
+diff --git a/fs/ntfs3/fsntfs.c b/fs/ntfs3/fsntfs.c
+index b06de8566a72..df939ee18904 100644
+--- a/fs/ntfs3/fsntfs.c
++++ b/fs/ntfs3/fsntfs.c
+@@ -2668,16 +2668,10 @@ int ntfs_set_label(struct ntfs_sb_info *sbi, u8 *label, int len)
+ 		return -ENOMEM;
+ 
+ 	err = ntfs_nls_to_utf16(sbi, label, len, uni, (PATH_MAX - 2) / 2,
+-				UTF16_LITTLE_ENDIAN, true);
++				UTF16_LITTLE_ENDIAN, false);
+ 	if (err < 0)
+ 		goto out;
+ 
+-	if (uni->ads_len) {
+-		/* Undo delimiter parse */
+-		uni->len += uni->ads_len + 1;
+-		uni->ads_len = 0;
+-	}
+-
+ 	uni_bytes = uni->len * sizeof(u16);
+ 	if (uni_bytes > NTFS_LABEL_MAX_LENGTH * sizeof(u16)) {
+ 		ntfs_warn(sbi->sb, "new label is too long");
+
+base-commit: 4a77fa820d937fae9fe0bd6a6795c2d749fd4df7
+-- 
+2.43.0
+
+

@@ -1,0 +1,148 @@
+From: Hungyu Lin <dennylin0707@gmail.com>
+Subject: [PATCH] fs/ntfs3: preserve colons in symlink targets
+Date: Thu, 29 Oct 2026 20:34:57 +0000
+Message-ID: <20261029203457.59990-1-dennylin0707@gmail.com>
+
+ntfs_nls_to_utf16() parses colon-delimited ADS names when the ads mount
+option is enabled. ntfs_create_reparse_buffer() also uses it to convert
+the complete symlink target, so "ln -s foo:bar link" succeeds but stores
+"foo" as the target. Following a link to a named data stream can then
+access the unnamed stream instead.
+
+Add a parse_ads argument and disable parsing when converting symlink
+targets. Keep parsing enabled for the other callers to preserve their
+existing behavior.
+
+Fixes: be310476e886 ("fs/ntfs3: Add basic support for alternative data streams")
+Cc: stable@vger.kernel.org
+Signed-off-by: Hungyu Lin <dennylin0707@gmail.com>
+---
+ fs/ntfs3/dir.c     |  5 +++--
+ fs/ntfs3/fsntfs.c  |  2 +-
+ fs/ntfs3/inode.c   |  2 +-
+ fs/ntfs3/namei.c   | 10 +++++-----
+ fs/ntfs3/ntfs_fs.h |  2 +-
+ 5 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/fs/ntfs3/dir.c b/fs/ntfs3/dir.c
+index 14ca54e54578..be3c6a7fc57a 100644
+--- a/fs/ntfs3/dir.c
++++ b/fs/ntfs3/dir.c
+@@ -173,6 +173,7 @@ static int _utf8s_to_utf16s(const u8 *s, int inlen, enum utf16_endian endian,
+  * @uni:	Destination memory.
+  * @max_ulen:	Destination memory.
+  * @endian:	Endian of target UTF-16 string.
++ * @parse_ads:	Whether to parse an ADS delimiter.
+  *
+  * This function is called:
+  * - to create NTFS name
+@@ -182,7 +183,7 @@ static int _utf8s_to_utf16s(const u8 *s, int inlen, enum utf16_endian endian,
+  */
+ int ntfs_nls_to_utf16(struct ntfs_sb_info *sbi, const u8 *name, u32 name_len,
+ 		      struct cpu_str *uni, u32 max_ulen,
+-		      enum utf16_endian endian)
++		      enum utf16_endian endian, bool parse_ads)
+ {
+ 	int ret, slen, i;
+ 	const u8 *end;
+@@ -239,7 +240,7 @@ int ntfs_nls_to_utf16(struct ntfs_sb_info *sbi, const u8 *name, u32 name_len,
+ 
+ 	uni->len = ret;
+ 	uni->ads_len = 0;
+-	if (ret > 0 && ads) {
++	if (ret > 0 && ads && parse_ads) {
+ 		uname = uni->name;
+ 		/* Find delimiter in range [1 : ret-2). */
+ 		for (i = 1; i + 1 < ret; i++) {
+diff --git a/fs/ntfs3/fsntfs.c b/fs/ntfs3/fsntfs.c
+index 97c04ab2763a..b06de8566a72 100644
+--- a/fs/ntfs3/fsntfs.c
++++ b/fs/ntfs3/fsntfs.c
+@@ -2668,7 +2668,7 @@ int ntfs_set_label(struct ntfs_sb_info *sbi, u8 *label, int len)
+ 		return -ENOMEM;
+ 
+ 	err = ntfs_nls_to_utf16(sbi, label, len, uni, (PATH_MAX - 2) / 2,
+-				UTF16_LITTLE_ENDIAN);
++				UTF16_LITTLE_ENDIAN, true);
+ 	if (err < 0)
+ 		goto out;
+ 
+diff --git a/fs/ntfs3/inode.c b/fs/ntfs3/inode.c
+index 5a8d362155ac..d883c4b47e83 100644
+--- a/fs/ntfs3/inode.c
++++ b/fs/ntfs3/inode.c
+@@ -1315,7 +1315,7 @@ ntfs_create_reparse_buffer(struct ntfs_sb_info *sbi, const char *symname,
+ 	/* Convert link name to UTF-16. */
+ 	err = ntfs_nls_to_utf16(sbi, symname, size,
+ 				(struct cpu_str *)(rp_name - 1), 2 * size,
+-				UTF16_LITTLE_ENDIAN);
++				UTF16_LITTLE_ENDIAN, false);
+ 	if (err < 0)
+ 		goto out;
+ 
+diff --git a/fs/ntfs3/namei.c b/fs/ntfs3/namei.c
+index ae88cb66fb7e..ab9da0faa104 100644
+--- a/fs/ntfs3/namei.c
++++ b/fs/ntfs3/namei.c
+@@ -45,7 +45,7 @@ int fill_name_de(struct ntfs_sb_info *sbi, void *buf, const struct qstr *name,
+ 		/* Convert input string to unicode. */
+ 		err = ntfs_nls_to_utf16(sbi, name->name, name->len,
+ 					(struct cpu_str *)&fname->name_len,
+-					NTFS_NAME_LEN, UTF16_LITTLE_ENDIAN);
++					NTFS_NAME_LEN, UTF16_LITTLE_ENDIAN, true);
+ 		if (err < 0)
+ 			return err;
+ 	}
+@@ -82,7 +82,7 @@ static struct dentry *ntfs_lookup(struct inode *dir, struct dentry *dentry,
+ 
+ 	err = ntfs_nls_to_utf16(ni->mi.sbi, dentry->d_name.name,
+ 				dentry->d_name.len, uni, NTFS_NAME_LEN,
+-				UTF16_HOST_ENDIAN);
++				UTF16_HOST_ENDIAN, true);
+ 
+ 	if (err < 0) {
+ 		kfree(uni);
+@@ -437,7 +437,7 @@ static int ntfs_d_hash(const struct dentry *dentry, struct qstr *name)
+ 	sbi = dentry->d_sb->s_fs_info;
+ 
+ 	err = ntfs_nls_to_utf16(sbi, name->name, name->len, uni, NTFS_NAME_LEN,
+-				UTF16_HOST_ENDIAN);
++				UTF16_HOST_ENDIAN, true);
+ 	if (err < 0)
+ 		goto out;
+ 
+@@ -496,7 +496,7 @@ static int ntfs_d_compare(const struct dentry *dentry, unsigned int len1,
+ 		return -ENOMEM;
+ 
+ 	ret = ntfs_nls_to_utf16(sbi, str, len1, uni1, NTFS_NAME_LEN,
+-				UTF16_HOST_ENDIAN);
++				UTF16_HOST_ENDIAN, true);
+ 	if (ret < 0)
+ 		goto out;
+ 
+@@ -509,7 +509,7 @@ static int ntfs_d_compare(const struct dentry *dentry, unsigned int len1,
+ 
+ 	ret = ntfs_nls_to_utf16(sbi, name->name, name->len,
+ 				(struct cpu_str *)uni2, NTFS_NAME_LEN,
+-				UTF16_LITTLE_ENDIAN);
++				UTF16_LITTLE_ENDIAN, true);
+ 	if (ret < 0)
+ 		goto out;
+ 
+diff --git a/fs/ntfs3/ntfs_fs.h b/fs/ntfs3/ntfs_fs.h
+index 689151fcf993..5475eaeb49fe 100644
+--- a/fs/ntfs3/ntfs_fs.h
++++ b/fs/ntfs3/ntfs_fs.h
+@@ -540,7 +540,7 @@ int ntfs_utf16_to_nls(struct ntfs_sb_info *sbi, const __le16 *name, u32 len,
+ 		      u8 *buf, int buf_len);
+ int ntfs_nls_to_utf16(struct ntfs_sb_info *sbi, const u8 *name, u32 name_len,
+ 		      struct cpu_str *uni, u32 max_ulen,
+-		      enum utf16_endian endian);
++		      enum utf16_endian endian, bool parse_ads);
+ struct inode *dir_search_flags(struct inode *dir, const struct cpu_str *uni,
+ 			       struct ntfs_fnd *fnd, u32 flags);
+ static inline struct inode *dir_search(struct inode *dir,
+-- 
+2.43.0
+
+

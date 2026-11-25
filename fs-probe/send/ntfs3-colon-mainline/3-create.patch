@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Showta Ishizaki <zakinko@snowrabbit.org>
-Date: Thu, 26 Nov 2026 00:30:00 +0900
+Date: Thu, 26 Nov 2026 01:30:00 +0900
 Subject: [PATCH] fs/ntfs3: mark a new symlink absolute only for a full path on
  a drive
 
