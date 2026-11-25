@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       images_run: { description: 'src-windows の artifact を持つ fs-probe の run', type: string, required: true }
+      series: { description: 'ntfs3 の 4 本を積んで、全部当てた版を測る', type: boolean, default: false }
 
 jobs:
   linux:
@@ -46,6 +47,21 @@ jobs:
           cp arch/x86/boot/bzImage $HOME/bz-base
           w() { touch fs/ntfs3/*.c fs/ntfs/*.c; make W=1 C=1 fs/${{ matrix.drv }}/ 2>&1 | grep -E 'warning:|error:' | sed -E 's/:[0-9]+(:[0-9]+)?:/:/' | sort -u > $HOME/ws-$1 || true; }
           w base; echo "base warnings $(wc -l < $HOME/ws-base)"
+          if [ ${{ inputs.series }} = true ] && [ ${{ matrix.drv }} = ntfs3 ]; then
+            # 一段ずつ、ずれも fuzz も無く当たり、建ち、警告が増えないこと
+            for f in $GITHUB_WORKSPACE/fs-probe/send/ntfs3-series-${{ matrix.tree }}/*.patch; do
+              n=$(basename $f | cut -c1-4)
+              patch -p1 -F0 -f -i $f < /dev/null > $HOME/pl; cat $HOME/pl
+              [ $(grep -ciE 'offset|fuzz' $HOME/pl) = 0 ] || { echo "stage $n: offset or fuzz"; exit 1; }
+              w $n; k=$(comm -13 $HOME/ws-base $HOME/ws-$n | wc -l); comm -13 $HOME/ws-base $HOME/ws-$n
+              make -s -j$(nproc) bzImage
+              echo "stage $n: exact, builds, new warnings $k"; [ $k = 0 ]
+            done
+            cp arch/x86/boot/bzImage $HOME/bz-series
+            echo "PATCHES=series" >> $GITHUB_ENV
+            exit 0
+          fi
+          echo "PATCHES=${{ matrix.patches }}" >> $GITHUB_ENV
           for p in ${{ matrix.patches }}; do
             echo "== $p"
             if [ $p = ntfs3-01b ]; then patch -p1 -f -i $GITHUB_WORKSPACE/fs-probe/send/ntfs3-01a.diff < /dev/null; fi
@@ -58,12 +74,12 @@ jobs:
       - name: 測る
         run: |
           mkdir -p out
-          for x in base ${{ matrix.patches }}; do
+          for x in base $PATCHES; do
             timeout 2400 vng --run $HOME/bz-$x --user root --memory 10G --cpus 4 --rwdir=$PWD/out -- sh $PWD/fs-probe/send/ntfs-guest.sh $PWD/in $PWD/out $x $HOME/xt/ltp/fsstress ${{ matrix.drv }} < /dev/null || echo "vng exit $?"
           done
           cat out/*.txt | tee -a $GITHUB_STEP_SUMMARY
           ! grep -h '^!!' out/*.txt
-          for x in base ${{ matrix.patches }}; do grep -q '^END' out/$x.txt; done
+          for x in base $PATCHES; do grep -q '^END' out/$x.txt; done
           cp in/win-ntfs.reparse out/
       - uses: actions/upload-artifact@v4
         if: always()

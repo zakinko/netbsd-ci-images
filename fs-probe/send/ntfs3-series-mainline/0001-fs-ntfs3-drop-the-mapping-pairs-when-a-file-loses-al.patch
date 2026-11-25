@@ -1,0 +1,57 @@
+From b176094ddd682e53c2bc76f2840d2616e140a2a0 Mon Sep 17 00:00:00 2001
+From: Showta Ishizaki <zakinko@snowrabbit.org>
+Date: Wed, 25 Nov 2026 23:00:51 +0900
+Subject: [PATCH 1/4] fs/ntfs3: drop the mapping pairs when a file loses all
+ its clusters
+
+When a non-resident attribute is truncated to nothing,
+attr_set_size_ex() sets evcn to -1 and leaves the old mapping pairs in
+the record.  chkdsk on Windows reports such a record as corrupt:
+
+  Attribute record (80, "") from file record segment AD is corrupt.
+
+Leave only the zero byte that ends the mapping pairs, and shrink the
+attribute to it.  mi_pack_runs() cannot be used for this, it returns
+-ENOSPC when there is nothing to pack.
+
+I tried it on two volumes, one where files were written and some of
+them truncated to nothing, and one after fsstress (-n 4000 -p 4).
+Without the patch all 16 empty files of the first and 3 of the 90 of the
+second still had mapping pairs, and chkdsk exited 3 on both.  With it
+there were none, and chkdsk exited 0 on both.  File contents were the
+same after a remount.
+
+Signed-off-by: Showta Ishizaki <zakinko@snowrabbit.org>
+---
+ fs/ntfs3/attrib.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/fs/ntfs3/attrib.c b/fs/ntfs3/attrib.c
+index 805acc3..317b081 100644
+--- a/fs/ntfs3/attrib.c
++++ b/fs/ntfs3/attrib.c
+@@ -815,6 +815,21 @@ pack_runs:
+ 
+ 			le = (struct ATTR_LIST_ENTRY *)((u8 *)le - le_sz);
+ 		} else {
++			u32 asize = le32_to_cpu(attr->size);
++			u32 roff = le16_to_cpu(attr->nres.run_off);
++			u32 nsize = ALIGN(roff + 1, 8);
++
++			/*
++			 * Every cluster goes.  Setting evcn alone left the old
++			 * mapping pairs behind it, and chkdsk on Windows
++			 * reports such an attribute record as corrupt.  Leave
++			 * only the zero byte which ends the mapping pairs.
++			 * mi_pack_runs() does not take an empty range.
++			 */
++			if (nsize <= asize) {
++				memset(Add2Ptr(attr, roff), 0, nsize - roff);
++				mi_resize_attr(mi, attr, (int)nsize - (int)asize);
++			}
+ 			attr->nres.evcn = cpu_to_le64((u64)vcn - 1);
+ 			mi->dirty = true;
+ 		}
+-- 
+2.54.0 (Apple Git-157)
+
