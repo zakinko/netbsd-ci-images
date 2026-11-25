@@ -1,0 +1,25 @@
+name: NetBSD の FFSv1 の日付を試す
+description: 建てたカーネルとコマンドを 2040 年の VM で試し、FreeBSD 15 に触らせ、もう一度読む
+
+inputs:
+  dir: { description: '建てたもの (netbsd.gz, bin, lib, atf) の在る dir', required: true }
+
+runs:
+  using: composite
+  steps:
+    - name: 対照、当てたもの、当てていないもので読む
+      shell: bash
+      run: bash fs-probe/send/netbsd-ffsv1-host.sh test ${{ inputs.dir }}
+    - name: FreeBSD 15 で読み、rw で触る
+      uses: vmactions/freebsd-vm@v1
+      with:
+        release: "15.0"
+        run: sh fs-probe/send/netbsd-ffsv1-fbsd.sh
+    - name: FreeBSD が触ったものを読む
+      if: always()
+      shell: bash
+      run: bash fs-probe/send/netbsd-ffsv1-host.sh back ${{ inputs.dir }}
+    - name: 数える
+      if: always()
+      shell: bash
+      run: bash fs-probe/send/netbsd-ffsv1-host.sh check

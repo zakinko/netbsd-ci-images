@@ -1,6 +1,9 @@
 name: NetBSD の FFSv1 の日付の差分を trunk で建てる
 
 # 手で回すだけ。ツール (gcc) から建てるので重い。
+# epoch と era は、建てた後に続けて試験も回す (.github/actions/netbsd-ffsv1-test)。
+# dump の日付の直し (dumpddate) は別の変更なので、epoch と era には入れず、
+# ここで重ねて当てる。
 on:
   workflow_dispatch:
     inputs:
@@ -13,7 +16,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 200
     steps:
       - uses: actions/checkout@v4
       - run: |
@@ -34,17 +37,27 @@ jobs:
       - name: 当てる
         run: |
           cd $HOME/src
-          patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-${{ inputs.form }}.diff < /dev/null | tee $HOME/patch.log
-          [ "$(grep -c '^patching file' $HOME/patch.log)" = "$(grep -c '^+++ ' $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-${{ inputs.form }}.diff)" ]
-          ! grep -E 'offset|fuzz' $HOME/patch.log
+          set -o pipefail
+          L="${{ inputs.form }}"; [ "$L" = dumpddate ] || L="$L dumpddate"
+          for f in $L; do
+            patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-$f.diff < /dev/null | tee $HOME/patch.log
+            [ "$(grep -c '^patching file' $HOME/patch.log)" = "$(grep -c '^+++ ' $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-$f.diff)" ]
+            if grep -E 'offset|fuzz' $HOME/patch.log; then exit 1; fi
+          done
           cp -f sys/ufs/ufs/dinode.h $HOME/dest/usr/include/ufs/ufs/
           cp -f sys/ufs/ufs/inode.h $HOME/dest/usr/include/ufs/ufs/
       - name: コマンド
         run: |
           cd $HOME/src
-          for d in sbin/fsck_ffs sbin/fsdb sbin/dump sbin/restore sbin/newfs usr.sbin/makefs usr.sbin/dumpfs; do
+          for d in sbin/fsck_ffs sbin/fsdb sbin/dump sbin/restore sbin/newfs usr.sbin/makefs usr.sbin/dumpfs usr.sbin/quot; do
             echo "== $d"
             (cd $d && $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no MKPIC=yes obj dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; bad="$bad $d"; }
+            grep -E 'warning:|error:' $HOME/l || true
+          done
+          # rump の FFS と ATF の試験。落ちても先へ進み、試験の側が「無い」と言う
+          for d in sys/rump/fs/lib/libffs tests/fs/common tests/fs/ffs; do
+            echo "== $d"
+            (cd $d && $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no MKPIC=yes obj dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; echo "FAILED (not fatal): $d"; }
             grep -E 'warning:|error:' $HOME/l || true
           done
           test -z "$bad" || { echo "failed:$bad"; exit 1; }
@@ -56,7 +69,19 @@ jobs:
           tail -3 $HOME/k.log
           cd $GITHUB_WORKSPACE; mkdir -p out/bin
           gzip -c $(find $HOME/obj -path '*GENERIC/netbsd' | head -1) > out/netbsd.gz
-          for b in sbin/fsck_ffs/fsck_ffs sbin/fsdb/fsdb sbin/dump/dump sbin/restore/restore sbin/newfs/newfs usr.sbin/makefs/makefs usr.sbin/dumpfs/dumpfs; do cp $(find $HOME/obj -path "*$b" -type f | head -1) out/bin/; done
-          ls -l out out/bin
-      - uses: actions/upload-artifact@v4
+          for b in sbin/fsck_ffs/fsck_ffs sbin/fsdb/fsdb sbin/dump/dump sbin/restore/restore sbin/newfs/newfs usr.sbin/makefs/makefs usr.sbin/dumpfs/dumpfs usr.sbin/quot/quot; do cp $(find $HOME/obj -path "*$b" -type f | head -1) out/bin/; done
+          # 試験の道具、当てた rump の FFS、ATF の試験。無ければ試験の側が飛ばす
+          $HOME/tools/bin/x86_64--netbsd-gcc --sysroot=$HOME/dest -O -Wall -o out/bin/ffsv1-probe fs-probe/send/netbsd-ffsv1-probe.c || echo "no probe"
+          mkdir -p out/lib out/atf
+          cp $(find $HOME/obj -name 'librumpfs_ffs.so.*.*' -type f | head -1) out/lib/ || echo "no librumpfs_ffs"
+          cp $(find $HOME/obj -path '*tests/fs/ffs/t_ufs1time' -type f | head -1) out/atf/ || echo "no t_ufs1time"
+          ls -l out out/bin out/lib out/atf
+      - if: success() || failure()
+        uses: actions/upload-artifact@v4
         with: { name: netbsd-ffsv1-time, path: out, retention-days: 14, if-no-files-found: error }
+      - if: (success() || failure()) && inputs.form != 'dumpddate'
+        uses: ./.github/actions/netbsd-ffsv1-test
+        with: { dir: out }
+      - if: always() && inputs.form != 'dumpddate'
+        uses: actions/upload-artifact@v4
+        with: { name: ffsv1-time-test, path: res, retention-days: 14 }

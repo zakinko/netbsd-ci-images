@@ -1,3 +1,27 @@
+diff --git a/distrib/sets/lists/debug/mi b/distrib/sets/lists/debug/mi
+index 642d1d10..008b250a 100644
+--- a/distrib/sets/lists/debug/mi
++++ b/distrib/sets/lists/debug/mi
+@@ -1711,6 +1711,7 @@
+ ./usr/libdata/debug/usr/tests/fs/ffs/t_snapshot.debug			tests-fs-debug		debug,atf,rump
+ ./usr/libdata/debug/usr/tests/fs/ffs/t_snapshot_log.debug		tests-fs-debug		debug,atf,rump
+ ./usr/libdata/debug/usr/tests/fs/ffs/t_snapshot_v2.debug		tests-fs-debug		debug,atf,rump
++./usr/libdata/debug/usr/tests/fs/ffs/t_ufs1time.debug			tests-fs-debug		debug,atf,rump
+ ./usr/libdata/debug/usr/tests/fs/ffs/t_update_log.debug			tests-fs-debug		debug,atf,rump
+ ./usr/libdata/debug/usr/tests/fs/fifofs/t_fifo.debug			tests-fs-debug		debug,atf,rump
+ ./usr/libdata/debug/usr/tests/fs/hfs/t_pathconvert.debug		tests-fs-debug		hfs,debug,atf,rump
+diff --git a/distrib/sets/lists/tests/mi b/distrib/sets/lists/tests/mi
+index c8bfd5e0..9716a8f5 100644
+--- a/distrib/sets/lists/tests/mi
++++ b/distrib/sets/lists/tests/mi
+@@ -1583,6 +1583,7 @@
+ ./usr/tests/fs/ffs/t_snapshot				tests-fs-tests		atf,rump
+ ./usr/tests/fs/ffs/t_snapshot_log			tests-fs-tests		atf,rump
+ ./usr/tests/fs/ffs/t_snapshot_v2			tests-fs-tests		atf,rump
++./usr/tests/fs/ffs/t_ufs1time				tests-fs-tests		atf,rump
+ ./usr/tests/fs/ffs/t_update_log				tests-fs-tests		atf,rump
+ ./usr/tests/fs/fifofs					tests-fs-tests		compattestfile,atf
+ ./usr/tests/fs/fifofs/Atffile				tests-fs-tests		atf,rump
 diff --git a/sbin/dump/dump.h b/sbin/dump/dump.h
 index b937e613..6c70af73 100644
 --- a/sbin/dump/dump.h
@@ -13,64 +37,6 @@ index b937e613..6c70af73 100644
  #define DIP_SET(dp, field, val) do {		\
  	if (is_ufs2)				\
  		(dp)->dp2.di_##field = (val);	\
-diff --git a/sbin/dump/itime.c b/sbin/dump/itime.c
-index 95b6ac3f..5c51adaa 100644
---- a/sbin/dump/itime.c
-+++ b/sbin/dump/itime.c
-@@ -156,9 +156,9 @@ getdumptime(void)
- 		    (trueinc && (ddp->dd_level > level))) */
- 		if (!trueinc && (ddp->dd_level >= level))
- 			continue;
--		if (ddp->dd_ddate <= iswap32(spcl.c_ddate))
-+		if (ddp->dd_ddate <= (time_t)iswap64(spcl.c_ddate))
- 			continue;
--		spcl.c_ddate = iswap32(ddp->dd_ddate);
-+		spcl.c_ddate = iswap64(ddp->dd_ddate);
- 		lastlevel = ddp->dd_level;
- 	}
- }
-@@ -204,7 +204,7 @@ putdumptime(void)
-   found:
- 	(void) strlcpy(dtwalk->dd_name, fname, sizeof(dtwalk->dd_name));
- 	dtwalk->dd_level = level;
--	dtwalk->dd_ddate = iswap32(spcl.c_date);
-+	dtwalk->dd_ddate = iswap64(spcl.c_date);
- 	dtfound = dtwalk;
- 
- 	ITITERATE(i, dtwalk) {
-diff --git a/sbin/dump/main.c b/sbin/dump/main.c
-index c93a4d3a..b1fa352b 100644
---- a/sbin/dump/main.c
-+++ b/sbin/dump/main.c
-@@ -528,15 +528,15 @@ main(int argc, char *argv[])
- 	/* true incremental is always a level 10 dump */
- 	spcl.c_level = trueinc? iswap32(10): iswap32(level - '0');
- 	spcl.c_type = iswap32(TS_TAPE);
--	spcl.c_date = iswap32(spcl.c_date);
--	spcl.c_ddate = iswap32(spcl.c_ddate);
-+	spcl.c_date = iswap64(spcl.c_date);
-+	spcl.c_ddate = iswap64(spcl.c_ddate);
- 	if (!Tflag)
- 		getdumptime();		/* /etc/dumpdates snarfed */
- 
--	date = iswap32(spcl.c_date);
-+	date = iswap64(spcl.c_date);
- 	msg("Date of this level %c dump: %s", level,
- 		spcl.c_date == 0 ? "the epoch\n" : ctime(&date));
--	date = iswap32(spcl.c_ddate);
-+	date = iswap64(spcl.c_ddate);
-  	msg("Date of last level %c dump: %s", lastlevel,
- 		spcl.c_ddate == 0 ? "the epoch\n" : ctime(&date));
- 	msg("Dumping ");
-@@ -694,7 +694,7 @@ main(int argc, char *argv[])
- 		    (long long)iswap64(spcl.c_tapea), iswap32(spcl.c_volume),
- 		    (iswap32(spcl.c_volume) == 1) ? "" : "s");
- 	tnow = do_stats();
--	date = iswap32(spcl.c_date);
-+	date = iswap64(spcl.c_date);
- 	msg("Date of this level %c dump: %s", level,
- 		spcl.c_date == 0 ? "the epoch\n" : ctime(&date));
- 	msg("Date this dump completed:  %s", ctime(&tnow));
 diff --git a/sbin/dump/traverse.c b/sbin/dump/traverse.c
 index ece4cb11..a5a4fb7d 100644
 --- a/sbin/dump/traverse.c
@@ -120,6 +86,19 @@ index 93cec792..7cdd8b10 100644
  		dp1->di_size = iswap64(ffs_lfragtosize(sblock, nfrags));
  		dp1->di_blocks = iswap32(btodb(ffs_lfragtosize(sblock, nfrags)));
  	}
+diff --git a/sbin/fsck_ffs/utilities.c b/sbin/fsck_ffs/utilities.c
+index f29188dc..a2cffbcd 100644
+--- a/sbin/fsck_ffs/utilities.c
++++ b/sbin/fsck_ffs/utilities.c
+@@ -670,7 +670,7 @@ sb_oldfscompat_read(struct fs *fs, struct fs **fssave)
+ 	    fs->fs_old_cstotal.cs_nffree;
+ 
+ 	fs->fs_maxbsize = fs->fs_bsize;
+-	fs->fs_time = fs->fs_old_time;
++	fs->fs_time = (uint32_t)fs->fs_old_time;
+ 	fs->fs_size = fs->fs_old_size;
+ 	fs->fs_dsize = fs->fs_old_dsize;
+ 	fs->fs_csaddr = fs->fs_old_csaddr;
 diff --git a/sbin/fsdb/fsdb.c b/sbin/fsdb/fsdb.c
 index 94d58fc0..0451485a 100644
 --- a/sbin/fsdb/fsdb.c
@@ -278,6 +257,29 @@ index 08e4aa9d..abd5a506 100644
  			node.dp1.di_mode = IFREG;
  			node.dp1.di_nlink = 1;
  			node.dp1.di_size = sblock.fs_bsize;
+diff --git a/sbin/newfs/newfs.8 b/sbin/newfs/newfs.8
+index 1f50e51f..d56d1b5a 100644
+--- a/sbin/newfs/newfs.8
++++ b/sbin/newfs/newfs.8
+@@ -29,7 +29,7 @@
+ .\"
+ .\"     @(#)newfs.8	8.6 (Berkeley) 5/3/95
+ .\"
+-.Dd April 13, 2019
++.Dd November 26, 2026
+ .Dt NEWFS 8
+ .Os
+ .Sh NAME
+@@ -227,6 +227,9 @@ Also known as
+ or
+ .Sq UFS1 .
+ This is the default.
++File times beyond the year 2038 can be stored, see
++.Xr fs 5 ;
++an older kernel does not read them as such.
+ .It 2
+ FFSv2; enhanced Fast File System, suited for more than 1 Terabyte capacity.
+ This is also known as
 diff --git a/sbin/restore/tape.c b/sbin/restore/tape.c
 index efa6a4fc..478edad7 100644
 --- a/sbin/restore/tape.c
@@ -295,6 +297,94 @@ index efa6a4fc..478edad7 100644
  			buf->c_birthtime = 0;
  			buf->c_birthtimensec = 0;
  			buf->c_atimensec = buf->c_mtimensec = 0;
+diff --git a/share/man/man5/fs.5 b/share/man/man5/fs.5
+index 03fe519a..cfd58f75 100644
+--- a/share/man/man5/fs.5
++++ b/share/man/man5/fs.5
+@@ -29,7 +29,7 @@
+ .\"
+ .\"     @(#)fs.5	8.2 (Berkeley) 4/19/94
+ .\"
+-.Dd July 27, 2001
++.Dd November 26, 2026
+ .Dt FS 5
+ .Os
+ .Sh NAME
+@@ -359,6 +359,9 @@ for each active file,
+ each current directory, each mounted-on file,
+ text file, and the root.
+ An inode is `named' by its device/i-number pair.
++The times in the inode of an FFSv1 file system have 32 bits for the
++seconds; the two bits which the nanoseconds leave unused extend them
++beyond the year 2038.
+ For further information, see the include file
+ .In ufs/ufs/inode.h .
+ .Sh SEE ALSO
+diff --git a/sys/nfs/nfs_serv.c b/sys/nfs/nfs_serv.c
+index cffe1982..45dc114f 100644
+--- a/sys/nfs/nfs_serv.c
++++ b/sys/nfs/nfs_serv.c
+@@ -1412,6 +1412,27 @@ nfsrvw_coalesce(struct nfsrv_descript *owp, struct nfsrv_descript *nfsd)
+ 	}
+ }
+ 
++/*
++ * The verifier of an exclusive create is kept in the times of the new
++ * file.  Only the seconds are used, and of those 31 bits for each half
++ * of the verifier: a file system need not store nanoseconds which are
++ * none, nor seconds outside 1970 to 2038.
++ */
++__CTASSERT(NFSX_V3CREATEVERF == 2 * sizeof(uint32_t));
++
++static void
++nfsrv_cverf2times(const u_char *cverf, struct timespec *atime,
++    struct timespec *mtime)
++{
++	uint32_t w[2];
++
++	memcpy(w, cverf, sizeof(w));
++	atime->tv_sec = ntohl(w[0]) & 0x7fffffff;
++	atime->tv_nsec = 0;
++	mtime->tv_sec = ntohl(w[1]) & 0x7fffffff;
++	mtime->tv_nsec = 0;
++}
++
+ /*
+  * nfs create service
+  * now does a truncate to 0 length via. setattr if it already exists
+@@ -1520,12 +1541,8 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *l
+ 				if (exclusive_flag) {
+ 					exclusive_flag = 0;
+ 					vattr_null(&va);
+-					/*
+-					 * XXX
+-					 * assuming NFSX_V3CREATEVERF
+-					 * == sizeof(nfstime3)
+-					 */
+-					fxdr_nfsv3time(cverf, &va.va_atime);
++					nfsrv_cverf2times(cverf, &va.va_atime,
++					    &va.va_mtime);
+ 					error = VOP_SETATTR(nd.ni_vp, &va,
+ 						cred);
+ 				}
+@@ -1600,13 +1617,11 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *l
+ 		vput(nd.ni_dvp);
+ 	if (v3) {
+ 		if (exclusive_flag && !error) {
+-			/*
+-			 * XXX assuming NFSX_V3CREATEVERF == sizeof(nfstime3)
+-			 */
+-			char oldverf[NFSX_V3CREATEVERF];
++			struct timespec atime, mtime;
+ 
+-			txdr_nfsv3time(&va.va_atime, oldverf);
+-			if (memcmp(cverf, oldverf, NFSX_V3CREATEVERF))
++			nfsrv_cverf2times(cverf, &atime, &mtime);
++			if (va.va_atime.tv_sec != atime.tv_sec ||
++			    va.va_mtime.tv_sec != mtime.tv_sec)
+ 				error = EEXIST;
+ 		}
+ 		if (dirp) {
 diff --git a/sys/ufs/ffs/ffs_inode.c b/sys/ufs/ffs/ffs_inode.c
 index 678a9b06..c370a134 100644
 --- a/sys/ufs/ffs/ffs_inode.c
@@ -368,10 +458,10 @@ index 647916d7..9ad1d517 100644
  	fs->fs_dsize = fs->fs_old_dsize;
  	fs->fs_csaddr = fs->fs_old_csaddr;
 diff --git a/sys/ufs/ufs/dinode.h b/sys/ufs/ufs/dinode.h
-index 172e3e33..f4fd7e85 100644
+index 172e3e33..a8fb2b77 100644
 --- a/sys/ufs/ufs/dinode.h
 +++ b/sys/ufs/ufs/dinode.h
-@@ -150,6 +150,63 @@ struct ufs2_dinode {
+@@ -150,6 +150,69 @@ struct ufs2_dinode {
   */
  #define	APPLEUFS_MAXSYMLINKLEN 60
  
@@ -383,7 +473,7 @@ index 172e3e33..f4fd7e85 100644
 + *	0	1970 to 2106
 + *	1	2106 to 2242
 + *	2	2242 to 2378
-+ *	3	1834 to 1970, that is before the epoch
++ *	3	1833 to 1970, that is before the epoch
 + *
 + * They are zero until 2106, so that until then code which does not know
 + * about them, but has the seconds unsigned, reads the same times.  A
@@ -418,15 +508,21 @@ index 172e3e33..f4fd7e85 100644
 +	return nsec & UFS1_NSEC_MASK;
 +}
 +
-+/* Store a time, the nearest one possible if it is out of range. */
++/*
++ * Store a time, the nearest one possible if it is out of range.  Not
++ * every caller has checked the nanoseconds, and they must not reach the
++ * two bits above them.
++ */
 +static __inline void
-+ufs1_time_set(int32_t *secp, int32_t *nsecp, int64_t sec, int32_t nsec)
++ufs1_time_set(int32_t *secp, int32_t *nsecp, int64_t sec, int64_t nsec)
 +{
 +
 +	if (sec < UFS1_TIME_MIN)
 +		sec = UFS1_TIME_MIN;
 +	else if (sec > UFS1_TIME_MAX)
 +		sec = UFS1_TIME_MAX;
++	if (nsec < 0 || nsec >= 1000000000)
++		nsec = 0;
 +	*secp = (int32_t)(uint32_t)sec;
 +	*nsecp = (int32_t)((uint32_t)nsec |
 +	    (uint32_t)((uint64_t)sec >> 32) << UFS1_NSEC_BITS);
@@ -436,7 +532,7 @@ index 172e3e33..f4fd7e85 100644
  #define	IEXEC		0000100		/* Executable. */
  #define	IWRITE		0000200		/* Writable. */
 diff --git a/sys/ufs/ufs/inode.h b/sys/ufs/ufs/inode.h
-index 51e34159..7deae9b3 100644
+index 51e34159..df7decea 100644
 --- a/sys/ufs/ufs/inode.h
 +++ b/sys/ufs/ufs/inode.h
 @@ -269,6 +269,33 @@ struct inode {
@@ -463,7 +559,7 @@ index 51e34159..7deae9b3 100644
 +		if ((ip)->i_ump->um_fstype == UFS1) {			\
 +			ufs1_time_set(&(ip)->i_ffs1_##field,		\
 +			    &(ip)->i_ffs1_##field##nsec,		\
-+			    (ts)->tv_sec, (int32_t)(ts)->tv_nsec);	\
++			    (ts)->tv_sec, (ts)->tv_nsec);	\
 +		} else {						\
 +			(ip)->i_ffs2_##field = (ts)->tv_sec;		\
 +			(ip)->i_ffs2_##field##nsec = (ts)->tv_nsec;	\
@@ -493,16 +589,238 @@ index 913665fb..e05f6645 100644
  		vap->va_birthtime.tv_sec = 0;
  		vap->va_birthtime.tv_nsec = 0;
  		vap->va_bytes = dbtob((u_quad_t)ip->i_ffs1_blocks);
+diff --git a/tests/fs/ffs/Makefile b/tests/fs/ffs/Makefile
+index 833035b1..787d8723 100644
+--- a/tests/fs/ffs/Makefile
++++ b/tests/fs/ffs/Makefile
+@@ -29,6 +29,7 @@ TESTS_C+=	t_snapshot_v2
+ TESTS_C+=	t_mount
+ TESTS_C+=	t_quota2_1
+ TESTS_C+=	t_quota2_remount
++TESTS_C+=	t_ufs1time
+ TESTS_C+=	t_update_log
+ 
+ LDADD+=-lrumpfs_ffs						# ffs
+diff --git a/tests/fs/ffs/t_ufs1time.c b/tests/fs/ffs/t_ufs1time.c
+new file mode 100644
+index 00000000..77fd4795
+--- /dev/null
++++ b/tests/fs/ffs/t_ufs1time.c
+@@ -0,0 +1,185 @@
++/*	$NetBSD$	*/
++
++/*
++ * Times beyond the year 2038 on FFSv1, PR kern/48449
++ */
++
++#include <atf-c.h>
++
++#define FSTEST_IMGSIZE (4000 * 512)
++#include "../common/h_fsmacros.h"
++
++#include <sys/types.h>
++#include <sys/mount.h>
++#include <sys/stat.h>
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#include <ufs/ufs/ufsmount.h>
++
++#include <rump/rump.h>
++#include <rump/rump_syscalls.h>
++
++#include "h_macros.h"
++
++#define Y2040	2209086245
++
++static const struct {
++	const char *name;
++	struct timespec ts;
++} times[] = {
++	{ "y1960", { -315521755, 123456789 } },
++	{ "y2030", { 1893553445, 123456789 } },
++	{ "y2040", { Y2040, 123456789 } },
++	{ "y2100", { 4102542245, 123456789 } },
++	{ "y2200", { 7258215845, 123456789 } },
++};
++
++/* Not nanoseconds, and neither UTIME_NOW nor UTIME_OMIT. */
++#define BADNSEC	0x40000005
++
++static void
++check(const char *when)
++{
++	struct stat sb;
++	size_t i;
++
++	for (i = 0; i < __arraycount(times); i++) {
++		RL(rump_sys_stat(times[i].name, &sb));
++		ATF_CHECK_MSG(sb.st_atime == times[i].ts.tv_sec &&
++		    sb.st_atimensec == times[i].ts.tv_nsec,
++		    "%s: atime of %s is %lld.%09ld", when, times[i].name,
++		    (long long)sb.st_atime, (long)sb.st_atimensec);
++		ATF_CHECK_MSG(sb.st_mtime == times[i].ts.tv_sec &&
++		    sb.st_mtimensec == times[i].ts.tv_nsec,
++		    "%s: mtime of %s is %lld.%09ld", when, times[i].name,
++		    (long long)sb.st_mtime, (long)sb.st_mtimensec);
++	}
++	if (rump_sys_stat("badnsec", &sb) == 0)
++		ATF_CHECK_MSG(sb.st_mtime == Y2040,
++		    "%s: mtime of badnsec is %lld.%09ld", when,
++		    (long long)sb.st_mtime, (long)sb.st_mtimensec);
++}
++
++static void
++ufs1time(const char *newfs_args)
++{
++	char cmd[1024];
++	struct ufs_args args;
++	struct timespec ts[2];
++	size_t i;
++	int fd;
++
++	snprintf(cmd, sizeof(cmd), "newfs -F -s %d %s %s > /dev/null",
++	    FSTEST_IMGSIZE / 512, newfs_args, FSTEST_IMGNAME);
++	if (system(cmd) != 0)
++		atf_tc_fail("cannot create file system");
++
++	rump_init();
++	if (rump_sys_mkdir(FSTEST_MNTNAME, 0777) == -1)
++		atf_tc_fail_errno("mount point create");
++
++	rump_pub_etfs_register("/diskdev", FSTEST_IMGNAME, RUMP_ETFS_BLK);
++
++	args.fspec = __UNCONST("/diskdev");
++
++	if (rump_sys_mount(MOUNT_FFS, FSTEST_MNTNAME, 0,
++	    &args, sizeof(args)) == -1)
++		atf_tc_fail_errno("mount ffs rw %s", FSTEST_MNTNAME);
++	RL(rump_sys_chdir(FSTEST_MNTNAME));
++
++	for (i = 0; i < __arraycount(times); i++) {
++		RL(fd = rump_sys_open(times[i].name, O_CREAT | O_RDWR, 0644));
++		ts[0] = ts[1] = times[i].ts;
++		RL(rump_sys_futimens(fd, ts));
++		RL(rump_sys_close(fd));
++	}
++
++	/*
++	 * Nanoseconds that are none may be refused, but if they are taken
++	 * they must not change the seconds.
++	 */
++	RL(fd = rump_sys_open("badnsec", O_CREAT | O_RDWR, 0644));
++	ts[0].tv_sec = ts[1].tv_sec = Y2040;
++	ts[0].tv_nsec = ts[1].tv_nsec = BADNSEC;
++	if (rump_sys_futimens(fd, ts) == -1) {
++		if (errno != EINVAL)
++			atf_tc_fail_errno("futimens");
++		RL(rump_sys_unlink("badnsec"));
++	}
++	RL(rump_sys_close(fd));
++
++	check("before unmount");
++
++	RL(rump_sys_chdir("/"));
++	RL(rump_sys_unmount(FSTEST_MNTNAME, 0));
++	if (rump_sys_mount(MOUNT_FFS, FSTEST_MNTNAME, MNT_RDONLY,
++	    &args, sizeof(args)) == -1)
++		atf_tc_fail_errno("mount ffs ro %s", FSTEST_MNTNAME);
++	RL(rump_sys_chdir(FSTEST_MNTNAME));
++
++	check("after remount");
++
++	RL(rump_sys_chdir("/"));
++	RL(rump_sys_unmount(FSTEST_MNTNAME, 0));
++
++	snprintf(cmd, sizeof(cmd), "fsck_ffs -fn %s > /dev/null",
++	    FSTEST_IMGNAME);
++	if (system(cmd) != 0)
++		atf_tc_fail("fsck_ffs does not find the file system clean");
++}
++
++ATF_TC(ufs1time_le);
++ATF_TC_HEAD(ufs1time_le, tc)
++{
++
++	atf_tc_set_md_var(tc, "descr", "times from 1960 to 2200 on "
++	    "little endian FFSv1");
++}
++
++ATF_TC_BODY(ufs1time_le, tc)
++{
++
++	ufs1time("-O 1 -B le");
++}
++
++ATF_TC(ufs1time_be);
++ATF_TC_HEAD(ufs1time_be, tc)
++{
++
++	atf_tc_set_md_var(tc, "descr", "times from 1960 to 2200 on "
++	    "big endian FFSv1");
++}
++
++ATF_TC_BODY(ufs1time_be, tc)
++{
++
++	ufs1time("-O 1 -B be");
++}
++
++ATF_TC(ufs1time_old);
++ATF_TC_HEAD(ufs1time_old, tc)
++{
++
++	atf_tc_set_md_var(tc, "descr", "times from 1960 to 2200 on "
++	    "FFSv1 in the 4.3BSD format");
++}
++
++ATF_TC_BODY(ufs1time_old, tc)
++{
++
++	ufs1time("-O 0");
++}
++
++ATF_TP_ADD_TCS(tp)
++{
++
++	ATF_TP_ADD_TC(tp, ufs1time_le);
++	ATF_TP_ADD_TC(tp, ufs1time_be);
++	ATF_TP_ADD_TC(tp, ufs1time_old);
++
++	return atf_no_error();
++}
 diff --git a/usr.sbin/dumpfs/dumpfs.c b/usr.sbin/dumpfs/dumpfs.c
-index 3fd230d0..a5e4541a 100644
+index 3fd230d0..54ba6650 100644
 --- a/usr.sbin/dumpfs/dumpfs.c
 +++ b/usr.sbin/dumpfs/dumpfs.c
-@@ -708,9 +708,10 @@ print_ufs1_inode(int inum, int i_off, void *ibuf)
+@@ -276,7 +276,7 @@ fix_superblock(struct fs *fs, uint16_t *opostbl)
+ 		fs->fs_sblockloc = SBLOCK_UFS1;
+ 		fs->fs_flags = fs->fs_old_flags;
+ 		fs->fs_maxbsize = fs->fs_bsize;
+-		fs->fs_time = fs->fs_old_time;
++		fs->fs_time = (uint32_t)fs->fs_old_time;
+ 		fs->fs_size = fs->fs_old_size;
+ 		fs->fs_dsize = fs->fs_old_dsize;
+ 		fs->fs_csaddr = fs->fs_old_csaddr;
+@@ -626,7 +626,7 @@ dumpcg(const char *name, int fd, int c)
+ 	if (needswap)
+ 		ffs_cg_swap(&acg, &acg, &afs);
+ 	if (printold)
+-		t = acg.cg_old_time;
++		t = (uint32_t)acg.cg_old_time;
+ 	else
+ 		t = acg.cg_time;
+ 	printf("magic\t%x\ttell\t%llx\ttime\t%s",
+@@ -708,9 +708,11 @@ print_ufs1_inode(int inum, int i_off, void *ibuf)
  		    " generation      uid        gid\n");
  	if (i->di_mode == 0 && i->di_nlink == 0 && !ISOPT(opt_verbose))
  		return;
 -	printf("%8u: %6o %6d %20" PRIu64 " %10u.%09u %8x %10u %8x %10u %10u\n",
-+	printf("%8u: %6o %6d %20" PRIu64 " %10" PRId64 ".%09u %8x %10u %8x %10u %10u\n",
++	printf("%8u: %6o %6d %20" PRIu64 " %10" PRId64 ".%09u %8x %10u %8x %10u"
++		" %10u\n",
  		inum, i->di_mode, i->di_nlink, i->di_size,
 -		i->di_ctime, i->di_ctimensec, i->di_flags, i->di_blocks,
 +		ufs1_time_sec(i->di_ctime, i->di_ctimensec),
@@ -511,36 +829,56 @@ index 3fd230d0..a5e4541a 100644
  }
  
 diff --git a/usr.sbin/makefs/ffs.c b/usr.sbin/makefs/ffs.c
-index e4b0bd4b..fd2446ad 100644
+index e4b0bd4b..78de9a95 100644
 --- a/usr.sbin/makefs/ffs.c
 +++ b/usr.sbin/makefs/ffs.c
-@@ -675,13 +675,23 @@ ffs_build_dinode1(struct ufs1_dinode *dinp, dirbuf_t *dbufp, fsnode *cur,
+@@ -661,6 +661,7 @@ ffs_build_dinode1(struct ufs1_dinode *dinp, dirbuf_t *dbufp, fsnode *cur,
+ {
+ 	size_t slen;
+ 	void *membuf;
++	int32_t ansec, mnsec, cnsec;
+ 	struct stat *st = stampst.st_ino ? &stampst : &cur->inode->st;
+ 	ffs_opt_t *ffs_opts = fsopts->fs_specific;
+ 
+@@ -675,14 +676,19 @@ ffs_build_dinode1(struct ufs1_dinode *dinp, dirbuf_t *dbufp, fsnode *cur,
  	dinp->di_uid = cur->inode->st.st_uid;
  	dinp->di_gid = cur->inode->st.st_gid;
  
 -	dinp->di_atime = st->st_atime;
 -	dinp->di_mtime = st->st_mtime;
 -	dinp->di_ctime = st->st_ctime;
-+	ufs1_time_set(&dinp->di_atime, &dinp->di_atimensec, st->st_atime,
  #if HAVE_STRUCT_STAT_ST_MTIMENSEC
 -	dinp->di_atimensec = st->st_atimensec;
 -	dinp->di_mtimensec = st->st_mtimensec;
 -	dinp->di_ctimensec = st->st_ctimensec;
-+	    st->st_atimensec);
++	ansec = st->st_atimensec;
++	mnsec = st->st_mtimensec;
++	cnsec = st->st_ctimensec;
 +#else
-+	    0);
-+#endif
-+	ufs1_time_set(&dinp->di_mtime, &dinp->di_mtimensec, st->st_mtime,
-+#if HAVE_STRUCT_STAT_ST_MTIMENSEC
-+	    st->st_mtimensec);
-+#else
-+	    0);
-+#endif
-+	ufs1_time_set(&dinp->di_ctime, &dinp->di_ctimensec, st->st_ctime,
-+#if HAVE_STRUCT_STAT_ST_MTIMENSEC
-+	    st->st_ctimensec);
-+#else
-+	    0);
++	ansec = mnsec = cnsec = 0;
  #endif
++	ufs1_time_set(&dinp->di_atime, &dinp->di_atimensec, st->st_atime,
++	    ansec);
++	ufs1_time_set(&dinp->di_mtime, &dinp->di_mtimensec, st->st_mtime,
++	    mnsec);
++	ufs1_time_set(&dinp->di_ctime, &dinp->di_ctimensec, st->st_ctime,
++	    cnsec);
  		/* not set: di_db, di_ib, di_blocks, di_spare */
  
+ 	membuf = NULL;
+diff --git a/usr.sbin/quot/quot.c b/usr.sbin/quot/quot.c
+index d89c1904..d4c16b7d 100644
+--- a/usr.sbin/quot/quot.c
++++ b/usr.sbin/quot/quot.c
+@@ -424,7 +424,10 @@ douser(int fd, struct fs *super, const char *name)
+ 		    && !isfree(super, dp))
+ 			uses(DIP(super, dp, uid),
+ 			    estimate ? virtualblocks(super, dp) :
+-			    actualblocks(super, dp), DIP(super, dp, atime));
++			    actualblocks(super, dp),
++			    super->fs_magic == FS_UFS1_MAGIC ?
++			    ufs1_time_sec(dp->dp1.di_atime,
++			    dp->dp1.di_atimensec) : dp->dp2.di_atime);
+ 		else if (errno)
+ 			errx(1, "%s", name);
+ 	}

@@ -1,5 +1,7 @@
 name: NetBSD の FFSv1 の日付の差分を 2040 年の VM で試す
 
+# 建て終えた run の成果物を取ってきて試す。建てる方 (netbsd-ffsv1-time) も
+# 同じ試験を続けて回すので、これは試験だけをやり直すときに使う。
 on:
   workflow_dispatch:
     inputs:
@@ -8,36 +10,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { name: netbsd-ffsv1-time, path: in, run-id: '${{ inputs.build_run }}', github-token: '${{ github.token }}' }
-      - run: |
-          sudo apt-get -q update; sudo apt-get -qy install qemu-system-x86 e2fsprogs
-          sudo chmod 666 /dev/kvm
-          mkdir root k
-          B=https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/latest/amd64/binary
-          for s in base rescue etc; do curl -sSfL $B/sets/$s.tar.xz | sudo tar -xJpf - -C root; done
-          curl -sSfL $B/sets/kern-GENERIC.tar.xz | tar -xJf - -C k; mv k/netbsd netbsd-old
-          gunzip -c in/netbsd.gz > netbsd-new
-          sudo mkdir -p root/new root/mnt root/w; sudo cp in/bin/* root/new/; sudo chmod 755 root/new/*
-          sudo cp fs-probe/send/netbsd-ffsv1-rc root/etc/rc
-          for i in 1 2 3 4; do truncate -s 128M d$i.raw; done
-          for k in new old; do
-            echo $k | sudo tee root/testkernel
-            rm -f root-$k.raw; truncate -s 1500M root-$k.raw
-            sudo mke2fs -q -t ext2 -O none,filetype,sparse_super -I 128 -b 4096 -d root -F root-$k.raw
-            sudo chmod 666 root-$k.raw
-            D=; for f in root-$k d1 d2 d3 d4; do D="$D -drive if=virtio,format=raw,file=$f.raw"; done
-            timeout 600 qemu-system-x86_64 -M q35 -enable-kvm -cpu host -smp 2 -m 2048 -kernel netbsd-$k -append "console=com root=ld0d rw -v" $D -display none -serial file:$k.log -monitor none -no-reboot || echo "qemu exit $?"
-            echo "##### $k"; tr -d '\r' < $k.log | grep -E '^T' || tail -60 $k.log
-          done
-          tr -d '\r' < new.log | grep -q '^T ALLDONE' && tr -d '\r' < old.log | grep -q '^T ALLDONE'
-          ! cat new.log old.log | tr -d '\r' | grep -E '^T .*(newfs failed|mount failed)'
-          [ $(tr -d '\r' < new.log | grep -c ' restored w2040 ') = 3 ]
-      - if: always()
-        run: mkdir -p out; cp *.log out/; for i in 1 2 3; do gzip -c d$i.raw > out/d$i.raw.gz; done
+      - uses: ./.github/actions/netbsd-ffsv1-test
+        with: { dir: in }
       - if: always()
         uses: actions/upload-artifact@v4
-        with: { name: ffsv1-time-test, path: out, retention-days: 14 }
+        with: { name: ffsv1-time-test, path: res, retention-days: 14 }
