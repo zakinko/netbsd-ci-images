@@ -47,6 +47,7 @@ jobs:
           done
           test -z "$bad" || { echo "failed:$bad"; exit 1; }
       - name: カーネル
+        if: success() || failure()
         run: |
           cd $HOME/src
           ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest kernel=GENERIC > $HOME/k.log 2>&1 || { grep -E 'error' $HOME/k.log | head; tail -40 $HOME/k.log; exit 1; }
