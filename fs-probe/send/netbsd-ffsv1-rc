@@ -7,7 +7,7 @@ mount -t tmpfs tmpfs /w
 echo "T# kernel $(uname -rv)"
 K=$(cat /testkernel)
 show() {
-	for f in w1800 w1960 w2030 w2040 w2100 w2400 w2500; do
+	for f in w1800 w1960 w2030 w2040 w2100 w2200 w2400 w2500; do
 		[ -e /mnt/$f ] && echo "T $1 $f $(stat -f '%m %Sm' -t '%Y-%m-%d' /mnt/$f) nsec $(stat -f '%Fm' /mnt/$f | sed 's/.*\.//')"
 	done
 	[ -e /mnt/now ] && echo "T $1 now $(stat -f '%Sm' -t '%Y-%m-%d' /mnt/now)"
@@ -22,7 +22,7 @@ for t in "ld1 1 le" "ld2 0 le" "ld3 1 be"; do
 	fi
 	mount -t ffs /dev/${d}d /mnt || { echo "T $n mount failed"; continue; }
 	if [ $K = new ]; then
-		for y in 1800 1960 2030 2040 2100 2400 2500; do : > /mnt/w$y; touch -d "$y-01-02T03:04:05.123456789Z" /mnt/w$y 2>&1; done
+		for y in 1800 1960 2030 2040 2100 2200 2400 2500; do : > /mnt/w$y; touch -d "$y-01-02T03:04:05.123456789Z" /mnt/w$y 2>&1; done
 		echo hello > /mnt/now
 		show "$n cached"
 		umount /mnt; mount -t ffs /dev/${d}d /mnt
@@ -40,6 +40,14 @@ for t in "ld1 1 le" "ld2 0 le" "ld3 1 be"; do
 			$w -1 -a -T "Sun Jan  2 00:00:00 2039" -f /w/d1 /dev/r${d}d > /w/dl 2>&1
 			echo "T $n incremental $w exit $? $(tail -2 /w/dl | tr '\n' ';') list: $($P/restore -tf /w/d1 2>&1 | tail -6 | tr '\n' ';'): $($P/restore -tf /w/d1 2>/dev/null | grep -cE '/(now|w2040|w2100)$') of 3"
 		done
+		# 2038 年と関係なく、2030 年の変更が増分に入るか
+		date 203001020304 > /dev/null 2>&1
+		mount -t ffs /dev/${d}d /mnt; echo x > /mnt/y2030; umount /mnt
+		for w in $P/dump /sbin/dump; do
+			$w -1 -a -T "Tue Jan  2 00:00:00 2029" -f /w/d1 /dev/r${d}d > /w/dl 2>&1
+			echo "T $n incremental2030 $w exit $? $(grep 'Date of last' /w/dl) y2030 listed $(restore -tf /w/d1 2>&1 | grep -c y2030)"
+		done
+		date 204001020304 > /dev/null 2>&1
 		rm -f /w/d0 /w/d1
 	fi
 done

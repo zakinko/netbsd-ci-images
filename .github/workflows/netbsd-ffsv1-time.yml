@@ -3,9 +3,11 @@ name: NetBSD の FFSv1 の日付の差分を trunk で建てる
 # 手で回すだけ。ツール (gcc) から建てるので重い。
 on:
   workflow_dispatch:
+    inputs:
+      form: { description: 'epoch か era', type: string, default: epoch }
 
 concurrency:
-  group: netbsd-ffsv1-time
+  group: netbsd-ffsv1-time-${{ inputs.form }}
   cancel-in-progress: true
 
 jobs:
@@ -32,8 +34,8 @@ jobs:
       - name: 当てる
         run: |
           cd $HOME/src
-          patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-time.diff < /dev/null | tee $HOME/patch.log
-          [ "$(grep -c '^patching file' $HOME/patch.log)" = "$(grep -c '^+++ ' $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-time.diff)" ]
+          patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-${{ inputs.form }}.diff < /dev/null | tee $HOME/patch.log
+          [ "$(grep -c '^patching file' $HOME/patch.log)" = "$(grep -c '^+++ ' $GITHUB_WORKSPACE/fs-probe/send/netbsd-ffsv1-${{ inputs.form }}.diff)" ]
           ! grep -E 'offset|fuzz' $HOME/patch.log
           cp -f sys/ufs/ufs/dinode.h $HOME/dest/usr/include/ufs/ufs/
           cp -f sys/ufs/ufs/inode.h $HOME/dest/usr/include/ufs/ufs/

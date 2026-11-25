@@ -1,26 +1,3 @@
-From 6865293e21ca3ac8d0fc2fc9f14f617d69dcea9d Mon Sep 17 00:00:00 2001
-From: Showta Ishizaki <zakinko@snowrabbit.org>
-Date: Wed, 25 Nov 2026 19:32:31 +0900
-Subject: [PATCH] wip: FFSv1 times past 2038 in the nanoseconds
-
----
- sbin/dump/dump.h           |  4 ++++
- sbin/dump/traverse.c       |  2 +-
- sbin/fsck_ffs/inode.c      | 10 ++++++--
- sbin/fsdb/fsdb.c           | 30 ++++++++++++++++--------
- sbin/fsdb/fsdbutil.c       | 21 ++++++++++++-----
- sbin/newfs/mkfs.c          | 30 ++++++++++++++----------
- sbin/restore/tape.c        |  6 +++--
- sys/ufs/ffs/ffs_inode.c    |  9 +++-----
- sys/ufs/ffs/ffs_snapshot.c |  9 +++-----
- sys/ufs/ffs/ffs_vfsops.c   |  3 ++-
- sys/ufs/ufs/dinode.h       | 47 ++++++++++++++++++++++++++++++++++++++
- sys/ufs/ufs/inode.h        | 27 ++++++++++++++++++++++
- sys/ufs/ufs/ufs_vnops.c    |  9 +++-----
- usr.sbin/dumpfs/dumpfs.c   |  5 ++--
- usr.sbin/makefs/ffs.c      | 22 +++++++++++++-----
- 15 files changed, 174 insertions(+), 60 deletions(-)
-
 diff --git a/sbin/dump/dump.h b/sbin/dump/dump.h
 index b937e613..6c70af73 100644
 --- a/sbin/dump/dump.h
@@ -36,6 +13,64 @@ index b937e613..6c70af73 100644
  #define DIP_SET(dp, field, val) do {		\
  	if (is_ufs2)				\
  		(dp)->dp2.di_##field = (val);	\
+diff --git a/sbin/dump/itime.c b/sbin/dump/itime.c
+index 95b6ac3f..5c51adaa 100644
+--- a/sbin/dump/itime.c
++++ b/sbin/dump/itime.c
+@@ -156,9 +156,9 @@ getdumptime(void)
+ 		    (trueinc && (ddp->dd_level > level))) */
+ 		if (!trueinc && (ddp->dd_level >= level))
+ 			continue;
+-		if (ddp->dd_ddate <= iswap32(spcl.c_ddate))
++		if (ddp->dd_ddate <= (time_t)iswap64(spcl.c_ddate))
+ 			continue;
+-		spcl.c_ddate = iswap32(ddp->dd_ddate);
++		spcl.c_ddate = iswap64(ddp->dd_ddate);
+ 		lastlevel = ddp->dd_level;
+ 	}
+ }
+@@ -204,7 +204,7 @@ putdumptime(void)
+   found:
+ 	(void) strlcpy(dtwalk->dd_name, fname, sizeof(dtwalk->dd_name));
+ 	dtwalk->dd_level = level;
+-	dtwalk->dd_ddate = iswap32(spcl.c_date);
++	dtwalk->dd_ddate = iswap64(spcl.c_date);
+ 	dtfound = dtwalk;
+ 
+ 	ITITERATE(i, dtwalk) {
+diff --git a/sbin/dump/main.c b/sbin/dump/main.c
+index c93a4d3a..b1fa352b 100644
+--- a/sbin/dump/main.c
++++ b/sbin/dump/main.c
+@@ -528,15 +528,15 @@ main(int argc, char *argv[])
+ 	/* true incremental is always a level 10 dump */
+ 	spcl.c_level = trueinc? iswap32(10): iswap32(level - '0');
+ 	spcl.c_type = iswap32(TS_TAPE);
+-	spcl.c_date = iswap32(spcl.c_date);
+-	spcl.c_ddate = iswap32(spcl.c_ddate);
++	spcl.c_date = iswap64(spcl.c_date);
++	spcl.c_ddate = iswap64(spcl.c_ddate);
+ 	if (!Tflag)
+ 		getdumptime();		/* /etc/dumpdates snarfed */
+ 
+-	date = iswap32(spcl.c_date);
++	date = iswap64(spcl.c_date);
+ 	msg("Date of this level %c dump: %s", level,
+ 		spcl.c_date == 0 ? "the epoch\n" : ctime(&date));
+-	date = iswap32(spcl.c_ddate);
++	date = iswap64(spcl.c_ddate);
+  	msg("Date of last level %c dump: %s", lastlevel,
+ 		spcl.c_ddate == 0 ? "the epoch\n" : ctime(&date));
+ 	msg("Dumping ");
+@@ -694,7 +694,7 @@ main(int argc, char *argv[])
+ 		    (long long)iswap64(spcl.c_tapea), iswap32(spcl.c_volume),
+ 		    (iswap32(spcl.c_volume) == 1) ? "" : "s");
+ 	tnow = do_stats();
+-	date = iswap32(spcl.c_date);
++	date = iswap64(spcl.c_date);
+ 	msg("Date of this level %c dump: %s", level,
+ 		spcl.c_date == 0 ? "the epoch\n" : ctime(&date));
+ 	msg("Date this dump completed:  %s", ctime(&tnow));
 diff --git a/sbin/dump/traverse.c b/sbin/dump/traverse.c
 index ece4cb11..a5a4fb7d 100644
 --- a/sbin/dump/traverse.c
@@ -499,6 +534,3 @@ index e4b0bd4b..fd2446ad 100644
  #endif
  		/* not set: di_db, di_ib, di_blocks, di_spare */
  
--- 
-2.54.0 (Apple Git-157)
-
