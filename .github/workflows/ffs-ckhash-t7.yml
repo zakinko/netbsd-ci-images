@@ -1,0 +1,71 @@
+name: NetBSD の FFS check hash、ro から rw への remount
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run: { description: 'ffs-ckhash の run', type: string, required: true }
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: ffs-ckhash-build, path: ffs-ckhash, run-id: '${{ inputs.build_run }}', github-token: '${{ github.token }}' }
+      - run: |
+          sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 netcat-openbsd
+          sudo chmod 666 /dev/kvm
+          B=https://github.com/${{ github.repository }}/releases/download/images
+          curl -fsSL -O $B/amd64-11.0.qcow2; curl -fsSL -O $B/amd64-11.0.qemu
+          KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
+      - name: 対照、v3
+        run: |
+          set -x
+          SNAP=$(cat ffs-ckhash/snap)
+          SSH=$(cat ./amd64-11.0.ssh)
+          alive() { n=0; until $SSH true 2>/dev/null; do n=$((n+1)); [ $n -gt 90 ] && return 1; sleep 5; done; }
+          # shutdown(8) は -current の DIAGNOSTIC kernel で pg_remove() の KASSERT を踏む。
+          reboot_in() { $SSH "$1; (sleep 5; sync; sync; /sbin/reboot -q) >/dev/null 2>&1 &" || true; sleep 40; alive; }
+          (cd ffs-ckhash && tar cf - .) | $SSH 'mkdir -p /root/p/ck && cd /root/p/ck && tar xf -'
+          is() { v=$($SSH uname -v); echo "$v"; w=$(strings -a ffs-ckhash/$1/netbsd | grep -m1 -E '^NetBSD 11.*GENERIC' ); case "NetBSD $v" in *"$(echo "$w" | grep -oE '#[0-9]+: .* UTC 20[0-9]+')"*) ;; *) echo "expected $w"; exit 1;; esac; }
+          reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"; $SSH uname -v | grep 11.99
+          reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"; $SSH uname -v | grep 11.99
+          $SSH ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile
+          for v in ctl v3; do
+            reboot_in "sh /root/p/ck/install.sh $v"; is $v
+            $SSH sh /root/p/ck/t7.sh $v | tee $v-t7.txt
+          done
+          $SSH "cd /root/p/ck/t7 && tar cf - ctl.img v3.img" > after.tar
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ffs-ckhash-t7
+          retention-days: 14
+          path: |
+            *.txt
+            *.tar
+            amd64-11.0.console.log
+      - if: always()
+        run: DIR=. sh stopvm.sh amd64-11.0 || true; tail -80 amd64-11.0.console.log || true
+
+  freebsd:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: ffs-ckhash-t7, path: after }
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.0"
+          run: |
+            cd after; for t in *.tar; do tar xf $t; done
+            for i in *.img; do
+              [ $i = q.img ] && continue
+              echo "== $i"; md=$(mdconfig -a -t vnode -f $i)
+              dumpfs /dev/$md | grep -E 'check hashes|flags' | head -3
+              fsck_ffs -n -f /dev/$md > f.txt 2>&1; echo "fsck exit $?"; grep -v '^\*\*' f.txt | head -14
+              mount -o ro /dev/$md /mnt && ls /mnt | tr '\n' ' ' && umount /mnt
+              mdconfig -d -u $md
+            done
