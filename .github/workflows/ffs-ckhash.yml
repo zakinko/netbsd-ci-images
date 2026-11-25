@@ -1,15 +1,17 @@
-name: NetBSD の FFS check hash (v4) を建てて試す
+name: NetBSD の FFS check hash (v5) を建てて試す
 
-# 手で回すだけ。trunk (v4 の根元)、v3、v4 を同じ道具で建て、同じ VM で比べる。
+# 手で回すだけ。trunk (v5 の根元) と v5 を同じ道具で建て、同じ VM で比べる。
+# v3 と v4 を並べた結果は run 45661962312 に在る (その時の workflow は 7cf0385)。
 # 待ち行列が長いので、建てる・試す・FreeBSD で見るを一つの job にまとめてある。
 on:
   workflow_dispatch:
     inputs:
       build_run: { description: '建てた run (空なら建てる)', type: string, default: '' }
       ports: { description: '他の port の kernel も建てる', type: boolean, default: true }
+      cpu: { description: 'qemu の -cpu (空なら既定の qemu64、SSE4.2 無し)', type: string, default: 'host' }
 
 concurrency:
-  group: ffs-ckhash-v4
+  group: ffs-ckhash-v5
   cancel-in-progress: true
 
 jobs:
@@ -23,14 +25,8 @@ jobs:
         run: |
           sudo apt-get -q update; sudo apt-get -qy install zlib1g-dev
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          git clone -q --depth 6 -b ffs-metackhash-v4 https://github.com/zakinko/NetBSD-src.git $HOME/src
-          # 浅い fetch は共有する commit の所で切る。5 にすると v4~5 (根元) が消える。
-          git -C $HOME/src fetch -q --depth 6 origin ffs-metackhash-v3
-          git -C $HOME/src branch v3 FETCH_HEAD
-          git -C $HOME/src log --format='%H %cd %s' ffs-metackhash-v4
-          git -C $HOME/src log --format='%H %cd %s' -1 v3
-          git -C $HOME/src log --format='%H %cd %s' -1 ffs-metackhash-v4~5
-          git -C $HOME/src log --format='%H %cd %s' -1 v3~5
+          git clone -q --depth 6 -b ffs-metackhash-v5 https://github.com/zakinko/NetBSD-src.git $HOME/src
+          git -C $HOME/src log --format='%H %cd %s' ffs-metackhash-v5
           SNAP=$(curl -fsSL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/ | grep -oE '20[0-9]{12}Z' | sort -u | tail -1)
           curl -fsI https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/$SNAP/amd64/binary/sets/tests.tar.xz | head -1
           mkdir -p $HOME/dest $GITHUB_WORKSPACE/out; echo $SNAP | tee $GITHUB_WORKSPACE/out/snap
@@ -47,15 +43,14 @@ jobs:
         run: |
           cd $HOME/src
           ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest tools > $HOME/tools.log 2>&1 || { tail -60 $HOME/tools.log; exit 1; }
-      - name: 対照、v3、v4
+      - name: 対照と v5
         if: inputs.build_run == ''
         run: |
           cd $HOME/src
-          for v in ctl v3 v4; do
+          for v in ctl v5; do
             case $v in
-            ctl) git checkout -q ffs-metackhash-v4~5 ;;
-            v3)  git checkout -q v3 ;;
-            v4)  git checkout -q ffs-metackhash-v4 ;;
+            ctl) git checkout -q ffs-metackhash-v5~5 ;;
+            v5)  git checkout -q ffs-metackhash-v5 ;;
             esac
             git log -1 --format='%H %s'
             O=$HOME/obj.$v; D=$GITHUB_WORKSPACE/out/$v; mkdir -p $D $O
@@ -79,12 +74,12 @@ jobs:
               cp $f $D/
             done
             cp $(find $HOME/obj* sys/rump/fs/lib/libffs -name 'librumpfs_ffs.so.*[0-9]' -type f -newer $D/netbsd | head -1) $D/librumpfs_ffs.so
-            if [ $v = v4 ]; then
+            if [ $v = v5 ]; then
               # 触った構造体を使う他のものが建つか。落ちても止めず、名前を出す。
               for d in sbin/dump sbin/newfs sbin/dumpfs usr.sbin/makefs sys/modules/ffs sys/modules/ufs; do
                 [ -d $d ] || continue
-                if mk $d; then echo "== v4 $d: built"; grep -E 'warning:' $HOME/l || true
-                else echo "== v4 $d: BUILD FAILED"; tail -25 $HOME/l; fi
+                if mk $d; then echo "== v5 $d: built"; grep -E 'warning:' $HOME/l || true
+                else echo "== v5 $d: BUILD FAILED"; tail -25 $HOME/l; fi
               done
               # T0 がゲストで建てるための写し。
               mkdir -p $D/src $D/include/ufs/ffs $D/include/ufs/ufs
@@ -97,7 +92,7 @@ jobs:
         with: { name: ffs-ckhash-build, path: out, retention-days: 14, if-no-files-found: error }
       - name: 建てたものを置く
         if: inputs.build_run == ''
-        run: cp -R out/. ffs-ckhash/; rm -rf $HOME/obj.ctl $HOME/obj.v3 $HOME/obj.v4 $HOME/dest
+        run: cp -R out/. ffs-ckhash/; rm -rf $HOME/obj.ctl $HOME/obj.v5 $HOME/dest
       - uses: actions/download-artifact@v4
         if: inputs.build_run != ''
         with: { name: ffs-ckhash-build, path: ffs-ckhash, run-id: '${{ inputs.build_run }}', github-token: '${{ github.token }}' }
@@ -107,8 +102,9 @@ jobs:
           sudo chmod 666 /dev/kvm
           B=https://github.com/${{ github.repository }}/releases/download/images
           curl -fsSL -O $B/amd64-11.0.qcow2; curl -fsSL -O $B/amd64-11.0.qemu
-          EXTRAARGS= KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
-      - name: 対照、v3、v4 を試す
+          CPU='${{ inputs.cpu }}'
+          EXTRAARGS="${CPU:+-cpu $CPU}" KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
+      - name: 対照と v5 を試す
         run: |
           set -x
           SNAP=$(cat ffs-ckhash/snap)
@@ -121,37 +117,39 @@ jobs:
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"; $SSH uname -v | grep 11.99
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"; $SSH uname -v | grep 11.99
           $SSH ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile
-          for v in ctl v3 v4; do
+          $SSH sysctl -n machdep.cpu_brand
+          for v in ctl v5; do
             reboot_in "sh /root/p/ck/install.sh $v"; is $v
             case $v in
-            ctl) T="T1 T4 T5 T9 T10" ;;
-            v3)  T="T8 T9 T10" ;;
-            v4)  T="T0 T1 T2 T4 T5 T6 T8 T9 T10 T11 T12" ;;
+            ctl) T="T1 T4 T5" ;;
+            v5)  T="T0 T1 T2 T4 T5 T6 T8 T9 T10 T11 T12" ;;
             esac
             $SSH sh /root/p/ck/ck.sh $v $T | tee $v.txt
-            [ $v = v3 ] || $SSH sh /root/p/ck/atf.sh $v | tee $v-atf.txt
-            [ $v = v4 ] || $SSH "rm -f /root/p/ck/$v/*.img" || true
+            $SSH sh /root/p/ck/atf.sh $v | tee $v-atf.txt
+            [ $v = v5 ] || $SSH "rm -f /root/p/ck/$v/*.img" || true
             $SSH df -h / | tail -1
           done
-          $SSH 'cd /root/p/ck/v4 && tar cf - $(ls e1.img c-sb.img c-cg.img c-ino.img q.img h.img r.img g.img s.img 2>/dev/null)' > after.tar || true
-          # T3 は stock が止まるので v4 だけ。
-          timeout 900 $SSH sh /root/p/ck/ck.sh v4 T3 | tee v4-t3.txt
-          $SSH "cd /root/p/ck/v4 && tar cf - w.img" > after-w.tar || true
-          # ro から rw への remount (T7)。v4 だけ。
-          timeout 600 $SSH sh /root/p/ck/t7.sh v4 | tee v4-t7.txt
-          $SSH "cd /root/p/ck/t7 && tar cf - v4.img" > after-t7.tar || true
+          $SSH 'cd /root/p/ck/v5 && tar cf - $(ls e1.img c-sb.img c-cg.img c-ino.img q.img h.img r.img g.img s.img 2>/dev/null)' > after.tar || true
+          # T3 は stock が止まるので v5 だけ。
+          timeout 900 $SSH sh /root/p/ck/ck.sh v5 T3 | tee v5-t3.txt
+          $SSH "cd /root/p/ck/v5 && tar cf - w.img" > after-w.tar || true
+          # ro から rw への remount (T7)。v5 だけ。
+          timeout 600 $SSH sh /root/p/ck/t7.sh v5 | tee v5-t7.txt
+          $SSH "cd /root/p/ck/t7 && tar cf - v5.img" > after-t7.tar || true
           tail -n 6 *-atf.txt
           # 途中で失敗させる remount。何が起きるか分からないので後ろに。
-          timeout 600 $SSH sh /root/p/ck/t7.sh v4f fail | tee v4-t7fail.txt || true
+          timeout 600 $SSH sh /root/p/ck/t7.sh v5f fail | tee v5-t7fail.txt || true
           # snapshot。止まるかもしれないので最後に。
-          timeout 900 $SSH sh /root/p/ck/ck.sh v4 T13 | tee v4-t13.txt || true
-          timeout 120 $SSH "cd /root/p/ck/v4 && tar cf - n-nolog.img" > after-snap.tar || true
+          timeout 900 $SSH sh /root/p/ck/ck.sh v5 T13 | tee v5-t13.txt || true
+          # root inode の hash が悪い fs。断り損ねると外せない mount が残るので一番後ろ。
+          timeout 300 $SSH sh /root/p/ck/ck.sh v5 T14 | tee v5-t14.txt || true
+          timeout 120 $SSH 'cd /root/p/ck/v5 && tar cf - $(ls n-nolog.img o.img 2>/dev/null)' > after-snap.tar || true
       - name: VM を止める
         if: always()
         run: |
           DIR=. sh stopvm.sh amd64-11.0 || true; tail -80 amd64-11.0.console.log || true
           mkdir -p after; mv *.txt *.tar amd64-11.0.console.log after/ 2>/dev/null || true
-          rm -f amd64-11.0.qcow2*; rm -rf ffs-ckhash/ctl ffs-ckhash/v3 ffs-ckhash/v4 out
+          rm -f amd64-11.0.qcow2*; rm -rf ffs-ckhash/ctl ffs-ckhash/v5 out
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: ffs-ckhash-after, retention-days: 14, path: after }
@@ -184,7 +182,7 @@ jobs:
       - run: |
           sudo apt-get -q update; sudo apt-get -qy install zlib1g-dev
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          git clone -q --depth 6 -b ffs-metackhash-v4 https://github.com/zakinko/NetBSD-src.git $HOME/src
+          git clone -q --depth 6 -b ffs-metackhash-v5 https://github.com/zakinko/NetBSD-src.git $HOME/src
           git -C $HOME/src log --format='%H %cd %s' -1
       - uses: actions/cache@v4
         id: tools

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs inside the NetBSD guest as root: ck.sh <label> [T0 T1 ... T13]
+# Runs inside the NetBSD guest as root: ck.sh <label> [T0 T1 ... T14]
 # Check-hash tests on FreeBSD UFS2 images, plus quota2 and a benchmark.
 # With no test named, runs T1 to T5.
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
@@ -202,6 +202,17 @@ for o in nolog log; do
 	}; un
 	fk -f -n n-$o.img
 done
+
+}
+want T14 && {
+echo "===== T14 the root inode with a bad check-hash"
+xz -dc ../plain.img.xz > o.img
+../poke o.img ino 2
+mnt o.img -o ro; un
+mnt o.img -o ro,force; un
+fk -f -y o.img
+mnt o.img && { cat $M/hello; echo "cat rc=$?"; }; un
+fk -f -n o.img
 
 }
 echo "=== $L done"

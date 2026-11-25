@@ -1,5 +1,5 @@
 #!/bin/sh
-# ゲストの中で root として走る: install.sh <ctl|v3|v4>
+# ゲストの中で root として走る: install.sh <ctl|v5>
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
 cd /root/p/ck/$1 || exit 1
 cp netbsd /netbsd || exit 1
