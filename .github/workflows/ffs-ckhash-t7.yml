@@ -19,7 +19,7 @@ jobs:
           B=https://github.com/${{ github.repository }}/releases/download/images
           curl -fsSL -O $B/amd64-11.0.qcow2; curl -fsSL -O $B/amd64-11.0.qemu
           EXTRAARGS= KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
-      - name: 対照、v3
+      - name: 対照、v4
         run: |
           set -x
           SNAP=$(cat ffs-ckhash/snap)
@@ -32,11 +32,11 @@ jobs:
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"; $SSH uname -v | grep 11.99
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"; $SSH uname -v | grep 11.99
           $SSH ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile
-          for v in ctl v3; do
+          for v in ctl v4; do
             reboot_in "sh /root/p/ck/install.sh $v"; is $v
             $SSH sh /root/p/ck/t7.sh $v | tee $v-t7.txt
           done
-          $SSH "cd /root/p/ck/t7 && tar cf - ctl.img v3.img" > after.tar
+          $SSH "cd /root/p/ck/t7 && tar cf - ctl.img v4.img" > after.tar
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -3,6 +3,8 @@
  * poke img sb|cg|ino N    flip one byte inside what the check-hash covers
  * poke img nohash         make it a UFS2 without check-hashes (the stale
  *                         hashes left behind are then never read)
+ * poke img wapbl          say it has a log, of a type nobody knows, so
+ *                         that a remount to read-write fails late
  *
  * The fields picked are ones nothing else reads, so the only thing
  * wrong afterwards is the check-hash: fs_avgfpdir in the superblock,
@@ -52,6 +54,13 @@ main(int argc, char **argv)
 		if (pwrite(fd, u.b, SBLOCKSIZE, SBLOCK_UFS2) != SBLOCKSIZE)
 			return 1;
 		printf("cleared the check-hash flag and fs_metackhash\n");
+	} else if (strcmp(argv[2], "wapbl") == 0) {
+		fs->fs_flags |= FS_DOWAPBL;
+		fs->fs_journal_version = 1;	/* UFS_WAPBL_VERSION */
+		fs->fs_journal_location = 0x7f;
+		if (pwrite(fd, u.b, SBLOCKSIZE, SBLOCK_UFS2) != SBLOCKSIZE)
+			return 1;
+		printf("set FS_DOWAPBL and journal type 0x7f\n");
 	} else if (strcmp(argv[2], "sb") == 0) {
 		flip(fd, SBLOCK_UFS2 + offsetof(struct fs, fs_avgfpdir));
 	} else if (strcmp(argv[2], "cg") == 0) {

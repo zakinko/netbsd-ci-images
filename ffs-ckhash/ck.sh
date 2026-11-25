@@ -1,7 +1,7 @@
 #!/bin/sh
-# Runs inside the NetBSD guest as root: ck.sh <label> [T1 T2 T3 T4 T5 T6]
+# Runs inside the NetBSD guest as root: ck.sh <label> [T0 T1 ... T10]
 # Check-hash tests on FreeBSD UFS2 images, plus quota2 and a benchmark.
-# With no test named, runs them all.
+# With no test named, runs T1 to T5.
 PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH
 L=$1
 P=/root/p/ck
@@ -9,6 +9,7 @@ V=vnd1
 M=/mnt/p
 cd $P || exit 1
 cc -o poke poke.c || exit 1
+cc -o fh fh.c || exit 1
 mkdir -p $L && cd $L || exit 1
 shift
 T=" $* "; [ $# -eq 0 ] && T=" T1 T2 T3 T4 T5 "
@@ -26,6 +27,15 @@ mnt() {	# img opts...
 un() { umount $M 2>/dev/null; vndconfig -u $V; }
 fk() { echo "--- fsck_ffs $*"; fsck_ffs "$@" 2>&1 | q; }
 
+want T0 && {
+echo "===== T0 CRC32C: known answers, and the time for one 32 KB cylinder group"
+if [ -f src/ffs_ckhash.c ]; then
+	cc -O2 -Iinclude -Isrc -o ../bench-$L ../bench.c && ../bench-$L
+else
+	echo "no source for $L"
+fi
+
+}
 want T1 && {
 echo "===== T1 FreeBSD eaonly: write, then check the hashes"
 xz -dc ../eaonly.img.xz > e1.img
@@ -33,6 +43,7 @@ xz -dc ../eaonly.img.xz > e1.img
 mnt e1.img && { cp -R /usr/share/misc $M/misc; rm $M/f3; mkdir $M/d; echo y > $M/d/y; ls $M | tr '\n' ' '; echo; }; un
 ../poke e1.img flags
 fk -f -n e1.img
+echo "--- dumpfs"; dumpfs -F e1.img 2>&1 | grep -E '^flags' | head -2
 
 }
 want T2 && {
@@ -85,6 +96,7 @@ for run in 1 2 3 4 5 6 7; do
 		vndconfig -u $V
 	done
 done
+rm -f b.img nb.img
 }
 want T6 && {
 echo "===== T6 cost of the hashes: the same FreeBSD UFS2 with and without them, 7 runs each, alternating"
@@ -111,5 +123,37 @@ for run in 1 2 3 4 5 6 7; do
 		[ $run = 1 ] && fk -f -n b.img
 	done
 done
+rm -f b.img hash.img nohash.img
+}
+want T8 && {
+echo "===== T8 no log: a dirty cylinder group is read again for a file handle"
+xz -dc ../plain.img.xz > h.img
+mnt h.img && {
+	for n in 1 2 3; do echo x > $M/a$n; ../fh $M/hello; echo "fh rc=$?"; done
+}; un
+fk -f -n h.img
+
+}
+want T9 && {
+echo "===== T9 fsirand, then the inode check-hashes"
+xz -dc ../plain.img.xz > r.img
+fsirand -F r.img; echo "fsirand rc=$?"
+fsck_ffs -f -n r.img > r.out 2>&1; echo "fsck_ffs rc=$?"
+echo "BAD INODE CHECK HASH lines: $(grep -c 'BAD INODE CHECK HASH' r.out)"
+q < r.out | grep -v 'BAD INODE CHECK HASH' | head -12
+mnt r.img -o ro && { cat $M/hello; echo "cat rc=$?"; }; un
+
+}
+want T10 && {
+echo "===== T10 resize_ffs grows it by 32 MB, then the check-hashes"
+xz -dc ../plain.img.xz > g.img
+dd if=/dev/zero bs=1m count=32 2>/dev/null >> g.img
+ls -l g.img | awk '{print "size", $5}'
+resize_ffs -y g.img; echo "resize_ffs rc=$?"
+../poke g.img flags
+fk -f -n g.img
+mnt g.img && { cat $M/hello; echo "cat rc=$?"; echo y > $M/after; echo "write rc=$?"; df -k $M | tail -1; }; un
+fk -f -n g.img
+
 }
 echo "=== $L done"

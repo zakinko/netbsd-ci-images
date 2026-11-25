@@ -17,3 +17,20 @@ umount /mnt/p; echo "umount rc=$?"; vndconfig -u vnd1
 cksum -a sha256 $i
 ./poke $i flags
 fsck_ffs -f -n $i 2>&1 | grep -vE '^\*\* Phase|^$|DIOCGDINFO|character device|^CONTINUE'
+
+# t7.sh <label> fail: the same remount, made to fail after the kernel has
+# taken the file system for writing (a log flag with a journal of an
+# unknown type; the remount gives EFTYPE).  What does the unmount write?
+[ "$2" = fail ] || exit 0
+echo "=== $1: a remount to rw that fails late"
+i=t7/$1-f.img; xz -dc plain.img.xz > $i
+./poke $i wapbl; ./poke $i flags
+echo "check-hash lines of fsck_ffs before: $(fsck_ffs -f -n $i 2>&1 | grep -c 'CHECK HASH')"
+vndconfig vnd1 $i || exit 1
+mount -t ffs -o ro,force /dev/vnd1a /mnt/p; echo "mount ro,force rc=$?"
+mount -u -o rw /mnt/p; echo "remount rw rc=$?"; mount | grep /mnt/p
+dmesg | tail -4
+umount /mnt/p; echo "umount rc=$?"; vndconfig -u vnd1
+./poke $i flags
+echo "check-hash lines of fsck_ffs after: $(fsck_ffs -f -n $i 2>&1 | grep -c 'CHECK HASH')"
+fsck_ffs -f -n $i 2>&1 | grep -vE '^\*\* Phase|^$|DIOCGDINFO|character device|^CONTINUE' | head -8

@@ -1,26 +1,33 @@
-name: NetBSD の FFS check hash (v3) を建てて試す
+name: NetBSD の FFS check hash (v4) を建てて試す
 
-# 手で回すだけ。trunk (v3 の根元) と v3 を同じ道具で建て、同じ VM で比べる。
+# 手で回すだけ。trunk (v4 の根元)、v3、v4 を同じ道具で建て、同じ VM で比べる。
+# 待ち行列が長いので、建てる・試す・FreeBSD で見るを一つの job にまとめてある。
 on:
   workflow_dispatch:
     inputs:
       build_run: { description: '建てた run (空なら建てる)', type: string, default: '' }
+      ports: { description: '他の port の kernel も建てる', type: boolean, default: true }
 
 concurrency:
-  group: ffs-ckhash
+  group: ffs-ckhash-v4
   cancel-in-progress: true
 
 jobs:
-  build:
-    if: inputs.build_run == ''
+  all:
     runs-on: ubuntu-24.04
-    timeout-minutes: 200
+    timeout-minutes: 300
     steps:
-      - run: |
+      - uses: actions/checkout@v4
+      - name: 用意
+        if: inputs.build_run == ''
+        run: |
           sudo apt-get -q update; sudo apt-get -qy install zlib1g-dev
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          git clone -q --depth 6 -b ffs-metackhash-v3 https://github.com/zakinko/NetBSD-src.git $HOME/src
-          git -C $HOME/src log --format='%H %cd %s'
+          git clone -q --depth 6 -b ffs-metackhash-v4 https://github.com/zakinko/NetBSD-src.git $HOME/src
+          git -C $HOME/src fetch -q --depth 5 origin ffs-metackhash-v3
+          git -C $HOME/src branch v3 FETCH_HEAD
+          git -C $HOME/src log --format='%H %cd %s' ffs-metackhash-v4
+          git -C $HOME/src log --format='%H %cd %s' -1 v3
           SNAP=$(curl -fsSL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/ | grep -oE '20[0-9]{12}Z' | sort -u | tail -1)
           curl -fsI https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/$SNAP/amd64/binary/sets/tests.tar.xz | head -1
           mkdir -p $HOME/dest $GITHUB_WORKSPACE/out; echo $SNAP | tee $GITHUB_WORKSPACE/out/snap
@@ -29,53 +36,76 @@ jobs:
           done
           chmod -R u+w $HOME/dest/usr/include
       - uses: actions/cache@v4
+        if: inputs.build_run == ''
         id: tools
         with: { path: ~/tools, key: netbsd-tools-dd6bb1157 }
       - name: ツール
-        if: steps.tools.outputs.cache-hit != 'true'
+        if: inputs.build_run == '' && steps.tools.outputs.cache-hit != 'true'
         run: |
           cd $HOME/src
           ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest tools > $HOME/tools.log 2>&1 || { tail -60 $HOME/tools.log; exit 1; }
-      - name: 対照と v3
+      - name: 対照、v3、v4
+        if: inputs.build_run == ''
         run: |
           cd $HOME/src
-          for v in ctl v3; do
-            if [ $v = ctl ]; then git checkout -q ffs-metackhash-v3~5; else git checkout -q ffs-metackhash-v3; fi
+          for v in ctl v3 v4; do
+            case $v in
+            ctl) git checkout -q ffs-metackhash-v4~5 ;;
+            v3)  git checkout -q v3 ;;
+            v4)  git checkout -q ffs-metackhash-v4 ;;
+            esac
             git log -1 --format='%H %s'
             O=$HOME/obj.$v; D=$GITHUB_WORKSPACE/out/$v; mkdir -p $D $O
             cp -f sys/ufs/ffs/*.h $HOME/dest/usr/include/ufs/ffs/; cp -f sys/ufs/ufs/*.h $HOME/dest/usr/include/ufs/ufs/
             ./build.sh -U -u -V BUILDID= -m amd64 -j4 -O $O -T $HOME/tools -D $HOME/dest kernel=GENERIC > $HOME/k.log 2>&1 || { grep -E 'error' $HOME/k.log | head; tail -40 $HOME/k.log; exit 1; }
             grep -E 'warning:' $HOME/k.log | sed -E 's/:[0-9]+:[0-9]+:/:/' | sort -u > $HOME/kw.$v
-            [ $v = ctl ] || { echo "new kernel warnings: $(comm -13 $HOME/kw.ctl $HOME/kw.v3 | wc -l)"; comm -13 $HOME/kw.ctl $HOME/kw.v3; }
+            [ $v = ctl ] || { echo "new kernel warnings ($v): $(comm -13 $HOME/kw.ctl $HOME/kw.$v | wc -l)"; comm -13 $HOME/kw.ctl $HOME/kw.$v; }
             cp $(find $O -path '*GENERIC/netbsd' | head -1) $D/netbsd
-            for d in sbin/fsck_ffs sbin/fsdb sbin/tunefs sys/rump/fs/lib/libffs; do
+            mk() {	# dir: build it in this variant's objdir
+              (cd $1 && export MAKEOBJDIRPREFIX=$O; $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no cleandir > /dev/null 2>&1; $HOME/tools/bin/nbmake-amd64 MKMAN=no obj && $HOME/tools/bin/nbmake-amd64 MKMAN=no dependall) > $HOME/l 2>&1
+            }
+            for d in sbin/fsck_ffs sbin/fsdb sbin/tunefs sbin/resize_ffs sbin/fsirand usr.sbin/dumpfs sys/rump/fs/lib/libffs; do
               echo "== $v $d"
-              (cd $d && export MAKEOBJDIRPREFIX=$O; $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no cleandir > /dev/null 2>&1; $HOME/tools/bin/nbmake-amd64 MKMAN=no obj && $HOME/tools/bin/nbmake-amd64 MKMAN=no dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; exit 1; }
+              mk $d || { tail -40 $HOME/l; exit 1; }
               grep -E 'warning:|error:' $HOME/l || true
             done
-            for b in fsck_ffs fsdb tunefs; do cp $(find $HOME/obj* sbin/$b -path "*sbin/$b/*" -name $b -type f -newer $D/netbsd | head -1) $D/$b; done
+            # objdir の在処は wrapper 次第なので、今の kernel より新しいものを取る。
+            for b in sbin/fsck_ffs sbin/fsdb sbin/tunefs sbin/resize_ffs sbin/fsirand usr.sbin/dumpfs; do
+              f=$(find $HOME/obj* $b -path "*$b/*" -name $(basename $b) -type f -newer $D/netbsd | head -1)
+              [ -n "$f" ] || { echo "no $b"; exit 1; }
+              cp $f $D/
+            done
             cp $(find $HOME/obj* sys/rump/fs/lib/libffs -name 'librumpfs_ffs.so.*[0-9]' -type f -newer $D/netbsd | head -1) $D/librumpfs_ffs.so
-            sha256sum $D/*; file $D/*; file $D/librumpfs_ffs.so | grep -q 'ELF.*shared object'
+            if [ $v = v4 ]; then
+              # 触った構造体を使う他のものが建つか。落ちても止めず、名前を出す。
+              for d in sbin/dump sbin/newfs sbin/dumpfs usr.sbin/makefs sys/modules/ffs sys/modules/ufs; do
+                [ -d $d ] || continue
+                if mk $d; then echo "== v4 $d: built"; grep -E 'warning:' $HOME/l || true
+                else echo "== v4 $d: BUILD FAILED"; tail -25 $HOME/l; fi
+              done
+              # T0 がゲストで建てるための写し。
+              mkdir -p $D/src $D/include/ufs/ffs $D/include/ufs/ufs
+              cp sys/ufs/ffs/ffs_ckhash.c $D/src/; cp sys/ufs/ffs/*.h $D/include/ufs/ffs/; cp sys/ufs/ufs/*.h $D/include/ufs/ufs/
+            fi
+            sha256sum $D/netbsd $D/fsck_ffs $D/resize_ffs $D/fsirand $D/dumpfs $D/librumpfs_ffs.so; file $D/librumpfs_ffs.so | grep -q 'ELF.*shared object'
           done
       - uses: actions/upload-artifact@v4
+        if: inputs.build_run == ''
         with: { name: ffs-ckhash-build, path: out, retention-days: 14, if-no-files-found: error }
-
-  test:
-    needs: build
-    if: ${{ !cancelled() && needs.build.result != 'failure' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 200
-    steps:
-      - uses: actions/checkout@v4
+      - name: 建てたものを置く
+        if: inputs.build_run == ''
+        run: cp -R out/. ffs-ckhash/; rm -rf $HOME/obj.ctl $HOME/obj.v3 $HOME/obj.v4 $HOME/dest
       - uses: actions/download-artifact@v4
-        with: { name: ffs-ckhash-build, path: ffs-ckhash, run-id: '${{ inputs.build_run || github.run_id }}', github-token: '${{ github.token }}' }
-      - run: |
+        if: inputs.build_run != ''
+        with: { name: ffs-ckhash-build, path: ffs-ckhash, run-id: '${{ inputs.build_run }}', github-token: '${{ github.token }}' }
+      - name: VM
+        run: |
           sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 netcat-openbsd
           sudo chmod 666 /dev/kvm
           B=https://github.com/${{ github.repository }}/releases/download/images
           curl -fsSL -O $B/amd64-11.0.qcow2; curl -fsSL -O $B/amd64-11.0.qemu
           EXTRAARGS= KEEP=1 DIR=. sh runvm.sh amd64-11.0 2222
-      - name: 対照、v3
+      - name: 対照、v3、v4 を試す
         run: |
           set -x
           SNAP=$(cat ffs-ckhash/snap)
@@ -88,38 +118,40 @@ jobs:
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP kernel"; $SSH uname -v | grep 11.99
           reboot_in "sh /root/p/ck/upgrade.sh $SNAP userland"; $SSH uname -v | grep 11.99
           $SSH ls /usr/tests/fs/ffs/Atffile /usr/tests/sbin/fsck_ffs/Atffile
-          for v in ctl v3; do
+          for v in ctl v3 v4; do
             reboot_in "sh /root/p/ck/install.sh $v"; is $v
-            if [ $v = v3 ]; then T="T1 T2 T4 T5 T6"; else T="T1 T4 T5"; fi
+            case $v in
+            ctl) T="T1 T4 T5 T9 T10" ;;
+            v3)  T="T8 T9 T10" ;;
+            v4)  T="T0 T1 T2 T4 T5 T6 T8 T9 T10" ;;
+            esac
             $SSH sh /root/p/ck/ck.sh $v $T | tee $v.txt
-            $SSH sh /root/p/ck/atf.sh $v | tee $v-atf.txt
+            [ $v = v3 ] || $SSH sh /root/p/ck/atf.sh $v | tee $v-atf.txt
+            [ $v = v4 ] || $SSH "rm -f /root/p/ck/$v/*.img" || true
+            $SSH df -h / | tail -1
           done
-          $SSH "cd /root/p/ck/v3 && tar cf - e1.img c-sb.img c-cg.img c-ino.img q.img" > after.tar
-          # T3 は stock が止まるので v3 だけ、最後に。
-          timeout 900 $SSH sh /root/p/ck/ck.sh v3 T3 | tee v3-t3.txt
-          $SSH "cd /root/p/ck/v3 && tar cf - w.img" > after-w.tar
+          $SSH 'cd /root/p/ck/v4 && tar cf - $(ls e1.img c-sb.img c-cg.img c-ino.img q.img h.img r.img g.img 2>/dev/null)' > after.tar || true
+          # T3 は stock が止まるので v4 だけ。
+          timeout 900 $SSH sh /root/p/ck/ck.sh v4 T3 | tee v4-t3.txt
+          $SSH "cd /root/p/ck/v4 && tar cf - w.img" > after-w.tar || true
+          # ro から rw への remount (T7)。v4 だけ。
+          timeout 600 $SSH sh /root/p/ck/t7.sh v4 | tee v4-t7.txt
+          $SSH "cd /root/p/ck/t7 && tar cf - v4.img" > after-t7.tar || true
           tail -n 6 *-atf.txt
+          # 途中で失敗させる remount。何が起きるか分からないので最後に。
+          timeout 600 $SSH sh /root/p/ck/t7.sh v4f fail | tee v4-t7fail.txt || true
+      - name: VM を止める
+        if: always()
+        run: |
+          DIR=. sh stopvm.sh amd64-11.0 || true; tail -80 amd64-11.0.console.log || true
+          mkdir -p after; mv *.txt *.tar amd64-11.0.console.log after/ 2>/dev/null || true
+          rm -f amd64-11.0.qcow2*; rm -rf ffs-ckhash/ctl ffs-ckhash/v3 ffs-ckhash/v4 out
       - uses: actions/upload-artifact@v4
         if: always()
-        with:
-          name: ffs-ckhash-after
-          retention-days: 14
-          path: |
-            *.txt
-            *.tar
-            amd64-11.0.console.log
-      - if: always()
-        run: DIR=. sh stopvm.sh amd64-11.0 || true; tail -80 amd64-11.0.console.log || true
-
-  freebsd:
-    needs: test
-    if: ${{ !cancelled() && needs.test.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: ffs-ckhash-after, path: after }
-      - uses: vmactions/freebsd-vm@v1
+        with: { name: ffs-ckhash-after, retention-days: 14, path: after }
+      - name: FreeBSD 15.0 で見る
+        if: ${{ !cancelled() }}
+        uses: vmactions/freebsd-vm@v1
         with:
           release: "15.0"
           run: |
@@ -132,3 +164,34 @@ jobs:
               mount -o ro /dev/$md /mnt && ls /mnt | tr '\n' ' ' && umount /mnt
               mdconfig -d -u $md
             done
+
+  # ILP32 と big-endian で kernel が建つか。-Werror なので警告も落ちる。
+  ports:
+    if: inputs.build_run == '' && inputs.ports
+    strategy:
+      fail-fast: false
+      matrix:
+        m: [i386, sparc64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - run: |
+          sudo apt-get -q update; sudo apt-get -qy install zlib1g-dev
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          git clone -q --depth 6 -b ffs-metackhash-v4 https://github.com/zakinko/NetBSD-src.git $HOME/src
+          git -C $HOME/src log --format='%H %cd %s' -1
+      - uses: actions/cache@v4
+        id: tools
+        with: { path: ~/tools, key: 'netbsd-tools-${{ matrix.m }}-dd6bb1157' }
+      - name: ツール
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: |
+          cd $HOME/src
+          ./build.sh -U -u -m ${{ matrix.m }} -j4 -O $HOME/obj -T $HOME/tools tools > $HOME/tools.log 2>&1 || { tail -60 $HOME/tools.log; exit 1; }
+      - name: kernel
+        run: |
+          cd $HOME/src
+          ./build.sh -U -u -m ${{ matrix.m }} -j4 -O $HOME/obj -T $HOME/tools kernel=GENERIC > $HOME/k.log 2>&1 || { grep -E 'error' $HOME/k.log | head -20; tail -40 $HOME/k.log; exit 1; }
+          grep -E 'ufs/(ffs|ufs)/.*warning:' $HOME/k.log || echo "no warnings under sys/ufs"
+          f=$(find $HOME/obj -path '*GENERIC/netbsd' | head -1); ls -l $f; file $f
+          find $HOME/obj -name 'ffs_ckhash.o' | head -2
