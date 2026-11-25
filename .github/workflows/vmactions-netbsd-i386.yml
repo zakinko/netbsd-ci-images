@@ -7,13 +7,13 @@ on:
     inputs:
       confs:
         type: string
-        default: '[1,2,3,4,5,6]'
+        default: '[1,2,3,4,5,6,7,8,9,10,11,12]'
 
 jobs:
   cpu:
     name: cpu ${{ matrix.n }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -24,13 +24,17 @@ jobs:
           sudo chmod 666 /dev/kvm
           grep -m1 'model name' /proc/cpuinfo
           grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -E '^(amx|avx512f$|pku$|xsave)' | tr '\n' ' '; echo
-          for v in 10.0 10.1; do
+          grep -q amx_tile /proc/cpuinfo || { echo "RESULT noamx-host SKIP"; exit 0; }
+          for v in 10.0 10.1 10.2 11.0 11.1; do
             curl -sfLO https://github.com/$GITHUB_REPOSITORY/releases/download/v9.9.9/netbsd-$v-i386.qcow2.zst
-            zstd -dq netbsd-$v-i386.qcow2.zst
+            zstd -dq netbsd-$v-i386.qcow2.zst && rm netbsd-$v-i386.qcow2.zst
+          done
+          for v in 10.1 10.2 11.1; do
+            curl -sfL https://github.com/anyvm-org/netbsd-builder/releases/download/v2.2.9/netbsd-$v.qcow2.zst | zstd -dq > netbsd-$v-amd64.qcow2
           done
           one() { # name ver cpu
-            qemu-system-i386 -machine pc,accel=kvm -cpu "$3" -m 2048 -smp 2 -display none -serial none -monitor unix:m.sock,server,nowait \
-              -snapshot -drive file=netbsd-$2-i386.qcow2,if=virtio -netdev user,id=n,hostfwd=tcp::2299-:22 -device e1000,netdev=n & p=$!
+            qemu-system-x86_64 -machine pc,accel=kvm -cpu "$3" -m 2048 -smp 2 -display none -serial none -monitor unix:m.sock,server,nowait \
+              -snapshot -drive file=netbsd-$2.qcow2,if=virtio -netdev user,id=n,hostfwd=tcp::2299-:22 -device e1000,netdev=n & p=$!
             r=NO; i=0
             while [ $i -lt 60 ]; do
               if timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/2299; head -c 4 <&3' 2>/dev/null | grep -q SSH; then r=SSH; break; fi
@@ -38,11 +42,11 @@ jobs:
             [ $r = NO ] && { sudo apt-get install -y -qq socat >/dev/null 2>&1; echo "screendump s-$1.ppm" | socat - UNIX-CONNECT:m.sock >/dev/null; sleep 1; }
             kill $p; wait $p 2>/dev/null; rm -f m.sock; echo "RESULT $1 $r"
           }
-          one 10.0-host 10.0 host
-          one 10.0-host-noamx 10.0 host,-amx-tile,-amx-int8,-amx-bf16
-          one 10.0-host-noavx512 10.0 host,-amx-tile,-amx-int8,-amx-bf16,-avx512f
-          one 10.0-host-noxsave 10.0 host,-xsave
-          one 10.1-host 10.1 host
+          for v in 10.0 10.1 10.2 11.0 11.1; do
+            one $v-i386-host $v-i386 host
+            one $v-i386-notiledata $v-i386 host,-amx-tile,-amx-int8,-amx-bf16
+          done
+          for v in 10.1 10.2 11.1; do one $v-amd64-host $v-amd64 host; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
