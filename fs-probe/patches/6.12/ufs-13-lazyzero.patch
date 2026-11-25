@@ -81,7 +81,7 @@
 +	if (data && !IS_SYNC(inode) && ufs_test_opt(UFS_SB(inode->i_sb)->s_mount_opt, LAZYZERO) &&
 +	    ufs_zero_frags_cached(inode, fragment, n, locked_page))
 +		return;
- 	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
+ 	if (data && !ufs_zero_frags_now(inode, beg, n))
  		return;
  	end = beg + n;
 --- a/fs/ufs/super.c

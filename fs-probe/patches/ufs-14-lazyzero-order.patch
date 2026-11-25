@@ -9,7 +9,7 @@
 +		UFS_I(inode)->i_unordered = 1;
  		return;
 +	}
- 	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
+ 	if (data && !ufs_zero_frags_now(inode, beg, n))
  		return;
  	end = beg + n;
 --- a/fs/ufs/inode.c

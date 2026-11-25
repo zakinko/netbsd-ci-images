@@ -81,7 +81,7 @@
 +	if (data && !IS_SYNC(inode) && UFS_SB(inode->i_sb)->s_lazyzero &&
 +	    ufs_zero_frags_cached(inode, fragment, n, locked_folio))
 +		return;
- 	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
+ 	if (data && !ufs_zero_frags_now(inode, beg, n))
  		return;
  	end = beg + n;
 --- a/fs/ufs/super.c

@@ -1,5 +1,5 @@
 diff --git a/fs/ufs/balloc.c b/fs/ufs/balloc.c
-index 628edfde3..51ea7810b 100644
+index 628edfde3..44ff268fd 100644
 --- a/fs/ufs/balloc.c
 +++ b/fs/ufs/balloc.c
 @@ -17,6 +17,7 @@
@@ -10,30 +10,26 @@ index 628edfde3..51ea7810b 100644
  #include <asm/byteorder.h>
  
  #include "ufs_fs.h"
-@@ -311,12 +312,36 @@ static void ufs_change_blocknr(struct inode *inode, sector_t beg,
+@@ -311,12 +312,32 @@ static void ufs_change_blocknr(struct inode *inode, sector_t beg,
  	UFSD("EXIT\n");
  }
  
 +/*
-+ * Zero @n fragments from @beg on the device itself.  A block taken for a
-+ * page being written is larger than the page when the block is, and its
-+ * other fragments may be read back from the device before anything else
-+ * writes them, so the zeroes have to be there already.  This used to be
-+ * done with sync_dirty_buffer() a fragment at a time, a synchronous write
-+ * for every fragment of every new block, which was most of the time spent
-+ * writing a new file; one zeroout covers the run.  Buffers that the block
-+ * device's cache still holds over these fragments would later be written
-+ * back over the file's data, so they are dropped first.
++ * Zero @n fragments from @beg, taken for a page being written, on the
++ * device itself.  Such a block is larger than the page when the block is,
++ * and its other fragments may be read back from the device before anything
++ * else writes them, so the zeroes have to be there already.
++ *
++ * Only for data.  A buffer the block device's cache has over the fragments
++ * is cleaned, not zeroed, and an indirect block is read through it.
 + */
 +static int ufs_zero_frags_now(struct inode *inode, sector_t beg,
 +			      unsigned int n)
 +{
 +	struct super_block *sb = inode->i_sb;
-+	unsigned int shift = UFS_SB(sb)->s_uspi->s_nspfshift;
 +
 +	clean_bdev_aliases(sb->s_bdev, beg, n);
-+	return blkdev_issue_zeroout(sb->s_bdev, beg << shift,
-+				    (sector_t)n << shift, GFP_NOFS, 0);
++	return sb_issue_zeroout(sb, beg, n, GFP_NOFS);
 +}
 +
  static void ufs_clear_frags(struct inode *inode, sector_t beg, unsigned int n,
@@ -42,7 +38,7 @@ index 628edfde3..51ea7810b 100644
  	struct buffer_head *bh;
  	sector_t end = beg + n;
  
-+	if ((IS_SYNC(inode) || sync) && !ufs_zero_frags_now(inode, beg, n))
++	if (sync && !ufs_zero_frags_now(inode, beg, n))
 +		return;
  	for (; beg < end; ++beg) {
  		bh = sb_getblk(inode->i_sb, beg);

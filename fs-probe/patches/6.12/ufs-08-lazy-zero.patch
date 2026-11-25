@@ -103,7 +103,7 @@
  	struct buffer_head *bh;
 -	sector_t end = beg + n;
 -
--	if ((IS_SYNC(inode) || sync) && !ufs_zero_frags_now(inode, beg, n))
+-	if (sync && !ufs_zero_frags_now(inode, beg, n))
 +	sector_t end;
 +	bool data = locked_page != NULL;
 +	unsigned int fshift = UFS_SB(inode->i_sb)->s_uspi->s_fshift;
@@ -115,7 +115,7 @@
 +	}
 +	if (!n)
 +		return;
-+	if ((IS_SYNC(inode) || data) && !ufs_zero_frags_now(inode, beg, n))
++	if (data && !ufs_zero_frags_now(inode, beg, n))
  		return;
 +	end = beg + n;
  	for (; beg < end; ++beg) {

@@ -40,7 +40,7 @@
  	struct buffer_head *bh;
  	sector_t end = beg + n;
  
-+	if ((IS_SYNC(inode) || sync) && !ufs_zero_frags_now(inode, beg, n))
++	if (sync && !ufs_zero_frags_now(inode, beg, n))
 +		return;
  	for (; beg < end; ++beg) {
  		bh = sb_getblk(inode->i_sb, beg);

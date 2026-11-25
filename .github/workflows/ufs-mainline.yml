@@ -66,7 +66,7 @@ jobs:
           mkdir -p out
           for x in base new; do
             D=
-            case ${{ inputs.patch }} in ufs-zeroout|ufs-readahead)
+            case ${{ inputs.patch }} in ufs-zeroout|ufs-readahead|ufs-zsync-v[12])
               for n in netbsd-ffs2 freebsd-ufs2; do cp --sparse=always fsp/in/$n.img $HOME/$x-$n.raw; D="$D --disk $HOME/$x-$n.raw"; done ;;
             esac
             timeout 2700 vng --run $HOME/bz-$x --user root --memory 8G --cpus 4 $D --rwdir=$PWD/out -- env FSSTRESS=$FSSTRESS sh $PWD/fs-probe/send/${{ inputs.patch }}-guest.sh $PWD/fsp/in $PWD/out $x < /dev/null || echo "vng exit $?"
