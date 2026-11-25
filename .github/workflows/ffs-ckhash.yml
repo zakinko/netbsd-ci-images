@@ -25,7 +25,11 @@ jobs:
             curl -sSfL https://nycdn.netbsd.org/pub/NetBSD-daily/HEAD/$SNAP/amd64/binary/sets/$s.tar.xz | tar -xJf - -C $HOME/dest
           done
           chmod -R u+w $HOME/dest/usr/include
+      - uses: actions/cache@v4
+        id: tools
+        with: { path: ~/tools, key: netbsd-tools-dd6bb1157 }
       - name: ツール
+        if: steps.tools.outputs.cache-hit != 'true'
         run: |
           cd $HOME/src
           ./build.sh -U -u -m amd64 -j4 -O $HOME/obj -T $HOME/tools -D $HOME/dest tools > $HOME/tools.log 2>&1 || { tail -60 $HOME/tools.log; exit 1; }
@@ -38,11 +42,12 @@ jobs:
             O=$HOME/obj.$v; D=$GITHUB_WORKSPACE/out/$v; mkdir -p $D $O
             cp -f sys/ufs/ffs/*.h $HOME/dest/usr/include/ufs/ffs/; cp -f sys/ufs/ufs/*.h $HOME/dest/usr/include/ufs/ufs/
             ./build.sh -U -u -V BUILDID= -m amd64 -j4 -O $O -T $HOME/tools -D $HOME/dest kernel=GENERIC > $HOME/k.log 2>&1 || { grep -E 'error' $HOME/k.log | head; tail -40 $HOME/k.log; exit 1; }
-            grep -E 'warning:' $HOME/k.log | sort -u | head
+            grep -E 'warning:' $HOME/k.log | sed -E 's/:[0-9]+:[0-9]+:/:/' | sort -u > $HOME/kw.$v
+            [ $v = ctl ] || { echo "new kernel warnings: $(comm -13 $HOME/kw.ctl $HOME/kw.v3 | wc -l)"; comm -13 $HOME/kw.ctl $HOME/kw.v3; }
             cp $(find $O -path '*GENERIC/netbsd' | head -1) $D/netbsd
             for d in sbin/fsck_ffs sbin/fsdb sbin/tunefs sys/rump/fs/lib/libffs; do
               echo "== $v $d"
-              (cd $d && export MAKEOBJDIRPREFIX=$O; $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no cleandir > /dev/null 2>&1; $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no obj dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; exit 1; }
+              (cd $d && export MAKEOBJDIRPREFIX=$O; $HOME/tools/bin/nbmake-amd64 -j4 MKMAN=no cleandir > /dev/null 2>&1; $HOME/tools/bin/nbmake-amd64 MKMAN=no obj && $HOME/tools/bin/nbmake-amd64 MKMAN=no dependall) > $HOME/l 2>&1 || { tail -40 $HOME/l; exit 1; }
               grep -E 'warning:|error:' $HOME/l || true
             done
             for b in fsck_ffs fsdb tunefs; do cp $(find $HOME/obj* sbin/$b -path "*sbin/$b/*" -name $b -type f -newer $D/netbsd | head -1) $D/$b; done
