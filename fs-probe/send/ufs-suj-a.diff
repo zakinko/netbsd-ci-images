@@ -1,8 +1,8 @@
 diff --git a/fs/ufs/super.c b/fs/ufs/super.c
-index ecf422e41..adc41f5d3 100644
+index ecf422e41..cbb034a87 100644
 --- a/fs/ufs/super.c
 +++ b/fs/ufs/super.c
-@@ -599,6 +599,48 @@ static void ufs_put_cstotal(struct super_block *sb)
+@@ -599,6 +599,51 @@ static void ufs_put_cstotal(struct super_block *sb)
  	UFSD("EXIT\n");
  }
  
@@ -38,7 +38,10 @@ index ecf422e41..adc41f5d3 100644
 +		return;
 +	/* Everything else has to be on the disk before it is called clean. */
 +	err = sync_blockdev(sb->s_bdev);
-+	if (err || sb_emergency_ro(sb)) {
++	/* The error has been reported; fs_clean stays as that left it. */
++	if (sb_emergency_ro(sb))
++		return;
++	if (err) {
 +		pr_err("(device %s): not marking the filesystem clean, error %d\n",
 +		       sb->s_id, err);
 +		return;
@@ -51,7 +54,7 @@ index ecf422e41..adc41f5d3 100644
  /**
   * ufs_put_super_internal() - put on-disk intrenal structures
   * @sb: pointer to super_block structure
-@@ -712,8 +754,10 @@ static void ufs_put_super(struct super_block *sb)
+@@ -712,8 +757,10 @@ static void ufs_put_super(struct super_block *sb)
  	UFSD("ENTER\n");
  
  	/* NULL if a remount to read-only freed the cylinder groups */
@@ -63,7 +66,7 @@ index ecf422e41..adc41f5d3 100644
  	cancel_delayed_work_sync(&sbi->sync_work);
  
  	ubh_brelse_uspi (sbi->s_uspi);
-@@ -1246,6 +1290,8 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
+@@ -1246,6 +1293,8 @@ static int ufs_fill_super(struct super_block *sb, struct fs_context *fc)
  		ret = -ENOMEM;
  		goto failed_cg;
  	}
@@ -72,7 +75,7 @@ index ecf422e41..adc41f5d3 100644
  
  	UFSD("EXIT\n");
  	return 0;
-@@ -1308,6 +1354,7 @@ static int ufs_reconfigure(struct fs_context *fc)
+@@ -1308,6 +1357,7 @@ static int ufs_reconfigure(struct fs_context *fc)
  				ufs_set_fs_state(sb, usb1, usb3,
  					UFS_FSOK - fs32_to_cpu(sb, usb1->fs_time));
  			ubh_mark_buffer_dirty (USPI_UBH(uspi));
@@ -80,7 +83,7 @@ index ecf422e41..adc41f5d3 100644
  		}
  		sb->s_flags |= SB_RDONLY;
  	} else {
-@@ -1333,6 +1380,7 @@ static int ufs_reconfigure(struct fs_context *fc)
+@@ -1333,6 +1383,7 @@ static int ufs_reconfigure(struct fs_context *fc)
  			mutex_unlock(&UFS_SB(sb)->s_lock);
  			return -EPERM;
  		}
