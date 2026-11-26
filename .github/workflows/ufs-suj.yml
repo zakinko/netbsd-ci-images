@@ -55,7 +55,7 @@ jobs:
           touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-base 2>&1
           for x in a b c d; do
             patch -p1 -F0 -f -i $GITHUB_WORKSPACE/fs-probe/send/ufs-suj-$x.diff < /dev/null | tee $HOME/p-$x
-            ! grep -E 'offset|fuzz' $HOME/p-$x
+            if grep -E 'offset|fuzz' $HOME/p-$x; then exit 1; fi
             touch fs/ufs/*.c; make W=1 C=1 fs/ufs/ > $HOME/w-$x 2>&1
             case $x in a|d) make -s -j$(nproc) bzImage; cp arch/x86/boot/bzImage $HOME/bz-$x ;; esac
           done
