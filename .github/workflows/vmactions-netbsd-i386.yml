@@ -40,7 +40,10 @@ jobs:
           ls -l art
           gh release view v9.9.9 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
             gh release create v9.9.9 -R "$GITHUB_REPOSITORY" --prerelease --title 'vmactions の試験用 (仮)' --notes '試験が終わったら消す' || true
-          true  # 前の run で置いた物を使う
+          if [ "${{ matrix.c.arch }}" = powerpc ]; then
+            curl -fsSL -o art/openbios-ppc https://gitlab.com/qemu-project/qemu/-/raw/v11.1.0/pc-bios/openbios-ppc
+          fi
+          gh release upload v9.9.9 -R "$GITHUB_REPOSITORY" --clobber art/*
       - uses: actions/checkout@v4
         with:
           repository: vmactions/${{ matrix.c.os }}-vm
@@ -52,12 +55,15 @@ jobs:
       - name: conf を足し、取得先を替える
         run: |
           cd act
+          # action の機種一覧は fork の base-vm の物 (powerpc と alpha を知る)
+          curl -fsSL -o index.js https://raw.githubusercontent.com/zakinko/base-vm/netbsd-powerpc-alpha/index.js
+          git diff --stat
           case "${{ matrix.c.arch }}" in ppc64le) b=15.1-powerpc64 ;; *) b=11.1 ;; esac
           sed 's/^BUILDER_VERSION=.*/BUILDER_VERSION=9.9.9/' conf/$b.conf > conf/${{ matrix.c.rel }}-${{ matrix.c.arch }}.conf
           cat conf/${{ matrix.c.rel }}-${{ matrix.c.arch }}.conf
           python3 ../.e2e/patch.py index.js
           git diff | cat
-          git diff --quiet index.js && exit 1 || true
+          grep -q zakinko/anyvm index.js
       - uses: ./act
         with:
           release: ${{ matrix.c.rel }}
