@@ -43,7 +43,14 @@ jobs:
           if [ "${{ matrix.c.arch }}" = powerpc ]; then
             curl -fsSL -o art/openbios-ppc https://gitlab.com/qemu-project/qemu/-/raw/v11.1.0/pc-bios/openbios-ppc
           fi
-          gh release upload v9.9.9 -R "$GITHUB_REPOSITORY" --clobber art/*
+          # 同時に走る job が --clobber で上書きし合うと、消えている間に
+          # 他の job が 404 を引く。無い物だけを上げる。
+          have=$(gh release view v9.9.9 -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          for f in art/*; do
+            printf '%s\n' "$have" | grep -qx "$(basename "$f")" ||
+              gh release upload v9.9.9 -R "$GITHUB_REPOSITORY" "$f" || true
+          done
+          sleep 20
       - uses: actions/checkout@v4
         with:
           repository: vmactions/${{ matrix.c.os }}-vm
