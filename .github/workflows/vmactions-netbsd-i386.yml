@@ -33,7 +33,7 @@ jobs:
   build:
     name: ${{ matrix.conf }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 180
+    timeout-minutes: 340
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -73,7 +73,7 @@ jobs:
         run: |
           case "${{ matrix.conf }}" in
           netbsd-*)  echo "repo=zakinko/netbsd-builder"  >> $GITHUB_OUTPUT
-                     echo "ref=i386"  >> $GITHUB_OUTPUT
+                     echo "ref=netbsd-powerpc-alpha"  >> $GITHUB_OUTPUT
                      echo "dir=netbsd-builder"  >> $GITHUB_OUTPUT ;;
           freebsd-*) echo "repo=zakinko/freebsd-builder" >> $GITHUB_OUTPUT
                      echo "ref=powerpc64le" >> $GITHUB_OUTPUT
@@ -93,6 +93,12 @@ jobs:
           repository: ${{ steps.b.outputs.repo }}
           ref: ${{ steps.b.outputs.ref }}
           path: builder
+
+      - name: build.py を fork の物にする
+        if: startsWith(matrix.conf, 'netbsd-')
+        run: |
+          curl -fsSL -o builder/build.py https://raw.githubusercontent.com/zakinko/base-builder/netbsd-powerpc-alpha/build.py
+          grep -c 'arch == "powerpc"' builder/build.py
 
       - name: conf を置く
         run: |
