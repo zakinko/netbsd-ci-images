@@ -43,6 +43,12 @@ jobs:
           if [ "${{ matrix.c.arch }}" = powerpc ]; then
             curl -fsSL -o art/openbios-ppc https://gitlab.com/qemu-project/qemu/-/raw/v11.1.0/pc-bios/openbios-ppc
           fi
+          # alpha は release のカーネルで起動する (netbsd-builder の
+          # files/fetch-alpha-kernel.sh が上流の release に置く物と同じ)。
+          if [ "${{ matrix.c.arch }}" = alpha ]; then
+            curl -fsSL https://ftp.netbsd.org/pub/NetBSD/NetBSD-${{ matrix.c.rel }}/alpha/binary/kernel/netbsd-GENERIC.gz |
+              gunzip > art/netbsd-${{ matrix.c.rel }}-alpha-kernel
+          fi
           # 同時に走る job が --clobber で上書きし合うと、消えている間に
           # 他の job が 404 を引く。無い物だけを上げる。
           have=$(gh release view v9.9.9 -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
